@@ -75,3 +75,10 @@ export interface CoreApiConnectionsData {
     upload: number
   }[]
 }
+
+export type CoreApiWsDataMap = {
+  logs: CoreApiLogsData
+  memory: CoreApiMemoryData
+  traffic: CoreApiTrafficData
+  connections: CoreApiConnectionsData
+}
