@@ -6,8 +6,20 @@ export const isValidBase64 = (str: string) => {
   if (str === '' || str.trim() === '') {
     return false
   }
+
+  // Accept URL-safe base64 and ignore line breaks/spaces in subscription responses.
+  const normalized = str
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+
+  const padding = (4 - (normalized.length % 4)) % 4
+  const padded = normalized + '='.repeat(padding)
+
   try {
-    return btoa(atob(str)) == str
+    atob(padded)
+    return true
   } catch {
     return false
   }
