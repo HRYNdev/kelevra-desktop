@@ -1,6 +1,8 @@
 import { Cron } from 'croner'
 import { parse } from 'yaml'
 
+import { normalizeBase64 } from './others'
+
 export const isValidBase64 = (str: string) => {
   if (typeof str !== 'string') return false
   if (str === '' || str.trim() === '') {
@@ -8,17 +10,9 @@ export const isValidBase64 = (str: string) => {
   }
 
   // Accept URL-safe base64 and ignore line breaks/spaces in subscription responses.
-  const normalized = str
-    .trim()
-    .replace(/\s+/g, '')
-    .replace(/-/g, '+')
-    .replace(/_/g, '/')
-
-  const padding = (4 - (normalized.length % 4)) % 4
-  const padded = normalized + '='.repeat(padding)
-
+  const normalized = normalizeBase64(str)
   try {
-    atob(padded)
+    atob(normalized)
     return true
   } catch {
     return false
