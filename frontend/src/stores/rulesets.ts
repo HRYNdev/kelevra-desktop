@@ -18,7 +18,7 @@ import {
 
 export const useRulesetsStore = defineStore('rulesets', () => {
   const rulesets = ref<App.RuleSet[]>([])
-  const rulesetHub = ref<App.RuleSetHub>({ geosite: '', geoip: '', list: [] })
+  const rulesetHub = ref<App.RulesetHub>({ geosite: '', geoip: '', list: [] })
 
   const setupRulesets = async () => {
     const data = await ignoredError(ReadFile, RulesetsFilePath)

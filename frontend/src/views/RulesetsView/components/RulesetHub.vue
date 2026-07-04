@@ -37,7 +37,7 @@ const currentList = computed(() => {
   )
 })
 
-const getRulesetUrlAndSuffix = (ruleset: App.RuleSetHub['list'][number], format: RulesetFormat) => {
+const getRulesetUrlAndSuffix = (ruleset: App.RulesetHub['list'][number], format: RulesetFormat) => {
   const suffix = { [RulesetFormat.Binary]: '.srs', [RulesetFormat.Source]: '.json' }[format]
   const basrUrl = {
     geosite: rulesetsStore.rulesetHub.geosite,
@@ -46,7 +46,7 @@ const getRulesetUrlAndSuffix = (ruleset: App.RuleSetHub['list'][number], format:
   return [basrUrl + ruleset.name + suffix, suffix] as const
 }
 
-const handleAddRuleset = async (ruleset: App.RuleSetHub['list'][number], format: RulesetFormat) => {
+const handleAddRuleset = async (ruleset: App.RulesetHub['list'][number], format: RulesetFormat) => {
   const [url, suffix] = getRulesetUrlAndSuffix(ruleset, format)
   const id = ruleset.type + '_' + ruleset.name + '.' + format
   const file = ruleset.type + '_' + ruleset.name + suffix
@@ -72,7 +72,7 @@ const handleAddRuleset = async (ruleset: App.RuleSetHub['list'][number], format:
 }
 
 const handleAddRulesetToProfile = async (
-  ruleset: App.RuleSetHub['list'][number],
+  ruleset: App.RulesetHub['list'][number],
   format: RulesetFormat,
 ) => {
   const [url, suffix] = getRulesetUrlAndSuffix(ruleset, format)
@@ -146,7 +146,7 @@ const handleAddRulesetToProfile = async (
   }
 }
 
-const handlePreview = async (ruleset: App.RuleSetHub['list'][number], format: RulesetFormat) => {
+const handlePreview = async (ruleset: App.RulesetHub['list'][number], format: RulesetFormat) => {
   const { destroy, error } = message.info('rulesets.fetching', 15_000)
   try {
     const { body } = await HttpGet(getRulesetUrlAndSuffix(ruleset, format)[0])
@@ -167,7 +167,7 @@ const handleUpdatePluginHub = async () => {
   }
 }
 
-const isAlreadyAdded = (ruleset: App.RuleSetHub['list'][number], format: RulesetFormat) => {
+const isAlreadyAdded = (ruleset: App.RulesetHub['list'][number], format: RulesetFormat) => {
   const id = ruleset.type + '_' + ruleset.name + '.' + format
   return rulesetsStore.getRulesetById(id)
 }
