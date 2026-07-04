@@ -116,6 +116,10 @@ export default {
         gvisor: 'gVisor',
         mixed: 'Mixed',
       },
+      direct: {
+        network: 'Listen Network',
+        default: 'Both if empty',
+      },
       mixedPort: 'Mixed Port',
       httpPort: 'HTTP(s) Port',
       socksPort: 'SOCKS5 Port',

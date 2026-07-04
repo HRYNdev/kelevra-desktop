@@ -116,6 +116,10 @@ export default {
         gvisor: 'gVisor',
         mixed: 'Mixed',
       },
+      direct: {
+        network: '监听网络协议',
+        default: '默认所有',
+      },
       mixedPort: '混合代理端口',
       httpPort: 'HTTP(s)代理端口',
       socksPort: 'SOCKS5代理端口',
