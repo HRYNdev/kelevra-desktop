@@ -286,7 +286,7 @@ declare namespace App {
 
   type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'panic'
   type ClashMode = 'global' | 'rule' | 'direct'
-  type InboundType = 'mixed' | 'socks' | 'http' | 'tun'
+  type InboundType = 'direct' | 'mixed' | 'socks' | 'http' | 'tun'
   type InboundListen = {
     listen: string
     listen_port: number
@@ -296,6 +296,7 @@ declare namespace App {
   }
   type OutboundType = 'direct' | 'block' | 'selector' | 'urltest'
   type TunStack = 'system' | 'gvisor' | 'mixed'
+  type Network = 'tcp' | 'udp'
   type RuleSetType = 'inline' | 'local' | 'remote'
   type RuleSetFormat = 'source' | 'binary'
   type RuleType =
@@ -405,6 +406,10 @@ declare namespace App {
     type: InboundType
     tag: string
     enable: boolean
+    direct?: {
+      listen: InboundListen
+      network: Network | ''
+    }
     mixed?: {
       listen: InboundListen
       users: string[]

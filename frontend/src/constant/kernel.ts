@@ -12,6 +12,7 @@ import {
   Strategy,
   RuleActionReject,
   DnsServer,
+  Network,
 } from '@/enums/kernel'
 
 export const CoreWorkingDirectory = 'data/sing-box'
@@ -70,6 +71,7 @@ export const LogLevelOptions = [
 ]
 
 export const InboundOptions = [
+  { label: 'direct', value: Inbound.Direct },
   { label: 'mixed', value: Inbound.Mixed },
   { label: 'socks', value: Inbound.Socks },
   { label: 'http', value: Inbound.Http },
@@ -177,6 +179,11 @@ export const TunStackOptions = [
   { label: 'kernel.inbounds.tun.system', value: TunStack.System },
   { label: 'kernel.inbounds.tun.gvisor', value: TunStack.GVisor },
   { label: 'kernel.inbounds.tun.mixed', value: TunStack.Mixed },
+]
+
+export const NetworkOptions = [
+  { label: 'TCP', value: Network.Tcp },
+  { label: 'UDP', value: Network.Udp },
 ]
 
 export const RulesetTypeOptions = [

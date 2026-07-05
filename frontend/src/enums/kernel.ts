@@ -15,6 +15,7 @@ export enum ClashMode {
 }
 
 export enum Inbound {
+  Direct = 'direct',
   Mixed = 'mixed',
   Socks = 'socks',
   Http = 'http',
@@ -32,6 +33,11 @@ export enum TunStack {
   System = 'system',
   GVisor = 'gvisor',
   Mixed = 'mixed',
+}
+
+export enum Network {
+  Tcp = 'tcp',
+  Udp = 'udp',
 }
 
 export enum RulesetType {

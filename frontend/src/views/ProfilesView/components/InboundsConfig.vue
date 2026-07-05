@@ -2,12 +2,13 @@
 import { useI18n } from 'vue-i18n'
 
 import { DraggableOptions } from '@/constant/app'
-import { TunStackOptions } from '@/constant/kernel'
+import { NetworkOptions, TunStackOptions } from '@/constant/kernel'
 import {
   DefaultInboundMixed,
   DefaultInboundHttp,
   DefaultInboundSocks,
   DefaultInboundTun,
+  DefaultInboundDirect,
 } from '@/constant/profile'
 import { Inbound } from '@/enums/kernel'
 import { picker, sampleID } from '@/utils'
@@ -21,6 +22,18 @@ const handleDelete = (index: number) => {
 }
 
 const inbounds = [
+  {
+    label: 'Direct',
+    value: () => {
+      model.value.push({
+        id: sampleID(),
+        tag: 'direct-in',
+        type: Inbound.Direct,
+        enable: true,
+        direct: DefaultInboundDirect(),
+      })
+    },
+  },
   {
     label: 'Mixed',
     value: () => {
@@ -114,9 +127,22 @@ defineExpose({ handleAdd })
           {{ t('kernel.inbounds.listen.listen_port') }}
           <Input v-model="inbound[inbound.type]!.listen.listen_port" type="number" />
         </div>
-        <div :class="{ 'items-start': inbound[inbound.type]!.users.length }" class="form-item">
+        <div
+          v-if="inbound.type !== Inbound.Direct"
+          :class="{ 'items-start': inbound[inbound.type]!.users.length }"
+          class="form-item"
+        >
           {{ t('kernel.inbounds.users') }}
           <InputList v-model="inbound[inbound.type]!.users" placeholder="user:password" />
+        </div>
+        <div v-else class="form-item">
+          {{ t('kernel.inbounds.direct.network') }}
+          <Select
+            v-model="inbound.direct!.network"
+            :options="NetworkOptions"
+            clearable
+            :placeholder="t('kernel.inbounds.direct.default')"
+          />
         </div>
         <div class="form-item">
           {{ t('kernel.inbounds.listen.tcp_fast_open') }}
