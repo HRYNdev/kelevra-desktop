@@ -63,7 +63,7 @@ const generateExperimental = (experimental: App.Experimental, outbounds: App.Out
 const generateInbounds = (inbounds: App.Inbound[]) => {
   return inbounds.flatMap((inbound) => {
     if (!inbound.enable) return []
-    if (inbound.type !== Inbound.Tun) {
+    if (inbound.type !== Inbound.Tun && inbound.type !== Inbound.Direct) {
       const users = inbound[inbound.type]!.users.map((user) => ({
         username: user.split(':')[0],
         password: user.split(':')[1],
@@ -73,6 +73,14 @@ const generateInbounds = (inbounds: App.Inbound[]) => {
         tag: inbound.tag,
         ...inbound[inbound.type]!.listen,
         users: users.length > 0 ? users : undefined,
+      }
+    }
+    if (inbound.type === Inbound.Direct) {
+      return {
+        type: inbound.type,
+        tag: inbound.tag,
+        ...inbound[inbound.type]!.listen,
+        network: inbound.direct!.network,
       }
     }
     if (inbound.type === Inbound.Tun) {

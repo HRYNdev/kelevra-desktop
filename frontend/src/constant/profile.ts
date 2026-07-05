@@ -110,6 +110,17 @@ export const DefaultInboundMixed = (): NonNullable<App.Inbound['mixed']> => ({
   users: [],
 })
 
+export const DefaultInboundDirect = (): NonNullable<App.Inbound['direct']> => ({
+  listen: {
+    listen: '127.0.0.1',
+    listen_port: 20123,
+    tcp_fast_open: false,
+    tcp_multi_path: false,
+    udp_fragment: false,
+  },
+  network: '',
+})
+
 export const DefaultInboundTun = (): NonNullable<App.Inbound['tun']> => ({
   interface_name: '',
   address: ['172.18.0.1/30', 'fdfe:dcba:9876::1/126'],
