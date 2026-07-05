@@ -52,6 +52,9 @@ export default {
     downloading: 'Downloading...',
     empty: 'Data is empty',
     pressAgainToClose: 'Press again to close the modal',
+    modalList: 'Modal List',
+    openAll: 'Open all',
+    minimizeAll: 'Minimize all',
   },
   kernel: {
     rule: 'Rule',

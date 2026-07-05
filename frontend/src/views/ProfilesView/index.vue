@@ -4,16 +4,20 @@ import { useI18n, I18nT } from 'vue-i18n'
 import { ClipboardSetText } from '@/bridge'
 import { DraggableOptions, ViewOptions } from '@/constant/app'
 import { View } from '@/enums/app'
-import { useProfilesStore, useAppSettingsStore, useKernelApiStore, useSubscribesStore, usePluginsStore, useAppStore } from '@/stores'
-import { debounce, deepClone, generateConfig, message, sampleID, alert } from '@/utils'
-
-import { useModal } from '@/components/Modal'
+import {
+  useProfilesStore,
+  useAppSettingsStore,
+  useKernelApiStore,
+  useSubscribesStore,
+  usePluginsStore,
+  useAppStore,
+} from '@/stores'
+import { debounce, deepClone, generateConfig, message, sampleID, alert, modal } from '@/utils'
 
 import ProfileEditor from './components/ProfileEditor.vue'
 import ProfileForm from './components/ProfileForm.vue'
 
 const { t } = useI18n()
-const [Modal, modalApi] = useModal({})
 const appStore = useAppStore()
 const profilesStore = useProfilesStore()
 const subscribesStore = useSubscribesStore()
@@ -97,8 +101,8 @@ const secondaryMenusList: App.Menu[] = [
     label: 'profiles.editSourceFile',
     handler: async (id: string) => {
       const profile = profilesStore.getProfileById(id)!
-      modalApi.setProps({ title: profile.name, width: '90', height: '90' })
-      modalApi.setContent(ProfileEditor, { profile }).open()
+      const m = modal({ title: profile.name, width: '90', height: '90' })
+      m.setContent(ProfileEditor, { profile }).open()
     },
   },
 ]
@@ -157,8 +161,8 @@ const generateMenus = (profile: App.Profile) => {
 }
 
 const handleShowProfileForm = (id?: string, step = 0) => {
-  modalApi.setProps({ minWidth: '70' })
-  modalApi.setContent(ProfileForm, { id, step }).open()
+  const m = modal({ title: id ? 'common.edit' : 'common.add', minWidth: '70' })
+  m.setContent(ProfileForm, { id, step }).open()
 }
 
 const handleDeleteProfile = async (p: App.Profile) => {
@@ -303,6 +307,4 @@ const onSortUpdate = debounce(profilesStore.saveProfiles, 1000)
       </div>
     </Card>
   </div>
-
-  <Modal />
 </template>

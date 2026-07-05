@@ -17,9 +17,8 @@ import {
   message,
   picker,
   deepClone,
+  modal,
 } from '@/utils'
-
-import { useModal } from '@/components/Modal'
 
 import RulesetForm from './components/RulesetForm.vue'
 import RulesetHub from './components/RulesetHub.vue'
@@ -44,14 +43,13 @@ const sourceMenuList: App.Menu[] = [
 ]
 
 const { t } = useI18n()
-const [Modal, modalApi] = useModal({})
 const envStore = useEnvStore()
 const rulesetsStore = useRulesetsStore()
 const appSettingsStore = useAppSettingsStore()
 const profilesStore = useProfilesStore()
 
 const handleImportRuleset = async () => {
-  modalApi.setProps({
+  const m = modal({
     title: 'rulesets.hub',
     cancelText: 'common.close',
     height: '90',
@@ -59,18 +57,16 @@ const handleImportRuleset = async () => {
     submit: false,
     maskClosable: true,
   })
-  modalApi.setContent(RulesetHub)
-  modalApi.open()
+  m.setContent(RulesetHub).open()
 }
 
 const handleShowRulesetForm = async (id?: string, isUpdate = false) => {
-  modalApi.setProps({
+  const m = modal({
     title: isUpdate ? 'common.edit' : 'common.add',
     maxHeight: '90',
     minWidth: '70',
   })
-  modalApi.setContent(RulesetForm, { id, isUpdate })
-  modalApi.open()
+  m.setContent(RulesetForm, { id, isUpdate }).open()
 }
 
 const handleUpdateRulesets = async () => {
@@ -84,13 +80,12 @@ const handleUpdateRulesets = async () => {
 }
 
 const handleEditRulesetList = (id: string) => {
-  modalApi.setProps({
+  const m = modal({
     title: rulesetsStore.getRulesetById(id)?.name,
     height: '90',
     width: '90',
   })
-  modalApi.setContent(RulesetView, { id })
-  modalApi.open()
+  m.setContent(RulesetView, { id }).open()
 }
 
 const handleUpdateRuleset = async (r: App.RuleSet) => {
@@ -351,6 +346,4 @@ const onSortUpdate = debounce(rulesetsStore.saveRulesets, 1000)
       </template>
     </Card>
   </div>
-
-  <Modal />
 </template>

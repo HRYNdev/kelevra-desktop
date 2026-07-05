@@ -6,10 +6,9 @@ import { OpenURI } from '@/bridge'
 import { DraggableOptions, ViewOptions } from '@/constant/app'
 import { PluginTriggerEvent, PluginTrigger, View } from '@/enums/app'
 import { usePluginsStore, useAppSettingsStore, useEnvStore } from '@/stores'
-import { debounce, message, deepClone } from '@/utils'
+import { debounce, message, deepClone, modal } from '@/utils'
 
 import Button from '@/components/Button/index.vue'
-import { useModal } from '@/components/Modal'
 
 import PluginChangelog from './components/PluginChangelog.vue'
 import PluginConfigurator from './components/PluginConfigurator.vue'
@@ -41,14 +40,13 @@ const menuList: App.Menu[] = [
 ]
 
 const { t } = useI18n()
-const [Modal, modalApi] = useModal({})
 
 const envStore = useEnvStore()
 const pluginsStore = usePluginsStore()
 const appSettingsStore = useAppSettingsStore()
 
 const handleImportPlugin = () => {
-  modalApi.setProps({
+  const m = modal({
     title: 'plugins.hub',
     height: '90',
     width: '90',
@@ -56,12 +54,12 @@ const handleImportPlugin = () => {
     maskClosable: true,
     cancelText: 'common.close',
   })
-  modalApi.setContent(PluginHub).open()
+  m.setContent(PluginHub).open()
 }
 
 const openPluginFormModal = (id?: string) => {
-  modalApi.setProps({ title: id ? 'common.edit' : 'common.add', minWidth: '80' })
-  modalApi.setContent(PluginForm, { id }).open()
+  const m = modal({ title: id ? 'common.edit' : 'common.add', minWidth: '80' })
+  m.setContent(PluginForm, { id }).open()
 }
 
 const handleAddPlugin = () => {
@@ -73,7 +71,7 @@ const handleEditPlugin = (id: string) => {
 }
 
 const handleViewChangelog = (id: string) => {
-  modalApi.setProps({
+  const m = modal({
     title: 'Changelog',
     cancelText: 'common.close',
     width: '90',
@@ -81,7 +79,7 @@ const handleViewChangelog = (id: string) => {
     submit: false,
     maskClosable: true,
   })
-  modalApi.setContent(PluginChangelog, { id }).open()
+  m.setContent(PluginChangelog, { id }).open()
 }
 
 const handleUpdatePluginHub = async () => {
@@ -136,8 +134,8 @@ const handleDisablePlugin = async (p: App.Plugin) => {
 }
 
 const handleEditPluginCode = (id: string, title: string) => {
-  modalApi.setProps({ title, width: '90' })
-  modalApi.setContent(PluginView, { id }).open()
+  const m = modal({ title, width: '90' })
+  m.setContent(PluginView, { id }).open()
 }
 
 const handleOnRun = async (p: App.Plugin) => {
@@ -157,8 +155,8 @@ const generateMenus = (p: App.Plugin) => {
     builtInMenus.push({
       label: 'plugins.configuration',
       handler: async () => {
-        modalApi.setProps({ title: 'plugins.configuration' })
-        modalApi.setContent(PluginConfigurator, { plugin: p }).open()
+        const m = modal({ title: 'plugins.configuration' })
+        m.setContent(PluginConfigurator, { plugin: p }).open()
       },
     })
   }
@@ -387,6 +385,4 @@ const onSortUpdate = debounce(pluginsStore.savePlugins, 1000)
       </div>
     </Card>
   </div>
-
-  <Modal />
 </template>
