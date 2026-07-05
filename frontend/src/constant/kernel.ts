@@ -184,7 +184,6 @@ export const TunStackOptions = [
 export const NetworkOptions = [
   { label: 'TCP', value: Network.Tcp },
   { label: 'UDP', value: Network.Udp },
-  { label: 'ICMP', value: Network.Icmp },
 ]
 
 export const RulesetTypeOptions = [

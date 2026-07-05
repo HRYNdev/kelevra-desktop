@@ -113,7 +113,7 @@ export const DefaultInboundMixed = (): NonNullable<App.Inbound['mixed']> => ({
 export const DefaultInboundDirect = (): NonNullable<App.Inbound['direct']> => ({
   listen: {
     listen: '127.0.0.1',
-    listen_port: 20123,
+    listen_port: 20119,
     tcp_fast_open: false,
     tcp_multi_path: false,
     udp_fragment: false,

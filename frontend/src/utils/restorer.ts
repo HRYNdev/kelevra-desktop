@@ -118,7 +118,11 @@ const restoreExperimental = (raw: Recordable, OutboundsIds: Recordable): App.Exp
 
 const restoreInbounds = (inbounds: Recordable[], InboundsIds: Recordable): App.Inbound[] => {
   return inbounds.flatMap((raw) => {
-    if (![Inbound.Mixed, Inbound.Http, Inbound.Socks, Inbound.Tun].includes(raw.type)) return []
+    if (
+      ![Inbound.Mixed, Inbound.Http, Inbound.Socks, Inbound.Tun, Inbound.Direct].includes(raw.type)
+    ) {
+      return []
+    }
     const inbound: App.Inbound = {
       id: InboundsIds[raw.tag],
       tag: raw.tag,

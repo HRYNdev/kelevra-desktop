@@ -38,7 +38,6 @@ export enum TunStack {
 export enum Network {
   Tcp = 'tcp',
   Udp = 'udp',
-  Icmp = 'icmp',
 }
 
 export enum RulesetType {

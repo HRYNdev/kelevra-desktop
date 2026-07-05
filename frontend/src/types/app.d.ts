@@ -296,7 +296,7 @@ declare namespace App {
   }
   type OutboundType = 'direct' | 'block' | 'selector' | 'urltest'
   type TunStack = 'system' | 'gvisor' | 'mixed'
-  type Network = 'tcp' | 'udp' | 'icmp'
+  type Network = 'tcp' | 'udp'
   type RuleSetType = 'inline' | 'local' | 'remote'
   type RuleSetFormat = 'source' | 'binary'
   type RuleType =
@@ -408,7 +408,7 @@ declare namespace App {
     enable: boolean
     direct?: {
       listen: InboundListen
-      network: Exclude<Network, 'icmp'> | ''
+      network: Network | ''
     }
     mixed?: {
       listen: InboundListen

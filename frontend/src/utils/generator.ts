@@ -12,10 +12,19 @@ import {
   RuleType,
   Strategy,
 } from '@/enums/kernel'
-import { useAppSettingsStore, usePluginsStore, useRulesetsStore, useSubscribesStore } from '@/stores'
+import {
+  useAppSettingsStore,
+  usePluginsStore,
+  useRulesetsStore,
+  useSubscribesStore,
+} from '@/stores'
 import { deepAssign, deepClone, APP_TITLE, createTextMatcher } from '@/utils'
 
-const _generateRule = (rule: App.Rule | App.DnsRule, rule_set: App.ProfileRuleSet[], inbounds: App.Inbound[]) => {
+const _generateRule = (
+  rule: App.Rule | App.DnsRule,
+  rule_set: App.ProfileRuleSet[],
+  inbounds: App.Inbound[],
+) => {
   const getInbound = (id: string) => inbounds.find((v) => v.id === id)?.tag
   const getRuleset = (id: string) => rule_set.find((v) => v.id === id)?.tag
 
@@ -80,7 +89,7 @@ const generateInbounds = (inbounds: App.Inbound[]) => {
         type: inbound.type,
         tag: inbound.tag,
         ...inbound[inbound.type]!.listen,
-        network: inbound.direct!.network,
+        network: inbound.direct!.network || undefined,
       }
     }
     if (inbound.type === Inbound.Tun) {
@@ -159,7 +168,12 @@ const generateOutbounds = async (outbounds: App.Outbound[]) => {
   return result
 }
 
-const generateRoute = (route: App.Route, inbounds: App.Inbound[], outbounds: App.Outbound[], dns: App.Dns) => {
+const generateRoute = (
+  route: App.Route,
+  inbounds: App.Inbound[],
+  outbounds: App.Outbound[],
+  dns: App.Dns,
+) => {
   const getOutbound = (id: string) => outbounds.find((v) => v.id === id)?.tag
   const getDnsServer = (id: string) => dns.servers.find((v) => v.id === id)?.tag
   const isInboundEnabled = (id: string) => inbounds.find((v) => v.id === id)?.enable
