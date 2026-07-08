@@ -19,7 +19,9 @@ export const useScheduledTasksStore = defineStore('scheduledtasks', () => {
 
     scheduledtasks.value.forEach(async ({ disabled, cron, id }) => {
       if (!disabled) {
-        cronJobsMap[id] = new Cron(cron, () => runScheduledTask(id))
+        cronJobsMap[id] = new Cron(cron, () => {
+          runScheduledTask(id)
+        })
       }
     })
   }
@@ -43,14 +45,18 @@ export const useScheduledTasksStore = defineStore('scheduledtasks', () => {
       Notify(task.name, content)
     }
 
-    logsStore.recordScheduledTasksLog({
+    const log = {
       name: task.name,
       startTime,
       endTime: Date.now(),
       result: result,
-    })
+    }
+
+    logsStore.recordScheduledTasksLog(log)
 
     await editScheduledTask(id, task)
+
+    return log
   }
 
   const withOutput = <T>(list: string[], fn: (id: string) => Promise<T>) => {
@@ -107,9 +113,8 @@ export const useScheduledTasksStore = defineStore('scheduledtasks', () => {
       case ScheduledTasksType.RunScript: {
         return withOutput([task.script], (script: string) => new window.AsyncFunction(script)())
       }
-      default:
-        throw new Error('Unsupported scheduled task type: ' + task.type)
     }
+    throw new Error(`Unknown scheduled task type: ${task.type}`)
   }
 
   const saveScheduledTasks = () => {
@@ -119,7 +124,9 @@ export const useScheduledTasksStore = defineStore('scheduledtasks', () => {
   const addScheduledTask = async (s: App.ScheduledTask) => {
     scheduledtasks.value.push(s)
     try {
-      cronJobsMap[s.id] = new Cron(s.cron, () => runScheduledTask(s.id))
+      cronJobsMap[s.id] = new Cron(s.cron, () => {
+        runScheduledTask(s.id)
+      })
       await saveScheduledTasks()
     } catch (error) {
       cronJobsMap[s.id]?.stop()
@@ -156,7 +163,9 @@ export const useScheduledTasksStore = defineStore('scheduledtasks', () => {
       if (s.disabled) {
         delete cronJobsMap[id]
       } else {
-        cronJobsMap[id] = new Cron(s.cron, () => runScheduledTask(id))
+        cronJobsMap[id] = new Cron(s.cron, () => {
+          runScheduledTask(id)
+        })
       }
     } catch (error) {
       scheduledtasks.value.splice(idx, 1, backup)
