@@ -15,7 +15,14 @@ import { CoreWorkingDirectory } from '@/constant/kernel'
 import { OS, RequestProxyMode } from '@/enums/app'
 import { RulesetFormat } from '@/enums/kernel'
 import i18n from '@/lang'
-import { useAppSettingsStore, useAppStore, useEnvStore, useKernelApiStore, usePluginsStore, useRulesetsStore } from '@/stores'
+import {
+  useAppSettingsStore,
+  useAppStore,
+  useEnvStore,
+  useKernelApiStore,
+  usePluginsStore,
+  useRulesetsStore,
+} from '@/stores'
 import {
   formatProxyHost,
   ignoredError,
@@ -48,24 +55,20 @@ export const SwitchPermissions = async (enable: boolean) => {
         appPath,
         '/f',
       ]
-  await Exec('reg', args, { Convert: true })
+  await Exec('reg', args)
 }
 
 export const CheckPermissions = async () => {
   const { appPath } = useEnvStore().env
   try {
-    const out = await Exec(
-      'reg',
-      [
-        'query',
-        'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers',
-        '/v',
-        appPath,
-        '/t',
-        'REG_SZ',
-      ],
-      { Convert: true },
-    )
+    const out = await Exec('reg', [
+      'query',
+      'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers',
+      '/v',
+      appPath,
+      '/t',
+      'REG_SZ',
+    ])
     return out.includes('RunAsAdmin')
   } catch {
     return false
@@ -129,7 +132,7 @@ export const RunWithPowerShell = async (
     command += ' -Wait'
   }
   psArgs.push('-NoProfile', '-Command', command)
-  return await Exec('powershell', psArgs, { Convert: true, ...others })
+  return await Exec('powershell', psArgs, others)
 }
 
 const requestProxyCache: { proxyPromise: Promise<string> | null; lastAccessTime: number } = {
@@ -186,7 +189,7 @@ export const IsAutoStartEnabled = async () => {
   const { os } = useEnvStore().env
   let isAutoStart = false
   if (os === OS.Windows) {
-    isAutoStart = await Exec('Schtasks', ['/Query', '/TN', APP_TITLE, '/XML'], { Convert: true })
+    isAutoStart = await Exec('Schtasks', ['/Query', '/TN', APP_TITLE, '/XML'])
       .then(() => true)
       .catch(() => false)
   } else if (os === OS.Darwin) {
