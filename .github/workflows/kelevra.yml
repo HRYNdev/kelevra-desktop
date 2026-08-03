@@ -1,0 +1,63 @@
+name: kelevra-desktop
+
+# Сборка нашего десктопного клиента: только Windows amd64 — остальное семье не нужно,
+# а каждая лишняя архитектура это лишние минуты ожидания.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Сборка интерфейса
+        working-directory: frontend
+        run: |
+          pnpm install
+          pnpm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+  windows:
+    needs: frontend
+    runs-on: windows-latest
+    env:
+      APP_NAME: Kelevra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Сборка приложения
+        shell: pwsh
+        run: |
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          ~/go/bin/wails build -m -s -trimpath -skipbindings -devtools -o "$env:APP_NAME.exe"
+          Get-ChildItem build/bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kelevra-desktop
+          path: build/bin/*.exe
+          if-no-files-found: error
