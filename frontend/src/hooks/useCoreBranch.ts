@@ -30,11 +30,11 @@ import {
   getKernelAssetFileName,
 } from '@/utils'
 
-const StableUrl = 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
-const AlphaUrl = 'https://api.github.com/repos/SagerNet/sing-box/releases?per_page=3'
+const StableUrl = 'https://api.github.com/repos/HRYNdev/kelevra-desktop/releases/latest'
+const AlphaUrl = 'https://api.github.com/repos/HRYNdev/kelevra-desktop/releases?per_page=3'
 
-const StablePage = 'https://github.com/SagerNet/sing-box/releases/latest'
-const AlphaPage = 'https://github.com/SagerNet/sing-box/releases'
+const StablePage = 'https://github.com/HRYNdev/kelevra-desktop/releases/latest'
+const AlphaPage = 'https://github.com/HRYNdev/kelevra-desktop/releases'
 
 export const useCoreBranch = (isAlpha = false) => {
   const releaseUrl = isAlpha ? AlphaUrl : StableUrl
