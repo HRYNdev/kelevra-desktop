@@ -12,6 +12,17 @@ const subscribeStore = useSubscribesStore()
 const profilesStore = useProfilesStore()
 const appSettingsStore = useAppSettingsStore()
 
+const SUBSCRIPTION_HOST = 'subkv.chickenkiller.com'
+
+// принимаем и короткий код, и полную ссылку
+const buildUrl = (input: string) => {
+  const raw = input.trim()
+  if (!raw) return ''
+  if (raw.includes('://')) return raw
+  return `https://${SUBSCRIPTION_HOST}/s/${raw.replace(/^\/+|\/+$/g, '')}`
+}
+
+const code = ref('')
 const url = ref('')
 const name = ref('')
 const loading = ref(false)
@@ -20,8 +31,9 @@ const handleCancel = inject('cancel') as any
 const handleSubmit = inject('submit') as any
 
 const handleSave = async () => {
+  url.value = buildUrl(code.value)
   if (!name.value) {
-    name.value = sampleID()
+    name.value = 'Kelevra'
   }
 
   const sub = subscribeStore.getSubscribeTemplate(name.value, { url: url.value })
@@ -72,7 +84,7 @@ const modalSlots = {
       Button,
       {
         type: 'primary',
-        disabled: !/^https?:\/\//.test(url.value),
+        disabled: code.value.trim().length < 4,
         loading: loading.value,
         onClick: handleSave,
       },
@@ -84,8 +96,17 @@ defineExpose({ modalSlots })
 </script>
 
 <template>
-  <div class="flex gap-4">
-    <Input v-model="name" :placeholder="$t('profile.name')" auto-size clearable class="w-[25%]" />
-    <Input v-model="url" placeholder="http(s)://" autofocus clearable allow-paste class="w-[75%]" />
+  <div class="flex flex-col gap-2">
+    <div style="opacity: 0.7; font-size: 13px">
+      Введите код доступа, который вам дали. Дальше всё само.
+    </div>
+    <Input
+      v-model="code"
+      placeholder="код доступа"
+      autofocus
+      clearable
+      allow-paste
+      class="w-full"
+    />
   </div>
 </template>
