@@ -1,15 +1,15 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "GUI.for.SingBox",
-  "outputfilename": "GUI.for.SingBox",
+  "name": "Kelevra",
+  "outputfilename": "Kelevra",
   "frontend:install": "pnpm install",
   "frontend:build": "pnpm run build",
   "frontend:dev:watcher": "pnpm run dev",
   "frontend:dev:serverUrl": "auto",
   "wailsjsdir": "frontend/src/bridge",
   "author": {
-    "name": "GUI.for.Cores",
-    "email": "GUI.for.Cores@github.com"
+    "name": "Kelevra",
+    "email": ""
   },
   "info": {
     "copyright": "Copyright",
