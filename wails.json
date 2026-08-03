@@ -12,7 +12,9 @@
     "email": ""
   },
   "info": {
-    "copyright": "Copyright",
-    "comments": "https://github.com/GUI-for-Cores"
+    "productName": "Kelevra",
+    "productVersion": "1.0.0",
+    "copyright": "Kelevra",
+    "comments": "Своя сеть"
   }
 }
