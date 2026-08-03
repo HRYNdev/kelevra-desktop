@@ -1,0 +1,68 @@
+name: core
+
+# Ядро для десктопа: тот же апстрим sing-box плюс наш транспорт xhttp.
+# Патч лежит в репозитории приложения (kelevra-box/core-xhttp) — держим в одном месте.
+on:
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: "Тег sing-box"
+        required: false
+        default: "v1.14.0-beta.4"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: SagerNet/sing-box
+          ref: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+          path: core
+          fetch-depth: 0
+
+      - name: Забрать патч транспорта
+        run: |
+          git clone --depth 1 https://github.com/HRYNdev/kelevra-box.git app
+          python3 app/core-xhttp/apply.py core
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          check-latest: true
+
+      - name: Сборка под Windows
+        working-directory: core
+        run: |
+          GOOS=windows GOARCH=amd64 go build \
+            -tags "with_utls,with_quic,with_gvisor,with_clash_api,with_wireguard" \
+            -trimpath -ldflags "-s -w" \
+            -o ../kelevra-core.exe ./cmd/sing-box
+          ls -lh ../kelevra-core.exe
+
+      - name: Проверка что транспорт внутри
+        run: |
+          if grep -qa 'v2rayxhttp' kelevra-core.exe; then
+            echo "транспорт xhttp внутри ядра: есть"
+          else
+            echo "ОШИБКА: ядро собрано без нашего транспорта"
+            exit 1
+          fi
+
+      - name: Упаковать как ждёт интерфейс
+        run: |
+          mkdir -p pack && cp kelevra-core.exe pack/sing-box.exe
+          cd pack && zip -q "../sing-box-windows-amd64.zip" sing-box.exe
+          ls -lh ../sing-box-windows-amd64.zip
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: core-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}-${{ github.run_number }}
+          name: Ядро ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }} (сборка ${{ github.run_number }})
+          body: |
+            Ядро своей сети: апстрим sing-box плюс транспорт xhttp, которого нет в официальных сборках.
+            Проверка наличия транспорта проходит в сборке автоматически.
+          files: sing-box-windows-amd64.zip
+          prerelease: false
