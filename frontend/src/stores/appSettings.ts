@@ -44,7 +44,7 @@ export const useAppSettingsStore = defineStore('app-settings', () => {
   let latestUserSettings: string
 
   const app = ref<App.AppSettings>({
-    lang: Lang.EN,
+    lang: Lang.RU,
     theme: Theme.Auto,
     color: Color.Default,
     primaryColor: '#000',

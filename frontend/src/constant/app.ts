@@ -56,8 +56,9 @@ export const Colors = {
 }
 
 export const LanguageOptions = [
-  { label: 'settings.lang.zh', value: Lang.ZH },
+  { label: 'settings.lang.ru', value: Lang.RU },
   { label: 'settings.lang.en', value: Lang.EN },
+  { label: 'settings.lang.zh', value: Lang.ZH },
 ]
 
 export const ViewOptions = [
