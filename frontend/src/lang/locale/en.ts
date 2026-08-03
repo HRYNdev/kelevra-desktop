@@ -648,6 +648,7 @@ export default {
       open: 'Open application folder',
     },
     lang: {
+      ru: 'Russian',
       name: 'Language',
       load: 'Load language files',
       zh: '简体中文',
