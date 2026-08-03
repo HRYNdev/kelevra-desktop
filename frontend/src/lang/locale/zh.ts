@@ -647,6 +647,7 @@ export default {
       open: '打开应用程序文件夹',
     },
     lang: {
+      ru: '俄语',
       name: '语言',
       load: '加载语言文件',
       zh: '简体中文',

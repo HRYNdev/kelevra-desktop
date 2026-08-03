@@ -5,23 +5,25 @@ import { LocalesFilePath } from '@/constant/app'
 import { Lang } from '@/enums/app'
 
 import en from './locale/en'
+import ru from './locale/ru'
 import zh from './locale/zh'
 
 const messages: Recordable = {
   zh,
   en,
+  ru,
 }
 
 const i18n = createI18n({
   legacy: false,
-  locale: 'en',
+  locale: 'ru',
   fallbackWarn: false,
   missingWarn: false,
   messages,
 })
 
 export const loadLocale = async (locale = i18n.global.locale.value) => {
-  if (![Lang.ZH, Lang.EN].includes(locale as Lang)) {
+  if (![Lang.ZH, Lang.EN, Lang.RU].includes(locale as Lang)) {
     const message = await ReadFile(`${LocalesFilePath}/${locale}.json`).catch(() => '')
     message && i18n.global.setLocaleMessage(locale, JSON.parse(message))
   }
