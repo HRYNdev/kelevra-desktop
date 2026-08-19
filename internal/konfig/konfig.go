@@ -144,6 +144,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		pochistitPravila(d, udalennyeTegi)
 	}
 	k.ClashAdres, k.ClashSekret = clash(d)
+	zapomnitVybor(d)
 
 	gotovyy, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
@@ -261,4 +262,27 @@ func adresVhoda(vh map[string]any) string {
 		return ""
 	}
 	return fmt.Sprintf("%s:%d", host, int(port))
+}
+
+// zapomnitVybor велит ядру хранить выбранный человеком узел между запусками.
+// Хранилище — cache_file; в профиле хозяина оно есть, но у чужого профиля может
+// не быть, а без него выбор из окна сбрасывается на серверный по умолчанию при
+// каждом перезапуске ядра — а ядро мы перезапускаем сами при смене режима.
+//
+// Отдельного выключателя `store_selected` тут БОЛЬШЕ НЕТ, и это не забывчивость:
+// ядро (sing-box 1.14) на такое поле не ругается, а ПАДАЕТ строкой
+// «unknown field "store_selected"» — поймано живым прогоном, не тестом.
+// В этой версии выбор хранится сам, как только включён cache_file.
+func zapomnitVybor(d map[string]any) {
+	e, ok := d["experimental"].(map[string]any)
+	if !ok {
+		e = map[string]any{}
+		d["experimental"] = e
+	}
+	c, ok := e["cache_file"].(map[string]any)
+	if !ok {
+		c = map[string]any{"path": "cache.db"}
+		e["cache_file"] = c
+	}
+	c["enabled"] = true
 }

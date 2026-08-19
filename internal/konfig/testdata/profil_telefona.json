@@ -1,457 +1,457 @@
 {
- "dns": {
-  "final": "local",
-  "rules": [
-   {
-    "action": "reject",
-    "rule_set": [
-     "ads"
-    ]
-   },
-   {
-    "server": "fakeip",
-    "rule_set": [
-     "main-domains",
-     "russia_inside",
-     "youtube",
-     "telegram",
-     "discord",
-     "meta",
-     "twitter",
-     "google_ai",
-     "google_play",
-     "cloudflare",
-     "cloudfront",
-     "digitalocean",
-     "hetzner",
-     "ovh",
-     "hodca",
-     "roblox",
-     "anime",
-     "hdrezka",
-     "tiktok",
-     "geoblock"
-    ],
-    "query_type": [
-     "A",
-     "AAAA"
-    ]
-   }
-  ],
-  "servers": [
-   {
-    "type": "fakeip",
-    "tag": "fakeip",
-    "inet4_range": "198.18.0.0/15",
-    "inet6_range": "fc00::/18"
-   },
-   {
-    "type": "tcp",
-    "tag": "local",
-    "server": "1.1.1.1"
-   }
-  ]
- },
- "log": {
-  "level": "info",
-  "disabled": false,
-  "timestamp": true
- },
- "route": {
-  "final": "direct",
-  "rules": [
-   {
-    "action": "sniff"
-   },
-   {
-    "mode": "or",
-    "type": "logical",
+  "dns": {
+    "final": "local",
     "rules": [
-     {
-      "protocol": "dns"
-     },
-     {
-      "port": 53
-     }
+      {
+        "action": "reject",
+        "rule_set": [
+          "ads"
+        ]
+      },
+      {
+        "server": "fakeip",
+        "rule_set": [
+          "main-domains",
+          "russia_inside",
+          "youtube",
+          "telegram",
+          "discord",
+          "meta",
+          "twitter",
+          "google_ai",
+          "google_play",
+          "cloudflare",
+          "cloudfront",
+          "digitalocean",
+          "hetzner",
+          "ovh",
+          "hodca",
+          "roblox",
+          "anime",
+          "hdrezka",
+          "tiktok",
+          "geoblock"
+        ],
+        "query_type": [
+          "A",
+          "AAAA"
+        ]
+      }
     ],
-    "action": "hijack-dns"
-   },
-   {
-    "outbound": "direct",
-    "ip_is_private": true
-   },
-   {
-    "action": "reject",
-    "rule_set": [
-     "ads"
+    "servers": [
+      {
+        "type": "fakeip",
+        "tag": "fakeip",
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "fc00::/18"
+      },
+      {
+        "type": "tcp",
+        "tag": "local",
+        "server": "1.1.1.1"
+      }
     ]
-   },
-   {
-    "outbound": "Соединение",
+  },
+  "log": {
+    "level": "info",
+    "disabled": false,
+    "timestamp": true
+  },
+  "route": {
+    "final": "direct",
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "mode": "or",
+        "type": "logical",
+        "rules": [
+          {
+            "protocol": "dns"
+          },
+          {
+            "port": 53
+          }
+        ],
+        "action": "hijack-dns"
+      },
+      {
+        "outbound": "direct",
+        "ip_is_private": true
+      },
+      {
+        "action": "reject",
+        "rule_set": [
+          "ads"
+        ]
+      },
+      {
+        "outbound": "Соединение",
+        "rule_set": [
+          "main-domains",
+          "main-subnets",
+          "russia_inside",
+          "youtube",
+          "telegram",
+          "discord",
+          "meta",
+          "twitter",
+          "google_ai",
+          "google_play",
+          "cloudflare",
+          "cloudfront",
+          "digitalocean",
+          "hetzner",
+          "ovh",
+          "hodca",
+          "roblox",
+          "anime",
+          "hdrezka",
+          "tiktok",
+          "geoblock"
+        ]
+      }
+    ],
     "rule_set": [
-     "main-domains",
-     "main-subnets",
-     "russia_inside",
-     "youtube",
-     "telegram",
-     "discord",
-     "meta",
-     "twitter",
-     "google_ai",
-     "google_play",
-     "cloudflare",
-     "cloudfront",
-     "digitalocean",
-     "hetzner",
-     "ovh",
-     "hodca",
-     "roblox",
-     "anime",
-     "hdrezka",
-     "tiktok",
-     "geoblock"
-    ]
-   }
-  ],
-  "rule_set": [
-   {
-    "tag": "ads",
-    "url": "https://subkv.chickenkiller.com/rules/ads.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1h",
-    "http_client": {
-     "detour": "direct"
+      {
+        "tag": "ads",
+        "url": "https://subkv.chickenkiller.com/rules/ads.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1h",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "main-domains",
+        "url": "https://subkv.chickenkiller.com/rules/main-domains.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1h",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "main-subnets",
+        "url": "https://subkv.chickenkiller.com/rules/main-subnets.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1h",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "russia_inside",
+        "url": "https://subkv.chickenkiller.com/rules/community/russia_inside.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "youtube",
+        "url": "https://subkv.chickenkiller.com/rules/community/youtube.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "telegram",
+        "url": "https://subkv.chickenkiller.com/rules/community/telegram.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "discord",
+        "url": "https://subkv.chickenkiller.com/rules/community/discord.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "meta",
+        "url": "https://subkv.chickenkiller.com/rules/community/meta.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "twitter",
+        "url": "https://subkv.chickenkiller.com/rules/community/twitter.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "google_ai",
+        "url": "https://subkv.chickenkiller.com/rules/community/google_ai.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "google_play",
+        "url": "https://subkv.chickenkiller.com/rules/community/google_play.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "cloudflare",
+        "url": "https://subkv.chickenkiller.com/rules/community/cloudflare.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "cloudfront",
+        "url": "https://subkv.chickenkiller.com/rules/community/cloudfront.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "digitalocean",
+        "url": "https://subkv.chickenkiller.com/rules/community/digitalocean.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "hetzner",
+        "url": "https://subkv.chickenkiller.com/rules/community/hetzner.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "ovh",
+        "url": "https://subkv.chickenkiller.com/rules/community/ovh.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "hodca",
+        "url": "https://subkv.chickenkiller.com/rules/community/hodca.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "roblox",
+        "url": "https://subkv.chickenkiller.com/rules/community/roblox.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "anime",
+        "url": "https://subkv.chickenkiller.com/rules/community/anime.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "hdrezka",
+        "url": "https://subkv.chickenkiller.com/rules/community/hdrezka.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "tiktok",
+        "url": "https://subkv.chickenkiller.com/rules/community/tiktok.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      },
+      {
+        "tag": "geoblock",
+        "url": "https://subkv.chickenkiller.com/rules/community/geoblock.srs",
+        "type": "remote",
+        "format": "binary",
+        "update_interval": "1d",
+        "http_client": {
+          "detour": "direct"
+        }
+      }
+    ],
+    "override_android_vpn": true,
+    "auto_detect_interface": true,
+    "default_domain_resolver": {
+      "server": "local"
     }
-   },
-   {
-    "tag": "main-domains",
-    "url": "https://subkv.chickenkiller.com/rules/main-domains.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1h",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "main-subnets",
-    "url": "https://subkv.chickenkiller.com/rules/main-subnets.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1h",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "russia_inside",
-    "url": "https://subkv.chickenkiller.com/rules/community/russia_inside.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "youtube",
-    "url": "https://subkv.chickenkiller.com/rules/community/youtube.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "telegram",
-    "url": "https://subkv.chickenkiller.com/rules/community/telegram.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "discord",
-    "url": "https://subkv.chickenkiller.com/rules/community/discord.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "meta",
-    "url": "https://subkv.chickenkiller.com/rules/community/meta.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "twitter",
-    "url": "https://subkv.chickenkiller.com/rules/community/twitter.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "google_ai",
-    "url": "https://subkv.chickenkiller.com/rules/community/google_ai.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "google_play",
-    "url": "https://subkv.chickenkiller.com/rules/community/google_play.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "cloudflare",
-    "url": "https://subkv.chickenkiller.com/rules/community/cloudflare.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "cloudfront",
-    "url": "https://subkv.chickenkiller.com/rules/community/cloudfront.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "digitalocean",
-    "url": "https://subkv.chickenkiller.com/rules/community/digitalocean.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "hetzner",
-    "url": "https://subkv.chickenkiller.com/rules/community/hetzner.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "ovh",
-    "url": "https://subkv.chickenkiller.com/rules/community/ovh.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "hodca",
-    "url": "https://subkv.chickenkiller.com/rules/community/hodca.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "roblox",
-    "url": "https://subkv.chickenkiller.com/rules/community/roblox.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "anime",
-    "url": "https://subkv.chickenkiller.com/rules/community/anime.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "hdrezka",
-    "url": "https://subkv.chickenkiller.com/rules/community/hdrezka.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "tiktok",
-    "url": "https://subkv.chickenkiller.com/rules/community/tiktok.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   },
-   {
-    "tag": "geoblock",
-    "url": "https://subkv.chickenkiller.com/rules/community/geoblock.srs",
-    "type": "remote",
-    "format": "binary",
-    "update_interval": "1d",
-    "http_client": {
-     "detour": "direct"
-    }
-   }
-  ],
-  "override_android_vpn": true,
-  "auto_detect_interface": true,
-  "default_domain_resolver": {
-   "server": "local"
-  }
- },
- "inbounds": [
-  {
-   "mtu": 9000,
-   "tag": "tun-in",
-   "type": "tun",
-   "stack": "mixed",
-   "address": [
-    "172.19.0.1/30",
-    "fdfe:dcba:9876::1/126"
-   ],
-   "platform": {
-    "http_proxy": {
-     "server": "127.0.0.1",
-     "enabled": true,
-     "server_port": 2412
-    }
-   },
-   "auto_route": true,
-   "strict_route": true,
-   "interface_name": "tun125",
-   "endpoint_independent_nat": true,
-   "exclude_package": [
-    "ru.rostel",
-    "ru.gosuslugi.goskey",
-    "ru.gosuslugi.dom",
-    "com.gnivts.selfemployed",
-    "ru.fns.billchecker",
-    "ru.nalog.app",
-    "ru.mts.mymts",
-    "com.apegroup.mcdonaldsrussia"
-   ]
   },
-  {
-   "tag": "mixed-in",
-   "type": "mixed",
-   "users": [],
-   "listen": "127.0.0.1",
-   "listen_port": 2412,
-   "set_system_proxy": false
-  }
- ],
- "outbounds": [
-  {
-   "type": "selector",
-   "tag": "Соединение",
-   "outbounds": [
-    "Нидерланды",
-    "Комната"
-   ],
-   "default": "Нидерланды",
-   "interrupt_exist_connections": true
-  },
-  {
-   "type": "urltest",
-   "tag": "Нидерланды",
-   "outbounds": [
-    "Нидерланды · прямой"
-   ],
-   "url": "https://www.gstatic.com/generate_204",
-   "interval": "10m",
-   "tolerance": 300,
-   "idle_timeout": "30m",
-   "interrupt_exist_connections": false
-  },
-  {
-   "tag": "direct",
-   "type": "direct",
-   "domain_resolver": "local"
-  },
-  {
-   "type": "vless",
-   "tag": "Нидерланды · прямой",
-   "server": "primer.example",
-   "server_port": 443,
-   "uuid": "obezlicheno-3",
-   "tls": {
-    "enabled": true,
-    "server_name": "primer.example",
-    "utls": {
-     "enabled": true,
-     "fingerprint": "chrome"
+  "inbounds": [
+    {
+      "mtu": 9000,
+      "tag": "tun-in",
+      "type": "tun",
+      "stack": "mixed",
+      "address": [
+        "172.19.0.1/30",
+        "fdfe:dcba:9876::1/126"
+      ],
+      "platform": {
+        "http_proxy": {
+          "server": "127.0.0.1",
+          "enabled": true,
+          "server_port": 2412
+        }
+      },
+      "auto_route": true,
+      "strict_route": true,
+      "interface_name": "tun125",
+      "endpoint_independent_nat": true,
+      "exclude_package": [
+        "ru.rostel",
+        "ru.gosuslugi.goskey",
+        "ru.gosuslugi.dom",
+        "com.gnivts.selfemployed",
+        "ru.fns.billchecker",
+        "ru.nalog.app",
+        "ru.mts.mymts",
+        "com.apegroup.mcdonaldsrussia"
+      ]
     },
-    "reality": {
-     "enabled": true,
-     "public_key": "obezlicheno",
-     "short_id": "obezlicheno"
+    {
+      "tag": "mixed-in",
+      "type": "mixed",
+      "users": [],
+      "listen": "127.0.0.1",
+      "listen_port": 2412,
+      "set_system_proxy": false
     }
-   },
-   "flow": "xtls-rprx-vision"
-  },
-  {
-   "type": "socks",
-   "tag": "Комната",
-   "server": "primer.example",
-   "server_port": 443,
-   "version": "5"
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "Соединение",
+      "outbounds": [
+        "Нидерланды",
+        "Комната"
+      ],
+      "default": "Нидерланды",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "urltest",
+      "tag": "Нидерланды",
+      "outbounds": [
+        "Нидерланды · прямой"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "10m",
+      "tolerance": 300,
+      "idle_timeout": "30m",
+      "interrupt_exist_connections": false
+    },
+    {
+      "tag": "direct",
+      "type": "direct",
+      "domain_resolver": "local"
+    },
+    {
+      "type": "vless",
+      "tag": "Нидерланды · прямой",
+      "server": "primer.example",
+      "server_port": 443,
+      "uuid": "00000000-0000-4000-8000-000000000000",
+      "tls": {
+        "enabled": true,
+        "server_name": "primer.example",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "short_id": "0123abcd"
+        }
+      },
+      "flow": "xtls-rprx-vision"
+    },
+    {
+      "type": "socks",
+      "tag": "Комната",
+      "server": "primer.example",
+      "server_port": 443,
+      "version": "5"
+    }
+  ],
+  "experimental": {
+    "clash_api": {
+      "external_ui": "yacd",
+      "default_mode": "rule",
+      "external_controller": "127.0.0.1:9090",
+      "external_ui_download_url": "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip",
+      "external_ui_download_detour": "direct"
+    },
+    "cache_file": {
+      "path": "remnawave.db",
+      "enabled": true,
+      "cache_id": "remnawave",
+      "store_fakeip": true
+    }
   }
- ],
- "experimental": {
-  "clash_api": {
-   "external_ui": "yacd",
-   "default_mode": "rule",
-   "external_controller": "127.0.0.1:9090",
-   "external_ui_download_url": "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip",
-   "external_ui_download_detour": "direct"
-  },
-  "cache_file": {
-   "path": "remnawave.db",
-   "enabled": true,
-   "cache_id": "remnawave",
-   "store_fakeip": true
-  }
- }
 }

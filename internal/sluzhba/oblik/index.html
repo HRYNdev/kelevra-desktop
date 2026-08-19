@@ -30,6 +30,12 @@
   .beda { color:var(--beda); font-size:13px; white-space:pre-wrap; word-break:break-word; }
   .ryad { display:flex; justify-content:space-between; margin-top:8px; font-size:13px; }
   .rastyanut { flex:1; }
+  .uzel { display:flex; align-items:center; gap:10px; width:100%; padding:10px 12px;
+          margin-top:6px; border-radius:10px; border:1px solid #2a2f39; background:#0d0f13;
+          color:var(--tekst); font-size:14px; font-weight:400; cursor:pointer; text-align:left; }
+  .uzel.vybran { border-color:var(--akcent); color:var(--akcent); }
+  .uzel .ms { margin-left:auto; color:var(--tihiy); font-size:12px; }
+  .uzel.vybran .ms { color:var(--akcent); }
 </style>
 </head>
 <body>
@@ -46,6 +52,7 @@
   <div class="karta rastyanut" id="karta-svyazi" hidden>
     <div class="krug" id="krug">отключено</div>
     <button id="knopka-svyazi">Подключить</button>
+    <div id="uzly"></div>
     <div class="ryad"><span class="tihiy">Скачано</span><span id="vniz">—</span></div>
     <div class="ryad"><span class="tihiy">Отдано</span><span id="vverh">—</span></div>
     <div class="ryad"><span class="tihiy">Режим</span><span id="rezhim">—</span></div>
@@ -105,6 +112,71 @@ async function obnovit() {
   $("beda-svyazi").textContent = beda;
 }
 
+// Выбор узла. Список перерисовывается только когда он ДЕЙСТВИТЕЛЬНО изменился:
+// иначе опрос раз в две секунды сбрасывал бы нажатие под пальцем.
+let uzlySlepok = "";
+let zamerIdet = false;
+
+function risovatUzly(gruppy) {
+  const koren2 = $("uzly");
+  koren2.innerHTML = "";
+  for (const g of gruppy) {
+    const zag = document.createElement("div");
+    zag.className = "ryad";
+    zag.innerHTML = '<span class="tihiy"></span><span class="tihiy"></span>';
+    zag.children[0].textContent = g.imya;
+    if (g.sam) zag.children[1].textContent = "выбирает сам";
+    koren2.appendChild(zag);
+    for (const u of g.uzly) {
+      const b = document.createElement("button");
+      b.className = "uzel" + (u.imya === g.seychas ? " vybran" : "");
+      const imya = document.createElement("span");
+      imya.textContent = u.imya;
+      const ms = document.createElement("span");
+      ms.className = "ms";
+      ms.textContent = u.beda ? u.beda : (u.zaderzhka ? u.zaderzhka + " мс" : "");
+      b.append(imya, ms);
+      if (g.sam) { b.disabled = true; b.style.cursor = "default"; }
+      else b.onclick = async () => {
+        try { await api("vybrat", {gruppa: g.imya, uzel: u.imya}); uzlySlepok = ""; }
+        catch (e) { $("beda-svyazi").textContent = e.message; }
+        obnovitUzly();
+      };
+      koren2.appendChild(b);
+    }
+    if (!g.sam && g.uzly.length > 1) {
+      const z = document.createElement("button");
+      z.className = "seryy";
+      z.style.marginTop = "8px";
+      z.textContent = zamerIdet ? "Проверяю…" : "Проверить скорость";
+      z.disabled = zamerIdet;
+      z.onclick = async () => {
+        zamerIdet = true; uzlySlepok = ""; obnovitUzly();
+        try {
+          const d = await api("zamerit", {uzly: g.uzly.map((u) => u.imya)});
+          for (const r of d.zamer) {
+            const u = g.uzly.find((x) => x.imya === r.imya);
+            if (u) { u.zaderzhka = r.zaderzhka; u.beda = r.beda; }
+          }
+          zamerIdet = false; uzlySlepok = "zamer"; risovatUzly(gruppy);
+          return;
+        } catch (e) { $("beda-svyazi").textContent = e.message; }
+        zamerIdet = false; uzlySlepok = ""; obnovitUzly();
+      };
+      koren2.appendChild(z);
+    }
+  }
+}
+
+async function obnovitUzly() {
+  let d;
+  try { d = await api("uzly"); } catch (e) { return; }
+  const slepok = JSON.stringify(d.gruppy);
+  if (slepok === uzlySlepok) return;
+  uzlySlepok = slepok;
+  risovatUzly(d.gruppy);
+}
+
 $("knopka-koda").onclick = async () => {
   const knopka = $("knopka-koda");
   knopka.disabled = true; $("beda-koda").textContent = "";
@@ -139,7 +211,8 @@ $("knopka-polnaya").onclick = async () => {
 $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
 
 obnovit();
-setInterval(obnovit, 2000);
+obnovitUzly();
+setInterval(() => { obnovit(); obnovitUzly(); }, 2000);
 </script>
 </body>
 </html>
