@@ -1,0 +1,37 @@
+name: sborka
+
+# Собирает Kelevra.exe. Windows для этого не нужен: в приложении нет C-кода.
+on:
+  push:
+    branches: [main, s-nulya]
+  workflow_dispatch:
+    inputs:
+      versiya:
+        description: "Версия для подписи сборки"
+        required: false
+        default: "0.0.0-rabota"
+
+jobs:
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: проверки
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test ./...
+      - name: сборка
+        run: |
+          V="${{ github.event.inputs.versiya || format('0.0.0-{0}', github.sha) }}"
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
+            -ldflags "-H=windowsgui -s -w -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$V" \
+            -o Kelevra.exe ./cmd/kelevra
+          ls -la Kelevra.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kelevra-windows-amd64
+          path: Kelevra.exe
