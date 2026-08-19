@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Kelevra</title>
+<style>
+  :root { --fon:#101216; --karta:#181b21; --tekst:#e8eaee; --tihiy:#8b93a1;
+          --akcent:#3ddc84; --beda:#ff6b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fon); color:var(--tekst); font:15px/1.45
+         "Segoe UI", system-ui, sans-serif; display:flex; flex-direction:column;
+         min-height:100vh; padding:22px; gap:16px; }
+  h1 { font-size:19px; margin:0; letter-spacing:.5px; }
+  .karta { background:var(--karta); border-radius:14px; padding:18px; }
+  .krug { width:132px; height:132px; border-radius:50%; margin:6px auto 14px;
+          display:flex; align-items:center; justify-content:center;
+          border:3px solid #2a2f39; color:var(--tihiy); font-size:14px;
+          transition:.25s; text-align:center; padding:10px; }
+  .krug.rabotaet { border-color:var(--akcent); color:var(--akcent);
+                   box-shadow:0 0 26px rgba(61,220,132,.22); }
+  .krug.podnimaem { border-color:#e8c15a; color:#e8c15a; }
+  .krug.slomalos { border-color:var(--beda); color:var(--beda); }
+  button { width:100%; padding:13px; border:0; border-radius:10px; font-size:15px;
+           font-weight:600; cursor:pointer; background:var(--akcent); color:#08130c; }
+  button.seryy { background:#2a2f39; color:var(--tekst); }
+  button:disabled { opacity:.5; cursor:default; }
+  input { width:100%; padding:12px; border-radius:10px; border:1px solid #2a2f39;
+          background:#0d0f13; color:var(--tekst); font-size:15px; letter-spacing:1px; }
+  .tihiy { color:var(--tihiy); font-size:13px; }
+  .beda { color:var(--beda); font-size:13px; white-space:pre-wrap; word-break:break-word; }
+  .ryad { display:flex; justify-content:space-between; margin-top:8px; font-size:13px; }
+  .rastyanut { flex:1; }
+</style>
+</head>
+<body>
+  <h1>Kelevra</h1>
+
+  <div class="karta" id="karta-koda" hidden>
+    <div class="tihiy" style="margin-bottom:10px">Введите код доступа</div>
+    <input id="pole-koda" placeholder="код" autocomplete="off" spellcheck="false">
+    <div style="height:10px"></div>
+    <button id="knopka-koda">Сохранить</button>
+    <div class="beda" id="beda-koda"></div>
+  </div>
+
+  <div class="karta rastyanut" id="karta-svyazi" hidden>
+    <div class="krug" id="krug">отключено</div>
+    <button id="knopka-svyazi">Подключить</button>
+    <div class="ryad"><span class="tihiy">Скачано</span><span id="vniz">—</span></div>
+    <div class="ryad"><span class="tihiy">Отдано</span><span id="vverh">—</span></div>
+    <div class="ryad"><span class="tihiy" id="podpis">&nbsp;</span><span class="tihiy" id="pid"></span></div>
+    <div class="beda" id="beda-svyazi"></div>
+    <div style="height:10px"></div>
+    <button class="seryy" id="knopka-smenit">Сменить код доступа</button>
+  </div>
+
+<script>
+const koren = location.pathname.replace(/index\.html$/, "");
+const $ = (id) => document.getElementById(id);
+let smenaKoda = false;
+
+async function api(put, telo) {
+  const o = await fetch(koren + "api/" + put, telo
+      ? {method:"POST", body: JSON.stringify(telo)} : undefined);
+  const d = await o.json().catch(() => ({}));
+  if (!o.ok) throw new Error(d.beda || "не вышло");
+  return d;
+}
+
+function bayty(n) {
+  if (!n) return "0 Б";
+  const e = ["Б","КБ","МБ","ГБ","ТБ"]; let i = 0;
+  while (n >= 1024 && i < e.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + " " + e[i];
+}
+
+const podpisi = {stoit:"отключено", podnimaem:"подключаюсь", rabotaet:"защищено", slomalos:"ядро упало"};
+
+async function obnovit() {
+  let s;
+  try { s = await api("sostoyanie"); } catch (e) { return; }
+  const nuzhenKod = !s.kod_est || smenaKoda;
+  $("karta-koda").hidden = !nuzhenKod;
+  $("karta-svyazi").hidden = nuzhenKod;
+
+  const k = $("krug");
+  k.className = "krug " + s.sost;
+  k.textContent = podpisi[s.sost] || s.sost;
+  $("knopka-svyazi").textContent = s.sost === "rabotaet" ? "Отключить" : "Подключить";
+  $("knopka-svyazi").disabled = s.sost === "podnimaem";
+  $("vniz").textContent = bayty(s.vniz_bayt);
+  $("vverh").textContent = bayty(s.vverh_bayt);
+  $("pid").textContent = s.pid ? "ядро " + s.pid : "";
+  $("podpis").textContent = s.imya || "";
+  let beda = s.beda || "";
+  if (s.kachaem_yadro) beda = "Скачиваю ядро, это разово и занимает пару минут…";
+  else if (!s.yadro_est) beda = "Ядро скачается само при первом подключении.";
+  $("beda-svyazi").textContent = beda;
+}
+
+$("knopka-koda").onclick = async () => {
+  const knopka = $("knopka-koda");
+  knopka.disabled = true; $("beda-koda").textContent = "";
+  try {
+    await api("kod", {kod: $("pole-koda").value});
+    smenaKoda = false; $("pole-koda").value = "";
+  } catch (e) { $("beda-koda").textContent = e.message; }
+  knopka.disabled = false; obnovit();
+};
+
+$("knopka-svyazi").onclick = async () => {
+  const knopka = $("knopka-svyazi");
+  const bylo = knopka.textContent;
+  knopka.disabled = true; knopka.textContent = "…"; $("beda-svyazi").textContent = "";
+  try { await api(bylo === "Отключить" ? "otklyuchit" : "podklyuchit"); }
+  catch (e) { $("beda-svyazi").textContent = e.message; }
+  knopka.disabled = false; obnovit();
+};
+
+$("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
+
+obnovit();
+setInterval(obnovit, 2000);
+</script>
+</body>
+</html>
