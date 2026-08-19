@@ -131,7 +131,70 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
 	m.HandleFunc(pref+"/api/polnaya_zashchita", s.polnayaZashchita)
+	m.HandleFunc(pref+"/api/uzly", s.uzly)
+	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
+	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
 	return m
+}
+
+// uzly — какие группы выходов есть у работающего ядра и что в них выбрано.
+// Пока ядро стоит, спрашивать некого: отдаём пустой список, а не ошибку.
+func (s *Sluzhba) uzly(w http.ResponseWriter, r *http.Request) {
+	if s.Yadro.Sost() != yadro.Rabotaet {
+		otdat(w, map[string]any{"gruppy": []any{}}, nil)
+		return
+	}
+	g, err := s.Yadro.Gruppy()
+	if err != nil {
+		otdat(w, nil, err)
+		return
+	}
+	otdat(w, map[string]any{"gruppy": g}, nil)
+}
+
+func (s *Sluzhba) vybrat(w http.ResponseWriter, r *http.Request) {
+	var vhod struct {
+		Gruppa string `json:"gruppa"`
+		Uzel   string `json:"uzel"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
+		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		return
+	}
+	otdat(w, map[string]any{"gotovo": true}, s.Yadro.Vybrat(vhod.Gruppa, vhod.Uzel))
+}
+
+// zamerit гоняет пробу через каждый узел группы. Ошибка одного узла — это его
+// ответ, а не отказ замера: узел, который не отвечает, человеку тоже надо видеть.
+func (s *Sluzhba) zamerit(w http.ResponseWriter, r *http.Request) {
+	var vhod struct {
+		Uzly []string `json:"uzly"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&vhod); err != nil {
+		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		return
+	}
+	if len(vhod.Uzly) > 32 {
+		vhod.Uzly = vhod.Uzly[:32]
+	}
+	ctx, otmena := context.WithTimeout(r.Context(), 20*time.Second)
+	defer otmena()
+	itog := make([]map[string]any, len(vhod.Uzly))
+	var gr sync.WaitGroup
+	for i, u := range vhod.Uzly {
+		gr.Add(1)
+		go func(i int, u string) {
+			defer gr.Done()
+			ms, err := s.Yadro.Zamerit(ctx, u)
+			z := map[string]any{"imya": u, "zaderzhka": ms}
+			if err != nil {
+				z["beda"] = err.Error()
+			}
+			itog[i] = z
+		}(i, u)
+	}
+	gr.Wait()
+	otdat(w, map[string]any{"zamer": itog}, nil)
 }
 
 type otvetSostoyaniya struct {

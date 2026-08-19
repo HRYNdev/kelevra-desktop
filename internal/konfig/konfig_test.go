@@ -171,3 +171,42 @@ func TestOtstuplenieBezSistemnogoProksi(t *testing.T) {
 		}
 	}
 }
+
+// Выбор узла человеком должен пережить перезапуск ядра, а хранит выбор
+// cache_file. Поля store_selected тут быть НЕ ДОЛЖНО: ядро 1.14 на нём падает.
+func TestPrigotovitVelitYadruPomnitVybor(t *testing.T) {
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(gotovyy, &d); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := d["experimental"].(map[string]any)["cache_file"].(map[string]any)
+	if c == nil || c["enabled"] != true {
+		t.Fatalf("ядру негде хранить выбор: cache_file = %+v", c)
+	}
+	if _, est := c["store_selected"]; est {
+		t.Errorf("store_selected вернулся в конфиг — ядро 1.14 с ним не стартует")
+	}
+	if c["path"] != "remnawave.db" {
+		t.Errorf("путь кэша из профиля потерян: %v", c["path"])
+	}
+}
+
+// Профиль без cache_file: хранилище должно появиться само, иначе выбор узла
+// сбросится при первом же перезапуске ядра.
+func TestPrigotovitDobavlyaetHranilishcheEsliEgoNet(t *testing.T) {
+	d := razobrat(t, profil(t))
+	delete(d["experimental"].(map[string]any), "cache_file")
+	syroy, _ := json.Marshal(d)
+	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := razobrat(t, gotovyy)["experimental"].(map[string]any)["cache_file"].(map[string]any)
+	if c == nil || c["enabled"] != true || c["path"] == "" {
+		t.Fatalf("хранилище не появилось: %+v", c)
+	}
+}
