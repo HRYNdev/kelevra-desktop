@@ -48,7 +48,11 @@
     <button id="knopka-svyazi">Подключить</button>
     <div class="ryad"><span class="tihiy">Скачано</span><span id="vniz">—</span></div>
     <div class="ryad"><span class="tihiy">Отдано</span><span id="vverh">—</span></div>
+    <div class="ryad"><span class="tihiy">Режим</span><span id="rezhim">—</span></div>
     <div class="ryad"><span class="tihiy" id="podpis">&nbsp;</span><span class="tihiy" id="pid"></span></div>
+    <div class="tihiy" id="zametka" style="margin-top:6px"></div>
+    <div style="height:8px"></div>
+    <button class="seryy" id="knopka-polnaya" hidden>Включить полную защиту</button>
     <div class="beda" id="beda-svyazi"></div>
     <div style="height:10px"></div>
     <button class="seryy" id="knopka-smenit">Сменить код доступа</button>
@@ -92,6 +96,9 @@ async function obnovit() {
   $("vverh").textContent = bayty(s.vverh_bayt);
   $("pid").textContent = s.pid ? "ядро " + s.pid : "";
   $("podpis").textContent = s.imya || "";
+  $("rezhim").textContent = s.rezhim === "tunnel" ? "весь трафик" : (s.rezhim ? "только прокси" : "—");
+  $("zametka").textContent = s.zametka || "";
+  $("knopka-polnaya").hidden = !s.mozhno_tun;
   let beda = s.beda || "";
   if (s.kachaem_yadro) beda = "Скачиваю ядро, это разово и занимает пару минут…";
   else if (!s.yadro_est) beda = "Ядро скачается само при первом подключении.";
@@ -115,6 +122,18 @@ $("knopka-svyazi").onclick = async () => {
   try { await api(bylo === "Отключить" ? "otklyuchit" : "podklyuchit"); }
   catch (e) { $("beda-svyazi").textContent = e.message; }
   knopka.disabled = false; obnovit();
+};
+
+// Полная защита = туннель, а он требует прав администратора: приложение
+// перезапускается через окно UAC, эта копия закрывается сама.
+$("knopka-polnaya").onclick = async () => {
+  const knopka = $("knopka-polnaya");
+  knopka.disabled = true; $("beda-svyazi").textContent = "";
+  try {
+    const d = await api("polnaya_zashchita", {});
+    if (d.perezapusk) $("beda-svyazi").textContent = "Перезапускаюсь с правами администратора…";
+  } catch (e) { $("beda-svyazi").textContent = e.message; }
+  knopka.disabled = false;
 };
 
 $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };

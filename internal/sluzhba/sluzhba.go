@@ -22,7 +22,9 @@ import (
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
+	"github.com/HRYNdev/kelevra-desktop/internal/prava"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
@@ -39,6 +41,7 @@ type Sluzhba struct {
 	svedeniya  *podpiska.Svedeniya
 	klyuch     string
 	kachaemBin bool // идёт скачивание ядра
+	kartina    konfig.Kartina
 }
 
 // Novaya собирает службу на настоящих путях приложения.
@@ -52,12 +55,58 @@ func Novaya() (*Sluzhba, error) {
 	if err := hranenie.Sohranit(n); err != nil { // закрепляем device_id при первом запуске
 		return nil, err
 	}
-	return &Sluzhba{
+	s := &Sluzhba{
 		Nastroyki: n,
 		Yadro:     &yadro.Yadro{Bin: hranenie.PutYadra(), Papka: hranenie.PapkaYadra()},
 		Podpiska:  &podpiska.Klient{DeviceID: n.DeviceID, Host: os.Getenv("KELEVRA_PODPISKA"), Shema: os.Getenv("KELEVRA_SHEMA")},
 		klyuch:    sluchaynyy(),
-	}, nil
+	}
+	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
+	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
+	_ = s.PerestroitKonfig()
+	return s, nil
+}
+
+// PerestroitKonfig готовит рабочий конфиг ядра из профиля, который прислал
+// сервер: убирает поля, работающие только на телефоне, и выбирает режим по
+// правам. Без этого ядро на компьютере не стартует вообще.
+func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(false) }
+
+func (s *Sluzhba) perestroit(bezSistemnogoProksi bool) error {
+	syroy, err := os.ReadFile(hranenie.PutProfilya())
+	if err != nil {
+		return err
+	}
+	gotovyy, k, err := konfig.Prigotovit(syroy, konfig.Vybor{
+		Prava:               prava.Est(),
+		BezSistemnogoProksi: bezSistemnogoProksi,
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.Yadro.ZapisatKonfig(gotovyy); err != nil {
+		return err
+	}
+	s.Yadro.Api, s.Yadro.Sekret = k.ClashAdres, k.ClashSekret
+	s.zamok.Lock()
+	s.kartina = k
+	s.zamok.Unlock()
+	return nil
+}
+
+// SohranitProfil кладёт присланный профиль на диск и пересобирает конфиг ядра.
+func (s *Sluzhba) SohranitProfil(syroy []byte) error {
+	if err := os.MkdirAll(hranenie.Papka(), 0o755); err != nil {
+		return err
+	}
+	vremenny := hranenie.PutProfilya() + ".tmp"
+	if err := os.WriteFile(vremenny, syroy, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(vremenny, hranenie.PutProfilya()); err != nil {
+		return err
+	}
+	return s.PerestroitKonfig()
 }
 
 // Adres — на чём слушать: только петля, наружу приложение не смотрит.
@@ -81,6 +130,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/kod", s.kod)
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
+	m.HandleFunc(pref+"/api/polnaya_zashchita", s.polnayaZashchita)
 	return m
 }
 
@@ -95,6 +145,12 @@ type otvetSostoyaniya struct {
 	Imya       string `json:"imya,omitempty"`
 	DoUnix     int64  `json:"do_unix,omitempty"`
 	PID        string `json:"pid,omitempty"`
+	Rezhim     string `json:"rezhim,omitempty"`     // tunnel | proksi
+	Zametka    string `json:"zametka,omitempty"`    // почему режим такой
+	MozhnoTun  bool   `json:"mozhno_tun,omitempty"` // туннель в профиле есть, а прав нет
+	Prava      bool   `json:"prava"`                // запущены ли мы администратором
+	// RuchnoyProksi — система отказалась настроить прокси сама, адрес придётся вписать руками.
+	RuchnoyProksi bool `json:"ruchnoy_proksi,omitempty"`
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +169,12 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	if s.svedeniya != nil {
 		o.Imya, o.DoUnix = s.svedeniya.Imya, s.svedeniya.Do
 	}
+	k := s.kartina
 	s.zamok.Unlock()
+	o.Rezhim, o.Zametka = string(k.Rezhim), k.Zametka
+	o.Prava = prava.Est()
+	o.MozhnoTun = k.EstTunnel && !o.Prava
+	o.RuchnoyProksi = k.RuchnoyProksi
 	otdat(w, o, nil)
 }
 
@@ -130,12 +191,12 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 	kod := strings.TrimSpace(vhod.Kod)
 	ctx, otmena := context.WithTimeout(r.Context(), 30*time.Second)
 	defer otmena()
-	konfig, err := s.Podpiska.Konfig(ctx, kod)
+	profil, err := s.Podpiska.Konfig(ctx, kod)
 	if err != nil {
 		otdat(w, nil, err)
 		return
 	}
-	if err := s.Yadro.ZapisatKonfig(konfig); err != nil {
+	if err := s.SohranitProfil(profil); err != nil {
 		otdat(w, nil, err)
 		return
 	}
@@ -175,9 +236,27 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ctx, otmena := context.WithTimeout(context.Background(), 40*time.Second)
+	// Права могли появиться (человек перезапустил приложение администратором) —
+	// пересобираем конфиг перед стартом, иначе режим останется вчерашним.
+	if err := s.PerestroitKonfig(); err != nil {
+		otdat(w, nil, fmt.Errorf("не подготовил конфиг: %w", err))
+		return
+	}
+	ctx, otmena := context.WithTimeout(context.Background(), 70*time.Second)
 	defer otmena()
-	otdat(w, map[string]any{"gotovo": true}, s.Yadro.Zapustit(ctx))
+	err := s.Yadro.Zapustit(ctx)
+	// Отказ системы настроить прокси ядро считает поводом упасть. Человеку от
+	// этого одна беда: связи нет вообще. Поднимаем ядро без просьбы к системе
+	// и говорим адрес прокси прямо в окне (проверено живьём: ядро падает
+	// строкой «initialize system proxy»).
+	if err != nil && strings.Contains(err.Error(), "initialize system proxy") {
+		if e := s.perestroit(true); e == nil {
+			ctx2, otmena2 := context.WithTimeout(context.Background(), 70*time.Second)
+			defer otmena2()
+			err = s.Yadro.Zapustit(ctx2)
+		}
+	}
+	otdat(w, map[string]any{"gotovo": true}, err)
 }
 
 func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
@@ -204,9 +283,29 @@ func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 			if err != nil {
 				continue // сеть могла лечь; работаем на прежнем конфиге
 			}
-			_ = s.Yadro.ZapisatKonfig(k)
+			_ = s.SohranitProfil(k)
 		}
 	}
+}
+
+// polnayaZashchita просит у Windows права администратора: без них ядро не
+// поднимет туннель. При согласии человека приложение перезапускается уже с
+// правами, а эта копия уходит — две копии на машине не нужны.
+func (s *Sluzhba) polnayaZashchita(w http.ResponseWriter, r *http.Request) {
+	if prava.Est() {
+		otdat(w, map[string]any{"gotovo": true}, nil)
+		return
+	}
+	if err := prava.Poprosit(); err != nil {
+		otdat(w, nil, err)
+		return
+	}
+	otdat(w, map[string]any{"gotovo": true, "perezapusk": true}, nil)
+	go func() {
+		time.Sleep(300 * time.Millisecond) // дать ответу уйти в окно
+		_ = s.Yadro.Ostanovit()            // ядро старой копии гасим сами
+		os.Exit(0)
+	}()
 }
 
 func otdat(w http.ResponseWriter, telo any, err error) {
