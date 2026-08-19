@@ -18,8 +18,10 @@ import (
 	"time"
 )
 
-// ApiAdres — Clash API ядра. Тот же порт, что в конфиге у мобильного клиента.
-const ApiAdres = "127.0.0.1:20123"
+// ApiAdres — куда стучаться, если конфиг про Clash API молчит. Настоящий адрес
+// берётся из конфига: зашитый намертво не угадает чужой порт, и приложение
+// решит, что живое ядро мертво (профиль с сервера поднимает API на 9090).
+const ApiAdres = "127.0.0.1:9090"
 
 // Sostoyanie — что приложение показывает пользователю.
 type Sostoyanie string
@@ -36,6 +38,7 @@ type Yadro struct {
 	Bin    string // путь к sing-box(.exe)
 	Papka  string // рабочая папка ядра (в ней лежит config.json)
 	Api    string // адрес Clash API, пусто = ApiAdres
+	Sekret string // пароль Clash API, если конфиг его задаёт
 	Klient *http.Client
 
 	zamok   sync.Mutex
@@ -129,7 +132,7 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 	}()
 
 	// Ждём API: раньше него ядро ещё ничего не проксирует.
-	srok, otmena := context.WithTimeout(ctx, 15*time.Second)
+	srok, otmena := context.WithTimeout(ctx, 45*time.Second)
 	defer otmena()
 	for {
 		select {
@@ -137,11 +140,13 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 			return fmt.Errorf("ядро упало при старте: %s", hvostLoga(filepath.Join(y.Papka, "yadro.log")))
 		case <-srok.Done():
 			_ = y.Ostanovit()
-			return fmt.Errorf("ядро не ответило за 15 секунд: %s", hvostLoga(filepath.Join(y.Papka, "yadro.log")))
+			return fmt.Errorf("ядро не ответило за 45 секунд: %s", hvostLoga(filepath.Join(y.Papka, "yadro.log")))
 		case <-time.After(300 * time.Millisecond):
 			if y.Zhivo() {
 				y.zamok.Lock()
-				y.sost = Rabotaet
+				// Ядро поднялось: беда прошлой попытки больше не беда,
+				// иначе окно показывает красную строку поверх работающей связи.
+				y.sost, y.poslLog = Rabotaet, ""
 				y.zamok.Unlock()
 				return nil
 			}
@@ -169,13 +174,21 @@ func (y *Yadro) Ostanovit() error {
 	return nil
 }
 
+// zapros — обращение к Clash API ядра с паролем, если он задан конфигом.
+func (y *Yadro) zapros(put string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, "http://"+y.api()+put, nil)
+	if err != nil {
+		return nil, err
+	}
+	if y.Sekret != "" {
+		req.Header.Set("Authorization", "Bearer "+y.Sekret)
+	}
+	return y.klient().Do(req)
+}
+
 // Zhivo — отвечает ли Clash API ядра.
 func (y *Yadro) Zhivo() bool {
-	req, err := http.NewRequest(http.MethodGet, "http://"+y.api()+"/version", nil)
-	if err != nil {
-		return false
-	}
-	otvet, err := y.klient().Do(req)
+	otvet, err := y.zapros("/version")
 	if err != nil {
 		return false
 	}
@@ -208,7 +221,7 @@ type Trafik struct {
 
 // Trafik снимает счётчики с Clash API ядра.
 func (y *Yadro) Trafik() (*Trafik, error) {
-	otvet, err := y.klient().Get("http://" + y.api() + "/connections")
+	otvet, err := y.zapros("/connections")
 	if err != nil {
 		return nil, err
 	}
