@@ -1,37 +1,35 @@
-## Preview
+# Kelevra для компьютера
 
-Take a look at the live version here: 👉 <a href="https://gui-for-cores.github.io/guide/gfs/" target="_blank">Live Demo</a>
+Приложение Kelevra под Windows: ввёл код доступа — нажал «Подключить».
 
-<div align="center">
-  <img src="docs/imgs/light.png">
-</div>
+Один файл `Kelevra.exe`, ставить ничего не нужно. Ядро sing-box приложение
+скачивает себе само при первом подключении (из релизов этого репозитория,
+теги `core-*`). Всё своё оно держит в `%LOCALAPPDATA%\Kelevra`.
 
-## Document
+## Что уже работает
 
-[Community](https://gui-for-cores.github.io/guide/gfs/community)
+- код доступа: конфиг забирается с сервера подписки и проверяется до сохранения;
+- кнопка «Подключить»: приложение поднимает ядро, ждёт его и показывает состояние;
+- трафик и срок подписки в окне;
+- профиль перекачивается раз в час, как в мобильном клиенте;
+- ядро скачивается и распаковывается самим приложением.
 
-## Build
+## Чего ещё нет
 
-1、Build Environment
+- значка в системном трее и автозапуска с Windows;
+- переключения узлов и выбора режима (сейчас работает тот конфиг, что прислал сервер);
+- права на TUN: без прав администратора ядро поднимет только прокси-режим;
+- подписи исполняемого файла.
 
-- Node.js [link](https://nodejs.org/en)
+## Сборка
 
-- pnpm ：`npm i -g pnpm`
-
-- Go [link](https://go.dev/)
-
-- Wails [link](https://wails.io/) ：`go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-
-2、Pull and Build
-
-```bash
-git clone https://github.com/GUI-for-Cores/GUI.for.SingBox.git
-
-cd GUI.for.SingBox/frontend
-
-pnpm install --frozen-lockfile && pnpm build
-
-cd ..
-
-wails build
 ```
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-H=windowsgui -s -w" -o Kelevra.exe ./cmd/kelevra
+```
+
+Windows для сборки не нужен: в приложении нет ни одной строки на C.
+На Linux тот же код собирается и запускается без окна — интерфейс тогда
+открывается в браузере по адресу, который приложение печатает при старте.
+Так проверяется вся работа приложения там, где Windows нет.
+
+Устройство и причины решений — в [ARHITEKTURA.md](ARHITEKTURA.md).
