@@ -138,7 +138,27 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/uzly", s.uzly)
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
+	m.HandleFunc(pref+"/api/zhurnal", s.zhurnal)
 	return m
+}
+
+// zhurnal отдаёт хвост журнала прямо в окно.
+//
+// Иначе единственный способ прислать причину — идти в %LOCALAPPDATA% через
+// проводник, а человек, у которого «не работает», этого делать не будет.
+// Отдаём текстом, чтобы его можно было выделить и скопировать целиком.
+func (s *Sluzhba) zhurnal(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	b, err := os.ReadFile(hranenie.PutZhurnala())
+	if err != nil {
+		fmt.Fprintf(w, "журнал не читается: %v", err)
+		return
+	}
+	const predel = 40 * 1024 // больше в окно всё равно не влезет
+	if len(b) > predel {
+		b = b[len(b)-predel:]
+	}
+	_, _ = w.Write(b)
 }
 
 // uzly — какие группы выходов есть у работающего ядра и что в них выбрано.
