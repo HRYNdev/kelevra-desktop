@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
 
 // predelZhurnala — при каком размере журнал уезжает в «прошлый». Приложение
@@ -38,7 +40,7 @@ func otkrytFayl(papka string) (string, *os.File) {
 	if err := os.MkdirAll(papka, 0o755); err != nil {
 		return "", nil
 	}
-	put := filepath.Join(papka, "kelevra.log")
+	put := filepath.Join(papka, filepath.Base(hranenie.PutZhurnala()))
 	if st, err := os.Stat(put); err == nil && st.Size() > predelZhurnala {
 		_ = os.Rename(put, put+".proshlyy")
 	}

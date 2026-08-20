@@ -38,6 +38,10 @@ func PapkaYadra() string { return filepath.Join(Papka(), "yadro") }
 // PutKonfiga — рабочий конфиг ядра, который пишет приложение.
 func PutKonfiga() string { return filepath.Join(PapkaYadra(), "config.json") }
 
+// PutZhurnala — журнал приложения. Его путь знают двое: тот, кто в журнал
+// пишет, и окно, которое даёт человеку этот журнал прислать.
+func PutZhurnala() string { return filepath.Join(Papka(), "kelevra.log") }
+
 // PutProfilya — профиль, как его прислал сервер подписки, без наших правок.
 // Хранится отдельно от рабочего конфига: правки зависят от прав, а права
 // меняются между запусками, поэтому исходник нужен целым.
