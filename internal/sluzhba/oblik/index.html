@@ -220,12 +220,20 @@
     margin-top:8px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
     font-size:11px; line-height:1.45; color:var(--tihiy); word-break:break-word;
   }
+  /* Строка ключа стоит в настройках между двумя кнопками, и с рамкой и фоном
+     карточки она читалась как третья кнопка, которая почему-то не нажимается.
+     Это не кнопка и не карточка — это подпись, поэтому без рамки и фона.
+     Рамку возвращаем только когда срок на исходе: там строка обязана ловить
+     глаз, и стоит она наверху, среди карточек. */
   .podpiska {
-    display:flex; align-items:center; gap:8px; margin-top:12px; padding:11px 13px;
-    border:1px solid var(--gran); border-radius:12px; background:var(--karta);
+    display:flex; align-items:center; gap:8px; margin-top:12px; padding:2px 13px;
+    border:1px solid transparent; border-radius:12px;
     font-size:12.5px; color:var(--tihiy);
   }
-  .podpiska .srok { margin-left:auto; color:var(--tekst); }
+  .podpiska .srok { margin-left:auto; color:var(--tihiy); }
+  .podpiska.istekaet {
+    padding:11px 13px; border-color:rgba(240,180,41,.3); background:rgba(240,180,41,.07);
+  }
   .podpiska.istekaet .srok { color:var(--zhdem); }
 
   #zhurnal {
