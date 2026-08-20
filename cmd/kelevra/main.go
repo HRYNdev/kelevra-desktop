@@ -16,6 +16,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
+	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
 	"github.com/HRYNdev/kelevra-desktop/internal/sluzhba"
 )
 
@@ -78,6 +79,10 @@ func main() {
 		pokazatOkno(url)
 	}
 	_ = s.Yadro.Ostanovit()
+	// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
+	// Без этой строки после закрытия приложения у человека перестают
+	// открываться сайты (сказано хозяином 20.08).
+	proksi.Snyat()
 }
 
 // zhdatSignal держит служебный режим живым до Ctrl+C или остановки извне.
