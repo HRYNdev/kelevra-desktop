@@ -192,6 +192,17 @@
   .beda.vidno { display:block; }
   .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
   .beda.vnimanie { background:rgba(240,180,41,.09); border-color:rgba(240,180,41,.3); color:#f3cf86; }
+  .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:5px; }
+  .beda-sovet { color:#e8b9b9; }
+  .beda-podrobnosti {
+    display:block; margin-top:9px; padding:0; border:0; background:none;
+    color:var(--tihiy); font:inherit; font-size:11.5px; text-decoration:underline;
+    text-underline-offset:2px; cursor:pointer;
+  }
+  .beda-syroe {
+    margin-top:8px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+    font-size:11px; line-height:1.45; color:var(--tihiy); word-break:break-word;
+  }
   .podpiska {
     display:flex; align-items:center; gap:8px; margin-top:12px; padding:11px 13px;
     border:1px solid var(--gran); border-radius:12px; background:var(--karta);
@@ -336,7 +347,7 @@ function bayty(n) {
   return n.toFixed(i ? 1 : 0) + " " + e[i];
 }
 
-const podpisi = {stoit:"отключено", podnimaem:"подключаюсь", rabotaet:"защищено", slomalos:"ядро упало"};
+const podpisi = {stoit:"отключено", podnimaem:"подключаюсь", rabotaet:"защищено", slomalos:"не подключилось"};
 
 // Вторая строка карточки состояния: человеку важно не слово «stoit», а что
 // именно сейчас с его трафиком и через какой узел он идёт.
@@ -345,9 +356,85 @@ function podzagolovok(s) {
     const rezhim = s.rezhim === "tunnel" ? "весь трафик" : "трафик браузеров";
     return tekushchiyUzel ? rezhim + " · " + tekushchiyUzel : rezhim;
   }
-  if (s.sost === "podnimaem") return "поднимаю ядро, пара секунд";
-  if (s.sost === "slomalos") return "связь разорвана, журнал ниже";
+  if (s.sost === "podnimaem") return "подключаюсь, пара секунд";
+  if (s.sost === "slomalos") return "связь не поднялась, что делать — ниже";
   return "трафик идёт напрямую";
+}
+
+// Ядро говорит на языке sing-box, а окно открывает не программист. До сих пор
+// человек видел «FATAL[0000] initialize inbound/tun[0]: configure tun
+// interface: permission denied» и не знал ни что случилось, ни что нажать.
+// Переводим известные приметы в пару «что случилось» + «что сделать»; сырой
+// текст никуда не девается — он под «подробностями», чтобы прислать его мне.
+// Порядок важен: точная примета должна победить общую (таймаут — последний,
+// потому что «не ответило за 45 секунд» приписано почти к любой беде старта).
+const PRIMETY = [
+  {kogda: /permission denied|operation not permitted|access is denied|отказано в доступе/i,
+   chto: "Windows не дал создать сетевой адаптер",
+   delat: "Закрой Kelevra и запусти её правой кнопкой мыши → «Запуск от имени администратора». " +
+          "Не хочется каждый раз — оставайся в режиме «только браузеры», ему особых прав не нужно."},
+  {kogda: /address already in use|only one usage of each socket address|bind: /i,
+   chto: "Нужный порт занят другой программой",
+   delat: "Обычно это второй VPN-клиент. Закрой его и нажми «Подключить» ещё раз."},
+  {kogda: /\b40[13]\b|unauthorized|forbidden|authentication failed|auth failed/i,
+   chto: "Код доступа не подошёл",
+   delat: "Нажми «Сменить код доступа» и вставь свежий код. Если его нет — напиши мне."},
+  {kogda: /no such host|dial tcp|i\/o timeout|connection refused|network is unreachable|context deadline exceeded/i,
+   chto: "Не достучались до сервера",
+   delat: "Проверь, открывается ли любой сайт. Если интернет есть — выбери в списке другой узел."},
+  {kogda: /ядро не найдено|no such file or directory|cannot find the file/i,
+   chto: "На месте нет рабочего файла",
+   delat: "Нажми «Подключить» ещё раз — Kelevra скачает его сама."},
+  {kogda: /сначала введите код/i,
+   chto: "Код доступа ещё не введён",
+   delat: "Нажми «Сменить код доступа» и вставь код из письма."},
+  {kogda: /decode config|parse config|unmarshal|нет конфига|invalid config/i,
+   chto: "Настройки под твоим кодом доступа не читаются",
+   delat: "Нажми «Сменить код доступа» и вставь код заново. Не поможет — открой журнал и пришли его мне."},
+  {kogda: /не ответило за \d+ секунд/i,
+   chto: "Подключение зависло",
+   delat: "Нажми «Подключить» ещё раз. Если повторится — открой журнал и пришли его мне."},
+  {kogda: /не запустилось|упало при старте/i,
+   chto: "Kelevra не смогла запуститься",
+   delat: "Нажми «Подключить» ещё раз. Если повторится — открой журнал и пришли его мне."},
+];
+
+function perevestiBedu(syroe) {
+  for (const p of PRIMETY) if (p.kogda.test(syroe)) return p;
+  return {chto: "Связь не поднялась",
+          delat: "Нажми «Подключить» ещё раз. Если повторяется — открой журнал и пришли его мне."};
+}
+
+// Перерисовываем только когда текст беды ДЕЙСТВИТЕЛЬНО сменился: обновление
+// идёт по таймеру, а раскрытые «подробности» не должны схлопываться каждый тик.
+let bedaNaEkrane = null;
+
+function pokazatBeduSvyazi(syroe, spokoyno) {
+  const klyuch = (syroe || "") + "|" + (spokoyno ? 1 : 0);
+  if (klyuch === bedaNaEkrane) return;
+  bedaNaEkrane = klyuch;
+  const uzel = $("beda-svyazi");
+  uzel.textContent = "";
+  uzel.classList.toggle("vidno", !!syroe);
+  uzel.classList.toggle("spokoyno", !!spokoyno);
+  if (!syroe) return;
+  if (spokoyno) { uzel.textContent = syroe; return; }   // это не беда, а уведомление
+
+  const p = perevestiBedu(syroe);
+  const zag = document.createElement("div");
+  zag.className = "beda-zagolovok"; zag.textContent = p.chto;
+  const sovet = document.createElement("div");
+  sovet.className = "beda-sovet"; sovet.textContent = p.delat;
+  const syr = document.createElement("div");
+  syr.className = "beda-syroe"; syr.textContent = syroe; syr.hidden = true;
+  const knopka = document.createElement("button");
+  knopka.type = "button"; knopka.className = "beda-podrobnosti";
+  knopka.textContent = "подробности";
+  knopka.addEventListener("click", () => {
+    syr.hidden = !syr.hidden;
+    knopka.textContent = syr.hidden ? "подробности" : "скрыть подробности";
+  });
+  uzel.append(zag, sovet, knopka, syr);
 }
 
 function pokazatBedu(uzel, tekst, spokoyno) {
@@ -428,9 +515,9 @@ async function obnovit() {
   }
 
   let beda = s.beda || "", spokoyno = false;
-  if (s.kachaem_yadro) { beda = "Скачиваю ядро — это разово и занимает пару минут."; spokoyno = true; }
-  else if (!s.yadro_est) { beda = "Ядро скачается само при первом подключении."; spokoyno = true; }
-  pokazatBedu($("beda-svyazi"), beda, spokoyno);
+  if (s.kachaem_yadro) { beda = "Докачиваю рабочий файл — это разово, пара минут."; spokoyno = true; }
+  else if (!s.yadro_est) { beda = "Всё нужное докачается само при первом подключении."; spokoyno = true; }
+  pokazatBeduSvyazi(beda, spokoyno);
 }
 
 // Выбор узла. Список перерисовывается только когда он ДЕЙСТВИТЕЛЬНО изменился:
