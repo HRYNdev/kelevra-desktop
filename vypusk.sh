@@ -55,6 +55,30 @@ if ! grep -qa "$VERSIYA" "$VYHOD/Kelevra.exe"; then
 fi
 echo "   $(stat -c%s "$VYHOD/Kelevra.exe") байт, версия внутри найдена"
 
+# Стенды собирают СВОИ бинарники, без -s -w. Значит ровно та сборка, что
+# уезжает человеку, не гонялась нигде: 20.08 она оказалась на 4 МБ легче
+# релизной и разница объяснилась только замером. Гоняем именно её.
+if [ "${BEZ_WINE:-0}" = "1" ]; then
+  echo "⚠ выпускаемый exe НЕ запущен: BEZ_WINE=1"
+else
+  echo "── старт выпускаемого exe под wine"
+  export WINEPREFIX=${WINEPREFIX:-$KOREN/.wine} WINEDEBUG=${WINEDEBUG:--all}
+  LOG=$(mktemp)
+  KELEVRA_BEZ_OKNA=1 timeout 40 "${WINE:-/usr/lib/wine/wine64}" \
+    "$VYHOD/Kelevra.exe" --sluzhba >"$LOG" 2>&1 &
+  PID=$!
+  for _ in $(seq 1 25); do grep -q "служба слушает" "$LOG" && break; sleep 1; done
+  kill "$PID" 2>/dev/null || true
+  if ! grep -q "запуск Kelevra $VERSIYA" "$LOG"; then
+    echo "✗ выпускаемый exe не назвался версией $VERSIYA:"; head -6 "$LOG"; exit 1
+  fi
+  if ! grep -q "служба слушает" "$LOG"; then
+    echo "✗ выпускаемый exe не поднял службу:"; head -12 "$LOG"; exit 1
+  fi
+  echo "   стартовал, назвался $VERSIYA, служба поднялась"
+  rm -f "$LOG"
+fi
+
 api() { curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
              -H "Accept: application/vnd.github+json" "$@"; }
 
