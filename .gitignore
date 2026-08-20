@@ -1,5 +1,6 @@
 /Kelevra.exe
 /kelevra
 .stend_win/
+.stend/
 .wine/
 .wineprefix/
