@@ -43,6 +43,11 @@ type Yadro struct {
 	Sekret string // пароль Clash API, если конфиг его задаёт
 	Klient *http.Client
 
+	// SistemnyProksi — конфиг просил ядро прописать себя системным прокси
+	// (`set_system_proxy`). Знать это должны мы: на остановке систему за
+	// ядром прибираем сами (см. Ostanovit).
+	SistemnyProksi bool
+
 	zamok   sync.Mutex
 	process *exec.Cmd
 	umer    chan struct{}
@@ -182,6 +187,13 @@ func (y *Yadro) Ostanovit() error {
 	case <-umer:
 	case <-time.After(5 * time.Second):
 		_ = cmd.Process.Kill()
+	}
+	// На Windows zavershit — это TerminateProcess: у ядра нет шанса на свою
+	// очистку, и если оно прописывало себя системным прокси, запись остаётся
+	// в реестре без живого процесса за ней (сайты перестают открываться).
+	// Снимаем сами, а не полагаемся на то, что ядро успело.
+	if y.SistemnyProksi {
+		sbrositSistemnyProksi()
 	}
 	return nil
 }
