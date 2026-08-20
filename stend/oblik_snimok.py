@@ -8,7 +8,7 @@
 
     python3 stend/oblik_snimok.py [папка-для-png]
 """
-import http.server, json, os, socketserver, sys, threading
+import http.server, json, os, re, socketserver, sys, threading, time
 from pathlib import Path
 
 KOREN = Path(__file__).resolve().parent.parent
@@ -26,6 +26,54 @@ UZLY = {"gruppy": [{
         {"imya": "Финляндия 1", "beda": "нет ответа"},
     ]}]}
 
+def zametki_iz_go():
+    """Заметки окна — ИЗ konfig.go, а не выдуманные тут.
+
+    20.08 стенд четырьмя сценами показывал «Ядро на месте, всё готово.» —
+    строки, которой в продукте нет вообще, а настоящие («прокси-режим: в
+    профиле нет туннеля») уезжали человеку, ни разу не попав под гейт. Стенд,
+    сам сочиняющий вход, доказывает согласие себя с собой и больше ничего.
+    """
+    ishodnik = (KOREN / "internal" / "konfig" / "konfig.go").read_text(encoding="utf-8")
+    nashli, imya, kuski, zhdem_prodolzhenie = {}, None, [], False
+    for stroka in ishodnik.splitlines():
+        golaya = stroka.strip()
+        nachalo = re.match(r"^(Zametka\w+)\s*=\s*(.*)$", golaya)
+        if nachalo:
+            if imya:
+                nashli[imya] = "".join(kuski)
+            imya, kuski = nachalo.group(1), []
+            golaya = nachalo.group(2)
+        elif not zhdem_prodolzhenie:
+            continue
+        if imya:
+            kuski += [k.replace('\\"', '"') for k in re.findall(r'"((?:[^"\\]|\\.)*)"', golaya)]
+            zhdem_prodolzhenie = golaya.rstrip().endswith("+")
+            if not zhdem_prodolzhenie:
+                nashli[imya] = "".join(kuski)
+                imya, kuski = None, []
+    if len(nashli) < 4:
+        raise SystemExit(f"🔴 в konfig.go нашлось лишь {len(nashli)} заметок: "
+                         "стенд разучился их читать, гейт жаргона стал пустым")
+    return nashli
+
+
+ZAMETKI = zametki_iz_go()
+
+# Слова, которых человек в окне видеть не должен: он не программист, и из
+# «прокси-режим: в профиле нет туннеля» не следует ни что случилось, ни что
+# нажать. Сырой лог живёт под «подробности» и в журнале — эти два места гейт
+# не смотрит, они для меня. Гейт держит КЛАСС: новая жаргонная строка где
+# угодно в окне покраснеет сама, без моей памятливости.
+ZHARGON = ["ядро", "ядра", "ядру", "ядром", "туннел", "прокси-режим",
+           "профил", "inbound", "sing-box", "fatal", "permission denied",
+           "тэг", "конфиг"]
+
+# «Срок на исходе» окно считает от СЕЙЧАС (dney <= 7), поэтому дату для этой
+# сцены берём живую: жёстко вписанная 15.09 через месяц перестала бы быть
+# исходом, и жёлтую подсветку снова не видел бы никто.
+DO_SKORO = int(time.time()) + 3 * 86400
+
 BAZA = {"versiya": "0.5.3", "kod_est": True, "sost": "stoit",
         "vniz_bayt": 0, "vverh_bayt": 0, "pid": 0,
         "imya": "хозяин", "do_unix": 1789430400, "rezhim": "", "zametka": "",
@@ -34,15 +82,20 @@ BAZA = {"versiya": "0.5.3", "kod_est": True, "sost": "stoit",
 
 SCENY = {
     "1_kod": dict(BAZA, kod_est=False),
-    "2_otklyucheno": dict(BAZA, zametka="Ядро на месте, всё готово."),
+    "2_otklyucheno": dict(BAZA),
     "3_podnimaem": dict(BAZA, sost="podnimaem", imya="Нидерланды 2"),
     "4_rabotaet": dict(BAZA, sost="rabotaet", pid="8124",
                        rezhim="proksi", vniz_bayt=418_365_440, vverh_bayt=21_495_808,
-                       mozhno_tun=True, zametka="прокси-режим: в профиле нет туннеля"),
+                       mozhno_tun=True, zametka=ZAMETKI["ZametkaBezPrav"]),
+    "14_polnaya_zashchita": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                                 vniz_bayt=1_073_741_824, vverh_bayt=52_428_800,
+                                 zametka=ZAMETKI["ZametkaVes"]),
+    "15_tolko_brauzery": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
+                              vniz_bayt=12_582_912, vverh_bayt=1_048_576,
+                              zametka=ZAMETKI["ZametkaBezTunnelya"]),
     "7_ruchnoy_proksi": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
                              vniz_bayt=5_242_880, vverh_bayt=524_288, ruchnoy_proksi=True,
-                             zametka="система не дала настроить прокси сама: "
-                                     "пропишите в её настройках 127.0.0.1:2412"),
+                             zametka=ZAMETKI["ZametkaRuchnoyProksi"] % "127.0.0.1:2412"),
     "5_slomalos": dict(BAZA, sost="slomalos",
                        beda="ядро не ответило за 45 секунд: FATAL[0000] start service: "
                             "initialize inbound/tun[0]: configure tun interface: "
@@ -64,13 +117,20 @@ SCENY = {
     # avtozapusk_podderzhivaetsya. Стенд гоняется на Linux, поэтому без этих
     # сцен галочку не видит НИКТО — ни я, ни снимок: 20.08 она уехала в
     # релиз, ни разу не показавшись глазам. Поле подаём руками.
-    "8_avtozapusk_vykl": dict(BAZA, zametka="Ядро на месте, всё готово.",
-                              avtozapusk_podderzhivaetsya=True, avtozapusk_vklyuchen=False),
-    "9_avtozapusk_vkl": dict(BAZA, zametka="Ядро на месте, всё готово.",
-                             avtozapusk_podderzhivaetsya=True, avtozapusk_vklyuchen=True),
-    "10_avtozapusk_ustarela": dict(BAZA, zametka="Ядро на месте, всё готово.",
-                                   avtozapusk_podderzhivaetsya=True, avtozapusk_vklyuchen=True,
-                                   avtozapusk_ustarela=True),
+    "8_avtozapusk_vykl": dict(BAZA, avtozapusk_podderzhivaetsya=True,
+                              avtozapusk_vklyuchen=False),
+    "9_avtozapusk_vkl": dict(BAZA, avtozapusk_podderzhivaetsya=True,
+                             avtozapusk_vklyuchen=True),
+    "10_avtozapusk_ustarela": dict(BAZA, avtozapusk_podderzhivaetsya=True,
+                                   avtozapusk_vklyuchen=True, avtozapusk_ustarela=True),
+    # Крайние значения: имя ключа с сервера длиной не ко мне, и срок на исходе.
+    # Кто-то другой с длинным именем — уже не хозяин, и окно обязано остаться
+    # читаемым: 420 px не растянешь.
+    "16_dlinnoe_imya": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                            imya="Константин Александрович (семейный)",
+                            zametka=ZAMETKI["ZametkaVes"]),
+    "17_srok_na_ishode": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                              do_unix=DO_SKORO, zametka=ZAMETKI["ZametkaVes"]),
 }
 
 sostoyanie = {"tek": SCENY["2_otklyucheno"]}
@@ -251,6 +311,99 @@ def proverit_okno_bedy(str_, imya_sceny, zhdem):
     return bedy
 
 
+VIDIMYY_TEKST_JS = """() => {
+  // Сырое — под «подробности» и в журнале: эти два места человек открывает
+  // сам, зная, что там машинные буквы. Всё остальное на экране — его язык.
+  const skryt = [...document.querySelectorAll("#zhurnal, .beda-syroe")];
+  const bylo = skryt.map((e) => e.style.display);
+  skryt.forEach((e) => { e.style.display = "none"; });
+  const t = document.body.innerText;
+  skryt.forEach((e, i) => { e.style.display = bylo[i]; });
+  return t;
+}"""
+
+
+PERELIV_JS = """() => {
+  // Текст, который шире своего блока и никуда не прокручивается, человек
+  // просто не дочитает: адрес прокси, длинное имя ключа, имя узла.
+  const bedy = [];
+  for (const el of document.querySelectorAll("body *")) {
+    if (!el.offsetParent && el !== document.body) continue;
+    if (el.children.length) continue;                 // судим только листья
+    const s = getComputedStyle(el);
+    if (/auto|scroll/.test(s.overflowX)) continue;
+    if (s.textOverflow === "ellipsis") continue;      // обрезано намеренно
+    const podpis = (el.textContent || "").trim().slice(0, 34);
+    if (!podpis) continue;
+    if (el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) {
+      bedy.push(`«${podpis}…» не влез в свой блок (${el.scrollWidth} > ${el.clientWidth} px)`);
+      continue;
+    }
+    // Главный случай: строка не переполняет СЕБЯ, она распирает родителя и
+    // уезжает за край окна. Ровно так nowrap выносит длинное имя ключа за 420 px.
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && (r.right > window.innerWidth + 1 || r.left < -1)) {
+      bedy.push(`«${podpis}…» уехал за край окна `
+                + `(${Math.round(r.left)}…${Math.round(r.right)} при ширине ${window.innerWidth})`);
+    }
+  }
+  return bedy;
+}"""
+
+
+def proverit_pereliv(str_, imya_sceny):
+    return [f"{imya_sceny}: {b}" for b in str_.evaluate(PERELIV_JS)]
+
+
+def proverit_zhargon(str_, imya_sceny):
+    """Ни одного машинного слова в том, что человек видит, ничего не открывая."""
+    tekst = (str_.evaluate(VIDIMYY_TEKST_JS) or "").lower()
+    bedy = []
+    for slovo in ZHARGON:
+        if slovo in tekst:
+            mesto = tekst.index(slovo)
+            kusok = tekst[max(0, mesto - 30):mesto + 40].replace("\n", " ⏎ ")
+            bedy.append(f"{imya_sceny}: человеку видно машинное слово «{slovo}» — «…{kusok}…»")
+    return bedy
+
+
+def proverit_pokrytie():
+    """Каждая заметка из konfig.go обязана попасть хотя бы на один снимок."""
+    na_snimkah = {s.get("zametka", "") for s in SCENY.values()}
+    bedy = []
+    for imya, tekst in ZAMETKI.items():
+        obrazec = tekst.split("%s")[0].strip()
+        if not any(obrazec and obrazec in z for z in na_snimkah):
+            bedy.append(f"покрытие: {imya} («{tekst[:44]}…») не показана ни в одной сцене — "
+                        "человек увидит её раньше меня")
+    return bedy
+
+
+def kontrol_pereliva(br, port):
+    """Щуп перелива обязан покраснеть, если строке запретить перенос."""
+    sostoyanie["tek"] = SCENY["16_dlinnoe_imya"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.add_style_tag(content=".podpiska span { white-space: nowrap; }")
+    str_.wait_for_timeout(200)
+    bedy = proverit_pereliv(str_, "контроль-перелив")
+    str_.close()
+    return bedy
+
+
+def kontrol_zhargona(br, port):
+    """Гейт обязан покраснеть на заведомо жаргонной строке. Молчит — он мёртв."""
+    sostoyanie["tek"] = dict(SCENY["4_rabotaet"],
+                             zametka="прокси-режим: в профиле нет туннеля")
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    bedy = proverit_zhargon(str_, "контроль-жаргон")
+    str_.close()
+    return bedy
+
+
 def proverit_perevod(br, port):
     """Каждая примета обязана дать свой заголовок, а не правдоподобный чужой."""
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
@@ -287,6 +440,8 @@ def snyat():
                 put = VYHOD / f"{imya}.png"
                 str_.screenshot(path=str(put))
                 bedy = proverit_geometriyu(str_, imya)
+                bedy += proverit_zhargon(str_, imya)
+                bedy += proverit_pereliv(str_, imya)
                 if imya in ZHDEM_V_OKNE:
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 vse_bedy.extend(bedy)
@@ -303,15 +458,34 @@ def snyat():
                 vse_bedy.extend(perevod)
             else:
                 print(f"\n  🈯 перевод беды: {len(PEREVOD_ZHDEM)} примет из {len(PEREVOD_ZHDEM)} легли верно")
+            pokrytie = proverit_pokrytie()
+            for b in pokrytie:
+                print(f"  🔴 {b}")
+            vse_bedy.extend(pokrytie)
+            if not pokrytie:
+                print(f"  🈯 заметки окна: {len(ZAMETKI)} из {len(ZAMETKI)} взяты "
+                      "из konfig.go и показаны на снимках")
             kontrol = kontrol_shchupa(br, port)
+            kontrol_zh = kontrol_zhargona(br, port)
+            kontrol_per = kontrol_pereliva(br, port)
             br.close()
         srv.shutdown()
-    return vse_bedy, kontrol
+    return vse_bedy, kontrol, kontrol_zh, kontrol_per
 
 
 if __name__ == "__main__":
     print(f"облик: {OBLIK}")
-    bedy, kontrol = snyat()
+    bedy, kontrol, kontrol_zh, kontrol_per = snyat()
+    if kontrol_per:
+        print(f"\n  🧪 контроль перелива: щуп видит порчу — {kontrol_per[0]}")
+    else:
+        print("\n🔴 ЩУП ПЕРЕЛИВА МЁРТВ: строка, которой запретили перенос, его не разбудила.")
+        sys.exit(2)
+    if kontrol_zh:
+        print(f"\n  🧪 контроль жаргона: гейт видит порчу — {kontrol_zh[0]}")
+    else:
+        print("\n🔴 ГЕЙТ ЖАРГОНА МЁРТВ: жаргонная строка в окне его не разбудила.")
+        sys.exit(2)
     if kontrol:
         print(f"\n  🧪 контроль: щуп видит порчу ({len(kontrol)} находок), например:")
         print(f"      {kontrol[0]}")
