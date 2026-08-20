@@ -48,6 +48,18 @@ SCENY = {
                             "initialize inbound/tun[0]: configure tun interface: "
                             "permission denied"),
     "6_kachaem": dict(BAZA, kachaem_yadro=True, yadro_est=False),
+    # Беды разных пород: окно обязано сказать, ЧТО случилось и ЧТО нажать,
+    # а не пересказывать лог sing-box человеку, который не программист.
+    "11_beda_port": dict(BAZA, sost="slomalos",
+                         beda="ядро упало при старте: FATAL[0000] start service: "
+                              "initialize inbound/mixed[0]: listen tcp 127.0.0.1:2412: "
+                              "bind: Only one usage of each socket address is normally permitted."),
+    "12_beda_seti": dict(BAZA, sost="slomalos",
+                         beda="ядро не ответило за 45 секунд: ERROR[0007] dial tcp "
+                              "185.204.1.14:443: i/o timeout"),
+    "13_beda_konfig": dict(BAZA, sost="slomalos",
+                                beda="ядро упало при старте: FATAL[0000] "
+                                     "decode config at rule_set[2]: unexpected token '}'"),
     # Автозапуск живёт только на Windows, и облик прячет его ряд целиком по
     # avtozapusk_podderzhivaetsya. Стенд гоняется на Linux, поэтому без этих
     # сцен галочку не видит НИКТО — ни я, ни снимок: 20.08 она уехала в
@@ -185,6 +197,74 @@ def kontrol_shchupa(br, port):
     return bedy
 
 
+# Перевод беды: сырой текст ядра → заголовок, который читает не программист.
+# Держим таблицей, потому что осечка тут тихая: 20.08 «decode config at
+# rule_set[2]» переводилось как «подключение зависло» — правдоподобно и мимо.
+PEREVOD_ZHDEM = [
+    ("ядро упало при старте: FATAL[0000] initialize inbound/tun[0]: "
+     "configure tun interface: permission denied", "Windows не дал создать сетевой адаптер"),
+    ("ядро не ответило за 45 секунд: FATAL configure tun: operation not permitted",
+     "Windows не дал создать сетевой адаптер"),          # точная примета бьёт таймаут
+    ("ядро упало при старте: listen tcp 127.0.0.1:2412: bind: address already in use",
+     "Нужный порт занят другой программой"),
+    ("ядро ответило 401", "Код доступа не подошёл"),
+    ("ядро не ответило за 45 секунд: dial tcp 185.204.1.14:443: i/o timeout",
+     "Не достучались до сервера"),
+    ("ядро не найдено: C:\\\\Users\\\\Vova\\\\kelevra\\\\sing-box.exe", "На месте нет рабочего файла"),
+    ("нет конфига: сначала введите код доступа", "Код доступа ещё не введён"),
+    ("ядро упало при старте: decode config at rule_set[2]: unexpected token",
+     "Настройки под твоим кодом доступа не читаются"),
+    ("ядро не ответило за 45 секунд: ", "Подключение зависло"),
+    ("ядро упало при старте: ", "Kelevra не смогла запуститься"),
+    ("хтонь, какой ещё не бывало", "Связь не поднялась"),
+]
+
+
+# Таблица выше зовёт perevestiBedu() напрямую — она пройдёт, даже если окно
+# перестанет её звать и снова начнёт печатать человеку сырой лог. Поэтому в
+# живых сценах смотрим, что в блоке беды лежит ЗАГОЛОВОК, а сырое спрятано.
+ZHDEM_V_OKNE = {
+    "5_slomalos": "Windows не дал создать сетевой адаптер",
+    "11_beda_port": "Нужный порт занят другой программой",
+    "12_beda_seti": "Не достучались до сервера",
+    "13_beda_konfig": "Настройки под твоим кодом доступа не читаются",
+}
+
+
+def proverit_okno_bedy(str_, imya_sceny, zhdem):
+    vidno = str_.evaluate("""() => {
+      const u = document.getElementById("beda-svyazi");
+      const z = u.querySelector(".beda-zagolovok");
+      const s = u.querySelector(".beda-syroe");
+      return {zagolovok: z ? z.textContent : null,
+              syroe_spryatano: s ? s.hidden : null,
+              ves_tekst: u.textContent};
+    }""")
+    bedy = []
+    if vidno["zagolovok"] != zhdem:
+        bedy.append(f'{imya_sceny}: в окне заголовок беды «{vidno["zagolovok"]}», '
+                    f'а ждали «{zhdem}» — окно печатает не то, что переводит')
+    if vidno["syroe_spryatano"] is not True:
+        bedy.append(f"{imya_sceny}: сырой лог ядра не спрятан под «подробности»")
+    if "FATAL" in (vidno["ves_tekst"] or "") and vidno["syroe_spryatano"] is not True:
+        bedy.append(f"{imya_sceny}: человеку видно сырое FATAL[...] из лога")
+    return bedy
+
+
+def proverit_perevod(br, port):
+    """Каждая примета обязана дать свой заголовок, а не правдоподобный чужой."""
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(500)
+    bedy = []
+    for syroe, zhdem in PEREVOD_ZHDEM:
+        dal = str_.evaluate("(s) => perevestiBedu(s).chto", syroe)
+        if dal != zhdem:
+            bedy.append(f'перевод: «{syroe[:52]}…» → «{dal}», а ждали «{zhdem}»')
+    str_.close()
+    return bedy
+
+
 def snyat():
     from playwright.sync_api import sync_playwright
     VYHOD.mkdir(parents=True, exist_ok=True)
@@ -207,12 +287,22 @@ def snyat():
                 put = VYHOD / f"{imya}.png"
                 str_.screenshot(path=str(put))
                 bedy = proverit_geometriyu(str_, imya)
+                if imya in ZHDEM_V_OKNE:
+                    bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 vse_bedy.extend(bedy)
                 znak = "🔴" if bedy else "🟢"
                 print(f"  {znak} {put}")
                 for b in bedy:
                     print(f"      {b}")
                 str_.close()
+            perevod = proverit_perevod(br, port)
+            if perevod:
+                print()
+                for b in perevod:
+                    print(f"  🔴 {b}")
+                vse_bedy.extend(perevod)
+            else:
+                print(f"\n  🈯 перевод беды: {len(PEREVOD_ZHDEM)} примет из {len(PEREVOD_ZHDEM)} легли верно")
             kontrol = kontrol_shchupa(br, port)
             br.close()
         srv.shutdown()
