@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
+	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
@@ -91,6 +93,8 @@ func (s *Sluzhba) perestroit(bezSistemnogoProksi bool) error {
 	s.zamok.Lock()
 	s.kartina = k
 	s.zamok.Unlock()
+	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s",
+		k.Rezhim, prava.Est(), k.EstTunnel, k.ClashAdres, zametka(k.Zametka))
 	return nil
 }
 
@@ -256,9 +260,11 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 	defer otmena()
 	profil, err := s.Podpiska.Konfig(ctx, kod)
 	if err != nil {
+		log.Printf("сервер подписки не дал профиль: %v", err)
 		otdat(w, nil, err)
 		return
 	}
+	log.Printf("профиль получен с сервера подписки: %d байт", len(profil))
 	if err := s.SohranitProfil(profil); err != nil {
 		otdat(w, nil, err)
 		return
@@ -288,9 +294,16 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 			otdat(w, nil, fmt.Errorf("ядро уже качается"))
 			return
 		}
+		log.Printf("ядра на машине нет, качаю")
 		ctx, otmena := context.WithTimeout(context.Background(), 15*time.Minute)
+		nachalo := time.Now()
 		err := s.Yadro.Zagruzit(ctx)
 		otmena()
+		if err == nil {
+			log.Printf("ядро скачано за %s", time.Since(nachalo).Round(time.Second))
+		} else {
+			log.Printf("не смог скачать ядро: %v", err)
+		}
 		s.zamok.Lock()
 		s.kachaemBin = false
 		s.zamok.Unlock()
@@ -302,6 +315,7 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 	// Права могли появиться (человек перезапустил приложение администратором) —
 	// пересобираем конфиг перед стартом, иначе режим останется вчерашним.
 	if err := s.PerestroitKonfig(); err != nil {
+		log.Printf("не подготовил конфиг: %v", err)
 		otdat(w, nil, fmt.Errorf("не подготовил конфиг: %w", err))
 		return
 	}
@@ -313,6 +327,7 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 	// и говорим адрес прокси прямо в окне (проверено живьём: ядро падает
 	// строкой «initialize system proxy»).
 	if err != nil && strings.Contains(err.Error(), "initialize system proxy") {
+		log.Printf("система не дала настроить прокси, поднимаю ядро без этой просьбы")
 		if e := s.perestroit(true); e == nil {
 			ctx2, otmena2 := context.WithTimeout(context.Background(), 70*time.Second)
 			defer otmena2()
@@ -323,6 +338,7 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
+	log.Printf("человек нажал «Отключить»")
 	otdat(w, map[string]any{"gotovo": true}, s.Yadro.Ostanovit())
 }
 
@@ -344,9 +360,12 @@ func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 			}
 			k, err := s.Podpiska.Konfig(ctx, s.Nastroyki.Kod)
 			if err != nil {
+				log.Printf("плановое обновление профиля не удалось: %v", err)
 				continue // сеть могла лечь; работаем на прежнем конфиге
 			}
-			_ = s.SohranitProfil(k)
+			if err := s.SohranitProfil(k); err != nil {
+				log.Printf("плановое обновление профиля не сохранилось: %v", err)
+			}
 		}
 	}
 }
@@ -364,6 +383,8 @@ func (s *Sluzhba) polnayaZashchita(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	otdat(w, map[string]any{"gotovo": true, "perezapusk": true}, nil)
+	log.Printf("человек согласился на права администратора, перезапускаюсь")
+	kopiya.Osvobodit(hranenie.Papka()) // выход через os.Exit минует defer в main
 	go func() {
 		time.Sleep(300 * time.Millisecond) // дать ответу уйти в окно
 		_ = s.Yadro.Ostanovit()            // ядро старой копии гасим сами
@@ -379,6 +400,13 @@ func otdat(w http.ResponseWriter, telo any, err error) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(telo)
+}
+
+func zametka(z string) string {
+	if z == "" {
+		return ""
+	}
+	return ", " + z
 }
 
 func sluchaynyy() string {
