@@ -120,5 +120,9 @@ func lovitPaniku(putZhurnala string) {
 		tekst += "\n\nПодробности записаны в файл:\n" + putZhurnala
 	}
 	skazat("Kelevra остановилась", tekst)
+	// os.Exit минует код после lovitPaniku в main (там же снимается прокси),
+	// а авария ядра оставляет системный прокси включённым точно так же, как
+	// обычное закрытие окна — снимаем его и на этом пути.
+	proksi.Snyat()
 	os.Exit(2)
 }
