@@ -8,11 +8,13 @@
 
     python3 stend/oblik_snimok.py [папка-для-png]
 """
-import http.server, json, socketserver, sys, threading
+import http.server, json, os, socketserver, sys, threading
 from pathlib import Path
 
 KOREN = Path(__file__).resolve().parent.parent
-OBLIK = KOREN / "internal" / "sluzhba" / "oblik"
+# Папку облика можно подменить: так стенд гоняется против СТАРОЙ версии окна
+# и доказывает, что щуп краснеет там, где беда была на самом деле.
+OBLIK = Path(os.environ.get("KELEVRA_OBLIK") or (KOREN / "internal" / "sluzhba" / "oblik"))
 VYHOD = Path(sys.argv[1]) if len(sys.argv) > 1 else KOREN / ".stend" / "oblik"
 
 UZLY = {"gruppy": [{
@@ -97,11 +99,21 @@ class Ruchki(http.server.SimpleHTTPRequestHandler):
 
 SHIRINA, VYSOTA = 420, 660
 
-# JS-щуп: геометрия каждой видимой интерактивной штуки (кнопки, переключатели)
-# плюс полная высота документа. getBoundingClientRect() меряет РЕАЛЬНОЕ место
-# в окне — то же самое, что видит человек, открыв окно и ничего не тронув
-# (scrollTop=0 — это и есть первый кадр, который на самом деле ловят люди).
-IZMERENIE_JS = """() => {
+# JS-щуп: до каждой ли видимой кнопки человек ДОБЕРЁТСЯ.
+#
+# Первая версия щупа (20.08) мерила только первый кадр и звала бедой всё, что
+# ниже 660px. Внутри окна лежит своя прокрутка («.lenta», overflow-y:auto), и
+# 10 из 10 её находок оказались обычной прокруткой — ложный красный на живом
+# продукте. Поэтому мерим не «видно сразу», а «дотянуться можно»:
+#   1. просим браузер докрутить контейнер до штуки — ровно то, что делает рукой
+#      человек. Не докрутилось (штука всё равно за краем окна) — беда настоящая:
+#      прокрутки нет или её не хватает;
+#   2. смотрим elementFromPoint в центре штуки: если сверху лежит кто-то чужой
+#      (зафиксированная снизу панель «.niz», модалка, наехавшая карточка) —
+#      кнопка не тыкается, сколько её ни крути. Именно так ловится перекос
+#      «padding-bottom у ленты — константа 98px, а высота панели зависит от
+#      сцены»: панель выше константы — и последний ряд списка навсегда под ней.
+DOSTUP_JS = """() => {
   function skryt(el) {
     if (el.hidden) return true;
     const st = getComputedStyle(el);
@@ -113,69 +125,63 @@ IZMERENIE_JS = """() => {
     }
     return false;
   }
-  const shtuki = [...document.querySelectorAll("button, [role=switch]")]
-    .filter((el) => !skryt(el))
-    .map((el) => {
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) return null;
-      return {
-        imya: (el.id || el.textContent || "").trim().replace(/\\s+/g, " ").slice(0, 70),
-        top: r.top, bottom: r.bottom, left: r.left, right: r.right,
-      };
-    })
-    .filter(Boolean);
-  return {shtuki, scrollHeight: document.documentElement.scrollHeight};
+  function klichka(el) {
+    if (!el) return "пусто";
+    return el.id || (typeof el.className === "string" && el.className.trim())
+           || el.tagName.toLowerCase();
+  }
+  const W = innerWidth, H = innerHeight;
+  const bedy = [];
+  const shtuki = [...document.querySelectorAll("button, [role=switch]")].filter((el) => !skryt(el));
+  for (const el of shtuki) {
+    let r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    const imya = (el.id || el.textContent || "").trim().replace(/\\s+/g, " ").slice(0, 70);
+    el.scrollIntoView({block: "center", inline: "center", behavior: "instant"});
+    r = el.getBoundingClientRect();
+    if (r.left < 0) bedy.push(`«${imya}» не достать: за левым краем на ${Math.round(-r.left)}px`);
+    if (r.right > W) bedy.push(`«${imya}» не достать: за правым краем на ${Math.round(r.right - W)}px`);
+    if (r.top < 0) bedy.push(`«${imya}» не достать: за верхним краем на ${Math.round(-r.top)}px`);
+    if (r.bottom > H) bedy.push(`«${imya}» не достать: за нижним краем на ${Math.round(r.bottom - H)}px (прокрутка не спасает)`);
+    const cx = Math.min(Math.max(r.left + r.width / 2, 0), W - 1);
+    const cy = Math.min(Math.max(r.top + r.height / 2, 0), H - 1);
+    const sverhu = document.elementFromPoint(cx, cy);
+    if (!sverhu || (!el.contains(sverhu) && !sverhu.contains(el))) {
+      bedy.push(`«${imya}» не тыкается: в его центре (${Math.round(cx)},${Math.round(cy)}) лежит «${klichka(sverhu)}»`);
+    }
+  }
+  document.querySelectorAll("*").forEach((el) => { if (el.scrollTop) el.scrollTop = 0; });
+  return bedy;
 }"""
 
 
 def proverit_geometriyu(str_, imya_sceny):
-    """Возвращает список бед (строк) для сцены: что уехало и на сколько px.
+    """Список бед сцены: до чего человек не доберётся ни глазом, ни мышью."""
+    return [f"{imya_sceny}: {b}" for b in str_.evaluate(DOSTUP_JS)]
 
-    Две беды под одним именем «уехал за границы»:
-    1. штука целиком вне холста 420x660 — старый баг без прокрутки (об.
-       662f757), когда страница просто росла вниз;
-    2. штука ВНУТРИ холста, но под зафиксированной снизу панелью («.niz»,
-       z-index:3) — новый баг: «.niz» ловит клики по всему своему
-       прямоугольнику, так что перекрытая кнопка не видна и не тыкается,
-       хотя формально «в окне». Мерим на первом кадре (scrollTop=0) —
-       это и есть то, что видит человек, открыв окно и ничего не тронув.
+
+# Порча для контроля: делаем нижнюю панель заведомо выше, чем зазор, который
+# лента держит под неё (--nizhnyaya, константа). Это ровно та беда, ради
+# которой щуп и живёт: панель переросла зазор — и последний ряд списка
+# навсегда под ней, никакой прокруткой не достать.
+PORCHA_CSS = ".niz { padding-bottom: 140px !important; }"
+
+
+def kontrol_shchupa(br, port):
+    """Щуп обязан покраснеть на испорченной странице. Промолчал — он мёртвый.
+
+    Зелёный щуп ничего не значит сам по себе: 20.08 предыдущая версия этого
+    же файла краснела 10 раз подряд на здоровом окне, а разбираться пришлось
+    руками. Дешевле держать в стенде одну заведомо больную сцену.
     """
-    dannye = str_.evaluate(IZMERENIE_JS)
-    shtuki = dannye["shtuki"]
-    bedy = []
-
-    for sh in shtuki:
-        if sh["left"] < 0:
-            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за левый край '
-                        f'на {-sh["left"]:.0f}px')
-        if sh["right"] > SHIRINA:
-            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за правый край '
-                        f'на {sh["right"] - SHIRINA:.0f}px')
-        if sh["top"] < 0:
-            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за верхний край '
-                        f'на {-sh["top"]:.0f}px')
-        if sh["bottom"] > VYSOTA:
-            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за нижний край '
-                        f'на {sh["bottom"] - VYSOTA:.0f}px (bottom={sh["bottom"]:.0f})')
-
-    # Перекрытие двух интерактивных штук: одна лежит поверх другой (обычно —
-    # зафиксированная снизу панель наезжает на то, что прокручивается). Та,
-    # что снизу по слоям, для человека не существует — не видна и не тыкается,
-    # даже если формально её bottom меньше 660.
-    for i in range(len(shtuki)):
-        for j in range(i + 1, len(shtuki)):
-            a, b = shtuki[i], shtuki[j]
-            verh = max(a["top"], b["top"])
-            niz_ = min(a["bottom"], b["bottom"])
-            levo = max(a["left"], b["left"])
-            pravo = min(a["right"], b["right"])
-            if niz_ > verh and pravo > levo:
-                bedy.append(f'{imya_sceny}: «{a["imya"]}» перекрыт «{b["imya"]}» '
-                            f'на {niz_ - verh:.0f}px по высоте')
-
-    if dannye["scrollHeight"] > VYSOTA:
-        bedy.append(f'{imya_sceny}: документ выше окна на '
-                    f'{dannye["scrollHeight"] - VYSOTA:.0f}px (scrollHeight={dannye["scrollHeight"]:.0f})')
+    sostoyanie["tek"] = SCENY["4_rabotaet"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.add_style_tag(content=PORCHA_CSS)
+    str_.wait_for_timeout(200)
+    bedy = proverit_geometriyu(str_, "контроль")
+    str_.close()
     return bedy
 
 
@@ -196,24 +202,34 @@ def snyat():
                 if imya == "5_slomalos":  # журнал раскрыт: его видно только так
                     str_.click("#knopka-zhurnal")
                     str_.wait_for_timeout(400)
-                bedy = proverit_geometriyu(str_, imya)
-                vse_bedy.extend(bedy)
+                # Снимок ПЕРВЫМ: щуп крутит страницу, а глазам нужен первый
+                # кадр — то, что человек видит, ничего не тронув.
                 put = VYHOD / f"{imya}.png"
                 str_.screenshot(path=str(put))
+                bedy = proverit_geometriyu(str_, imya)
+                vse_bedy.extend(bedy)
                 znak = "🔴" if bedy else "🟢"
                 print(f"  {znak} {put}")
                 for b in bedy:
                     print(f"      {b}")
                 str_.close()
+            kontrol = kontrol_shchupa(br, port)
             br.close()
         srv.shutdown()
-    return vse_bedy
+    return vse_bedy, kontrol
 
 
 if __name__ == "__main__":
     print(f"облик: {OBLIK}")
-    bedy = snyat()
+    bedy, kontrol = snyat()
+    if kontrol:
+        print(f"\n  🧪 контроль: щуп видит порчу ({len(kontrol)} находок), например:")
+        print(f"      {kontrol[0]}")
+    else:
+        print("\n🔴 ЩУП МЁРТВ: на заведомо испорченной странице он смолчал. "
+              "Зелень остальных сцен ничего не доказывает.")
+        sys.exit(2)
     if bedy:
-        print(f"\nКРАСНО: {len(bedy)} находок уезжают за границы окна {SHIRINA}x{VYSOTA}.")
+        print(f"\nКРАСНО: {len(bedy)} кнопок не достать в окне {SHIRINA}x{VYSOTA}.")
         sys.exit(1)
     print("\nВсе сцены зелёные.")
