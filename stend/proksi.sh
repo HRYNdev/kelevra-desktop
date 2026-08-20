@@ -131,5 +131,37 @@ else
 fi
 ostanovit
 
+echo "── сценарий 3: ядро прописало прокси и упало при старте — «Подключить» должен снять его тоже ──"
+# Диагноз 20.08 (второй заход): ядро прописывает системный прокси ДО того, как
+# ответит его Clash API — Zapustit() может упасть или не дождаться API за
+# 70 секунд уже ПОСЛЕ этого. До сегодняшней правки proksi.Snyat() в ручке
+# /api/podklyuchit не звался вовсе: неудачное подключение оставляло прокси
+# висеть, а «Отключить» человек в этот момент ещё не нажимал.
+PROFIL="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/profil.json"
+YADRO_PAPKA="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/yadro"
+mkdir -p "$YADRO_PAPKA"
+cp "$KORFN/internal/konfig/testdata/profil_telefona.json" "$PROFIL"
+printf 'не ядро, а мусор — Windows не сможет это запустить' > "$YADRO_PAPKA/sing-box.exe"
+reg_set 1 127.0.0.1:2412
+do_before=$(reg_get ProxyEnable); server_before=$(reg_get ProxyServer)
+echo "  до: ProxyEnable=$do_before ProxyServer=$server_before (профиль и битое ядро подложены руками)"
+url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk3.log")
+if [ -z "$url" ]; then
+  echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
+else
+  echo "  служба: $url"
+  otvet=$(curl -s -o /dev/null -w '%{http_code}' "${url}api/podklyuchit")
+  echo "  GET ${url}api/podklyuchit -> код $otvet (ждём отказ: ядро битое)"
+  sleep 1
+  posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+  echo "  после: ProxyEnable=$posle ProxyServer=$server_posle"
+  if [ "$posle" != "0x0" ]; then
+    echo "  КРАСНЫЙ: ProxyEnable не снят после неудачного подключения (осталось $posle)"; bed=1
+  else
+    echo "  зелёный: неудачное подключение тоже сняло прокси"
+  fi
+fi
+ostanovit
+
 echo "── итог: $([ $bed -eq 0 ] && echo ЗЕЛЁНЫЙ || echo КРАСНЫЙ) ──"
 exit $bed
