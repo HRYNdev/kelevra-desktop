@@ -355,6 +355,14 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 			err = s.Yadro.Zapustit(ctx2)
 		}
 	}
+	if err != nil {
+		// Ядро могло прописать системный прокси ещё до того, как упало или
+		// не ответило за 70 секунд (падение при старте, таймаут API) — запись
+		// в реестре остаётся висеть, а Ostanovit() её не снимает. Тот же баг,
+		// что был на «Отключить» и закрытии окна (хозяин, 20.08), только на
+		// неудачном подключении.
+		proksi.Snyat()
+	}
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
 
