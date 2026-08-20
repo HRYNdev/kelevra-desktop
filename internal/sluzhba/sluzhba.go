@@ -27,6 +27,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
+	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
@@ -359,7 +360,14 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 
 func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 	log.Printf("человек нажал «Отключить»")
-	otdat(w, map[string]any{"gotovo": true}, s.Yadro.Ostanovit())
+	err := s.Yadro.Ostanovit()
+	// Снимаем системный прокси прямо здесь, а не полагаемся на выход из main:
+	// приложение после «Отключить» остаётся открытым, и следующая точка выхода
+	// может случиться нескоро — а сайты должны заработать сразу. Снимаем
+	// безусловно: ядро могло умереть само ещё до нажатия, запись в реестре
+	// всё равно висит.
+	proksi.Snyat()
+	otdat(w, map[string]any{"gotovo": true}, err)
 }
 
 // ObnovlyatProfil перекачивает конфиг по расписанию, как это делает мобильный клиент.
