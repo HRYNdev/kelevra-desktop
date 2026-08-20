@@ -355,6 +355,40 @@ def proverit_pereliv(str_, imya_sceny):
     return [f"{imya_sceny}: {b}" for b in str_.evaluate(PERELIV_JS)]
 
 
+SOSTOYANIE_V_KADRE_JS = """() => {
+  const el = document.getElementById("sostoyanie");
+  if (!el.offsetParent) return null;   // скрыт (сцена ввода кода) — нечего мерить
+  const lenta = document.getElementById("lenta");
+  lenta.scrollTop = lenta.scrollHeight;   // докрутить до конца, как рукой
+  const r = el.getBoundingClientRect();
+  lenta.scrollTop = 0;
+  return {top: r.top, bottom: r.bottom};
+}"""
+
+
+def proverit_sostoyanie_v_kadre(str_, imya_sceny):
+    """Карточка состояния держит ответ «я под защитой?» и не должна уезжать
+    из кадра при прокрутке — она sticky (см. .sostoyanie в index.html).
+
+    Диагноз 20.08: на сцене «сломалось» с открытым журналом лента вырастает
+    выше окна, и заголовок статуса уезжал за верхний край — человек в момент
+    беды не видел, что с ним. Докручиваем ленту до конца, как это делает
+    человек мышью или колесом, и смотрим на getBoundingClientRect против
+    высоты окна — а не полагаемся на память о том, что тут когда-то чинили.
+    """
+    r = str_.evaluate(SOSTOYANIE_V_KADRE_JS)
+    if r is None:
+        return []
+    bedy = []
+    if r["top"] < 0:
+        bedy.append(f"{imya_sceny}: карточка состояния уезжает за верхний край "
+                    f"на {round(-r['top'])}px при прокрутке ленты до конца")
+    if r["bottom"] > VYSOTA:
+        bedy.append(f"{imya_sceny}: карточка состояния уезжает за нижний край "
+                    f"на {round(r['bottom'] - VYSOTA)}px")
+    return bedy
+
+
 def proverit_zhargon(str_, imya_sceny):
     """Ни одного машинного слова в том, что человек видит, ничего не открывая."""
     tekst = (str_.evaluate(VIDIMYY_TEKST_JS) or "").lower()
@@ -388,6 +422,27 @@ def kontrol_pereliva(br, port):
     str_.add_style_tag(content=".podpiska span { white-space: nowrap; }")
     str_.wait_for_timeout(200)
     bedy = proverit_pereliv(str_, "контроль-перелив")
+    str_.close()
+    return bedy
+
+
+def kontrol_sostoyaniya(br, port):
+    """Sticky-щуп обязан покраснеть, если карточку состояния расклеить.
+
+    Проверяем ровно на той сцене, где беда была живой 20.08: «сломалось» с
+    развёрнутым журналом — там лента вырастает выше окна. Снимаем sticky
+    вручную (position:static) и смотрим, что проверка это заметит сама, без
+    моей памятливости.
+    """
+    sostoyanie["tek"] = SCENY["5_slomalos"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.click("#knopka-zhurnal")
+    str_.wait_for_timeout(400)
+    str_.add_style_tag(content="#sostoyanie { position: static !important; }")
+    str_.wait_for_timeout(200)
+    bedy = proverit_sostoyanie_v_kadre(str_, "контроль-sticky")
     str_.close()
     return bedy
 
@@ -442,6 +497,7 @@ def snyat():
                 bedy = proverit_geometriyu(str_, imya)
                 bedy += proverit_zhargon(str_, imya)
                 bedy += proverit_pereliv(str_, imya)
+                bedy += proverit_sostoyanie_v_kadre(str_, imya)
                 if imya in ZHDEM_V_OKNE:
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 vse_bedy.extend(bedy)
@@ -468,14 +524,20 @@ def snyat():
             kontrol = kontrol_shchupa(br, port)
             kontrol_zh = kontrol_zhargona(br, port)
             kontrol_per = kontrol_pereliva(br, port)
+            kontrol_sost = kontrol_sostoyaniya(br, port)
             br.close()
         srv.shutdown()
-    return vse_bedy, kontrol, kontrol_zh, kontrol_per
+    return vse_bedy, kontrol, kontrol_zh, kontrol_per, kontrol_sost
 
 
 if __name__ == "__main__":
     print(f"облик: {OBLIK}")
-    bedy, kontrol, kontrol_zh, kontrol_per = snyat()
+    bedy, kontrol, kontrol_zh, kontrol_per, kontrol_sost = snyat()
+    if kontrol_sost:
+        print(f"\n  🧪 контроль sticky: щуп видит порчу — {kontrol_sost[0]}")
+    else:
+        print("\n🔴 ЩУП STICKY МЁРТВ: расклеенная карточка состояния его не разбудила.")
+        sys.exit(2)
     if kontrol_per:
         print(f"\n  🧪 контроль перелива: щуп видит порчу — {kontrol_per[0]}")
     else:
