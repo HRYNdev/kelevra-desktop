@@ -37,9 +37,18 @@ sleep 2
 
 ZH="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/kelevra.log"
 rm -f "$ZH"
-KELEVRA_BEZ_OKNA=1 KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" timeout 90 "$WINE" "$S/dom/Kelevra.exe" >"$S/run.log" 2>&1 &
+# Запускаем БОЕВЫМ путём (--tiho), а не служебным. 20.08 разведение окна и
+# службы на два процесса поставило ветку --sluzhba ДО проверки обновления,
+# и стенд, стоявший на KELEVRA_BEZ_OKNA=1, стал щупать дверь, за которой
+# обновления нет по замыслу: служба его не проверяет никогда, её поднимает
+# уже проверенная копия. --tiho — тот же путь, которым приложение стартует
+# из автозапуска Windows: обновление проверяется, окна не открывается.
+KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" timeout 90 "$WINE" "$S/dom/Kelevra.exe" --tiho >"$S/run.log" 2>&1 &
 sleep 25
 pkill -f "$S/dom/Kelevra.exe" 2>/dev/null
+# Боевой путь порождает ОТДЕЛЬНЫЙ процесс службы: он переживёт родителя и
+# займёт метку копии, из-за чего следующий прогон не поднимется вовсе.
+pkill -f "Kelevra.exe --sluzhba" 2>/dev/null
 pkill -f "http.server $PORT" 2>/dev/null
 
 bed=0
