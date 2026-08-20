@@ -26,6 +26,12 @@ func main() {
 	defer lovitPaniku(putZhurnala)
 	log.Printf("--- запуск Kelevra %s (%s/%s), данные: %s", podpiska.Versiya, runtime.GOOS, runtime.GOARCH, papka)
 
+	// Свежесть — забота приложения, а не человека: иначе каждая новая сборка
+	// это моё письмо со ссылкой и его ручное «скачай заново».
+	if obnovitsya() {
+		return
+	}
+
 	// Приложение уже работает: открываем его окно, а не поднимаем второе ядро
 	// на те же порты. Для человека двойной запуск выглядит как «показать окно».
 	if adres, est := kopiya.Nayti(papka); est {
