@@ -147,7 +147,23 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 
 	log.Printf("служба слушает %s", url)
 	fmt.Println("KELEVRA-SLUZHBA", url)
-	zhdatSignal()
+
+	// Значок в трее — обязательное завершение переделки из b924080: без
+	// него служба живёт невидимкой (закрыл окно — защита работает, но
+	// понять это и выключить нечем). Своя горутина со своим recover: отказ
+	// трея (включая Windows без explorer.exe, как на моём стенде под wine)
+	// не имеет права уронить службу с прокси.
+	vyhodIzTreya := make(chan struct{}, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("трей: авария в потоке значка, продолжаю без него: %v\n%s", r, debug.Stack())
+			}
+		}()
+		zapustitTrey(vyhodIzTreya)
+	}()
+
+	zhdatSignal(vyhodIzTreya)
 
 	_ = s.Yadro.Ostanovit()
 	// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
@@ -156,12 +172,19 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	proksi.Snyat()
 }
 
-// zhdatSignal держит служебный режим живым до Ctrl+C или остановки извне.
-func zhdatSignal() {
+// zhdatSignal держит служебный режим живым до Ctrl+C, остановки извне или
+// «Выход» из значка в трее (vyhodIzTreya) — оба пути должны довести дело до
+// одного и того же штатного завершения ниже (Ostanovit + Snyat), а не
+// выйти через os.Exit из чужого потока.
+func zhdatSignal(vyhodIzTreya <-chan struct{}) {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
-	log.Printf("служебный режим: получен сигнал, останавливаюсь")
+	select {
+	case <-stop:
+		log.Printf("служебный режим: получен сигнал, останавливаюсь")
+	case <-vyhodIzTreya:
+		log.Printf("служебный режим: «Выход» из трея, останавливаюсь")
+	}
 }
 
 // umeret — единственный выход из строя, который видит пользователь.
