@@ -479,10 +479,13 @@ async function obnovit() {
   const est = !!(s.imya || s.do_unix);
   $("podpiska").hidden = !est;
   if (est) {
-    $("podpiska-imya").textContent = s.imya || "Ключ доступа";
+    // Без слова «ключ доступа» строка «хозяин … до 15 сентября» — загадка:
+    // человек видит своё имя и дату и не знает, что именно кончается.
+    $("podpiska-imya").textContent = s.imya ? "Ключ доступа: " + s.imya : "Ключ доступа";
     const dney = s.do_unix ? Math.ceil((s.do_unix * 1000 - Date.now()) / 86400000) : null;
     $("podpiska-srok").textContent = s.do_unix
-        ? "до " + new Date(s.do_unix * 1000).toLocaleDateString("ru-RU",
+        ? (dney !== null && dney <= 7 ? "кончится " : "действует до ")
+          + new Date(s.do_unix * 1000).toLocaleDateString("ru-RU",
             {day:"numeric", month:"long"}) : "";
     $("podpiska").className = "podpiska" + (dney !== null && dney <= 7 ? " istekaet" : "");
   }
