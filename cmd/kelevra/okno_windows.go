@@ -4,9 +4,13 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/jchv/go-webview2"
 )
+
+// gdeWebView2 — официальный установщик компонента от Microsoft.
+const gdeWebView2 = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 
 // pokazatOkno открывает окно приложения на встроенном WebView2 (он есть в
 // Windows 10/11 из коробки) и не возвращается, пока пользователь его не закроет.
@@ -22,7 +26,15 @@ func pokazatOkno(url string) {
 		},
 	})
 	if w == nil {
-		log.Fatal("не удалось открыть окно: нужен компонент WebView2")
+		// Не log.Fatal: в оконной сборке это молчание, а человек видит,
+		// что двойной щелчок не сделал ничего. Компонент ставится бесплатно
+		// и в одну кнопку, поэтому говорим прямо, что именно поставить.
+		log.Printf("ОТКАЗ: нет компонента WebView2, окно открыть нечем")
+		skazat("Kelevra не запустилась",
+			"В этой Windows нет компонента WebView2 — окно приложения рисовать нечем.\n\n"+
+				"Он бесплатный, от Microsoft. Поставьте его отсюда и запустите Kelevra снова:\n"+
+				gdeWebView2+"\n\n(этот текст можно скопировать целиком: Ctrl+C)")
+		os.Exit(1)
 	}
 	defer w.Destroy()
 	w.Navigate(url)
