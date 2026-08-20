@@ -65,6 +65,12 @@
     <button class="seryy" id="knopka-smenit">Сменить код доступа</button>
   </div>
 
+  <div style="margin-top:10px">
+    <button class="seryy" id="knopka-zhurnal">Что-то не так? Показать журнал</button>
+    <pre id="zhurnal" hidden style="max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.35;text-align:left;background:rgba(0,0,0,.25);border-radius:8px;padding:8px;margin-top:8px"></pre>
+    <button class="seryy" id="knopka-kopirovat" hidden>Скопировать журнал</button>
+  </div>
+
 <script>
 const koren = location.pathname.replace(/index\.html$/, "");
 const $ = (id) => document.getElementById(id);
@@ -209,6 +215,38 @@ $("knopka-polnaya").onclick = async () => {
 };
 
 $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
+
+// Журнал прямо в окне: иначе прислать причину можно только через проводник
+// в %LOCALAPPDATA%, а человек, у которого «не работает», туда не пойдёт.
+$("knopka-zhurnal").onclick = async () => {
+  const pre = $("zhurnal"), knopka = $("knopka-zhurnal");
+  if (!pre.hidden) {
+    pre.hidden = true; $("knopka-kopirovat").hidden = true;
+    knopka.textContent = "Что-то не так? Показать журнал";
+    return;
+  }
+  try {
+    const o = await fetch(koren + "api/zhurnal");
+    pre.textContent = (await o.text()) || "журнал пуст";
+  } catch (e) { pre.textContent = "журнал не прочитался: " + e.message; }
+  pre.hidden = false; $("knopka-kopirovat").hidden = false;
+  knopka.textContent = "Скрыть журнал";
+  pre.scrollTop = pre.scrollHeight;
+};
+
+$("knopka-kopirovat").onclick = async () => {
+  const knopka = $("knopka-kopirovat");
+  try {
+    await navigator.clipboard.writeText($("zhurnal").textContent);
+    knopka.textContent = "Скопировано";
+  } catch (e) {
+    // Буфер обмена может быть закрыт: тогда выделяем текст, человек нажмёт Ctrl+C.
+    const r = document.createRange(); r.selectNodeContents($("zhurnal"));
+    const v = window.getSelection(); v.removeAllRanges(); v.addRange(r);
+    knopka.textContent = "Выделено — нажмите Ctrl+C";
+  }
+  setTimeout(() => { knopka.textContent = "Скопировать журнал"; }, 2500);
+};
 
 obnovit();
 obnovitUzly();
