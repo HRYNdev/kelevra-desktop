@@ -49,6 +49,31 @@ type Kartina struct {
 // ClashPoUmolchaniyu — адрес, если профиль про Clash API молчит.
 const ClashPoUmolchaniyu = "127.0.0.1:9090"
 
+// Заметки — единственные строки этого пакета, которые ЧИТАЕТ ЧЕЛОВЕК: окно
+// показывает Zametka как есть. Поэтому здесь нет ни «ядра», ни «туннеля», ни
+// «прокси-режима»: открывает окно не программист, и он должен понять, что
+// защищено и что нажать. Стенд облика (stend/oblik_snimok.py) вытаскивает этот
+// блок прямо отсюда и требует, чтобы каждая заметка попала хотя бы на один
+// снимок, — иначе новая формулировка уедет человеку, не показавшись никому.
+const (
+	// ZametkaVes — режим Tunnel: защищено всё.
+	ZametkaVes = "Защищён весь компьютер: любая программа идёт через Kelevra."
+	// ZametkaBezPrav — туннель в профиле есть, но прав администратора нет.
+	// Ровно в этом случае окно показывает кнопку «Включить полную защиту»
+	// (sluzhba.go: MozhnoTun = EstTunnel && !Prava), и она сама просит права у
+	// Windows. Поэтому шлём человека на кнопку, а не на ручной перезапуск:
+	// совет, который дороже соседней кнопки, человек читает как «всё сложно».
+	ZametkaBezPrav = "Защищены только браузеры. Чтобы защитить весь компьютер, " +
+		"нажмите ниже «Включить полную защиту»."
+	// ZametkaBezTunnelya — в самом ключе доступа полного режима нет.
+	ZametkaBezTunnelya = "Защищены только браузеры — остальные программы идут напрямую. " +
+		"Так настроен ваш ключ доступа."
+	// ZametkaRuchnoyProksi — Windows не дал прописать себя в настройках сети.
+	// %s — адрес, который человеку придётся вписать руками.
+	ZametkaRuchnoyProksi = "Windows не дал включить защиту сам. Откройте Параметры → " +
+		"Сеть и Интернет → Прокси и впишите там адрес %s"
+)
+
 // Поля профиля, которые ядро принимает только на Android. На компьютере они
 // либо валят старт, либо не значат ничего.
 var androidPolyaTun = []string{"exclude_package", "include_package", "platform"}
@@ -111,7 +136,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 
 	if estPrava && k.EstTunnel {
 		k.Rezhim = Tunnel
-		k.Zametka = "весь трафик компьютера идёт через Kelevra"
+		k.Zametka = ZametkaVes
 	} else {
 		k.Rezhim = Proksi
 		if k.ProksiAdres == "" {
@@ -131,11 +156,11 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		}
 		k.RuchnoyProksi = v.BezSistemnogoProksi
 		if v.BezSistemnogoProksi {
-			k.Zametka = "система не дала настроить прокси сама: пропишите в её настройках " + k.ProksiAdres
+			k.Zametka = fmt.Sprintf(ZametkaRuchnoyProksi, k.ProksiAdres)
 		} else if k.EstTunnel {
-			k.Zametka = "прокси-режим: нет прав администратора, туннель не поднять"
+			k.Zametka = ZametkaBezPrav
 		} else {
-			k.Zametka = "прокси-режим: в профиле нет туннеля"
+			k.Zametka = ZametkaBezTunnelya
 		}
 	}
 
