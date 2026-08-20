@@ -223,6 +223,9 @@ func (s *Sluzhba) zamerit(w http.ResponseWriter, r *http.Request) {
 }
 
 type otvetSostoyaniya struct {
+	// Versiya — окно печатает её в шапке: обновляется приложение само, и по
+	// версии в окне видно, что обновление доехало (хозяин, 20.08).
+	Versiya    string `json:"versiya"`
 	Sost       string `json:"sost"`
 	KodEst     bool   `json:"kod_est"`
 	YadroEst   bool   `json:"yadro_est"`
@@ -243,6 +246,7 @@ type otvetSostoyaniya struct {
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	o := otvetSostoyaniya{
+		Versiya:  podpiska.Versiya,
 		Sost:     string(s.Yadro.Sost()),
 		KodEst:   s.Nastroyki.Kod != "",
 		YadroEst: s.Yadro.EstBinar(),
