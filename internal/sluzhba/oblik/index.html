@@ -48,21 +48,34 @@
 
   .lenta {
     position:absolute; top:var(--shapka); bottom:0; left:0; right:0;
-    overflow-y:auto; overflow-x:hidden; padding:16px 18px var(--nizhnyaya);
+    overflow-y:auto; overflow-x:hidden; padding:0 18px var(--nizhnyaya);
   }
   .lenta.bez-nizhney { padding-bottom:18px; }
   .lenta::-webkit-scrollbar { width:8px; }
   .lenta::-webkit-scrollbar-thumb { background:#242a34; border-radius:4px; }
   .lenta::-webkit-scrollbar-thumb:hover { background:#313a48; }
 
+  /* Верхний отступ переехал сюда с .lenta: карточка состояния ниже — sticky,
+     и её "top:0" считается от padding-края СКРОЛЛЯЩЕГОСЯ .lenta. Если отступ
+     оставить на .lenta, при долгой прокрутке остаётся спорная полоса над
+     карточкой (браузерная семантика top-padding скролл-контейнера). Обычный
+     padding на нескроллящемся предке такой неоднозначности не даёт — он
+     просто часть потока и уезжает вместе с содержимым. */
+  #karta-svyazi { padding-top:16px; }
+
   .karta { background:var(--karta); border:1px solid var(--gran); border-radius:16px; padding:16px; }
   .karta + .karta, .karta + .polosa, .polosa + .karta { margin-top:12px; }
 
-  /* Состояние: широкая карточка вместо круга на треть экрана. */
+  /* Состояние: широкая карточка вместо круга на треть экрана.
+     sticky — окно открывают ради ответа «я под защитой?», и в момент беды
+     (длинный журнал, развёрнутые подробности) он не должен уезжать за верх
+     при прокрутке. Фон непрозрачный (градиент из двух сплошных цветов) —
+     карточка полностью перекрывает то, что проезжает под ней. */
   .sostoyanie {
     display:flex; align-items:center; gap:14px; padding:18px 16px;
     background:linear-gradient(160deg, var(--karta-verh), var(--karta));
     border:1px solid var(--gran); border-radius:16px; transition:border-color .25s;
+    position:sticky; top:0; z-index:2;
   }
   .sostoyanie .shchit {
     width:52px; height:52px; flex:none; border-radius:14px;
@@ -85,6 +98,10 @@
 
   /* Трафик двумя плитками: цифра крупная, подпись мелкая. */
   .plitki { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+  /* Явный display:grid перебивает встроенное [hidden]{display:none} — та же
+     ловушка, что и у .perekl-ryad: без этого правила скрытые (нечего
+     показывать) плитки всё равно рисовались бы. */
+  .plitki[hidden] { display:none; }
   .plitka { background:var(--karta); border:1px solid var(--gran); border-radius:14px; padding:12px 14px; }
   .plitka .podpis { font-size:11.5px; color:var(--tihiy); display:flex; align-items:center; gap:6px; }
   .plitka .chislo { font-size:18px; font-weight:650; margin-top:5px; font-variant-numeric:tabular-nums; }
@@ -220,8 +237,11 @@
   #zhurnal::-webkit-scrollbar { width:8px; }
   #zhurnal::-webkit-scrollbar-thumb { background:#242a34; border-radius:4px; }
 
-  /* Экран кода — единственный, у него нет нижней панели: центрируем по окну. */
-  #karta-koda { margin-top:52px; }
+  /* Экран кода — единственный, у него нет нижней панели: центрируем по окну.
+     52px + те же 16px, что раньше давал padding-top у .lenta (он переехал в
+     #karta-svyazi ради sticky-карточки состояния) — экран кода этим не
+     затронут, но отступ обязан остаться тем же. */
+  #karta-koda { margin-top:68px; }
   #karta-koda .vstuplenie { font-size:13px; color:var(--tihiy); margin:8px 0 14px; line-height:1.5; }
   #karta-koda h2 { font-size:17px; margin:0; font-weight:650; }
 </style>
@@ -269,13 +289,13 @@
       </div>
     </div>
 
-    <div class="plitki">
+    <div class="plitki" id="plitki">
       <div class="plitka">
         <div class="podpis">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M12 5v14m0 0-5.5-5.5M12 19l5.5-5.5" stroke="#3ddc84"
                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Скачано
+          Скачано за это подключение
         </div>
         <div class="chislo" id="vniz">—</div>
       </div>
@@ -284,7 +304,7 @@
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M12 19V5m0 0L6.5 10.5M12 5l5.5 5.5" stroke="#8b94a4"
                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Отдано
+          Отдано за это подключение
         </div>
         <div class="chislo" id="vverh">—</div>
       </div>
@@ -292,9 +312,10 @@
 
     <div class="beda" id="beda-svyazi"></div>
     <div class="beda" id="zametka"></div>
-    <div class="podpiska" id="podpiska" hidden>
-      <span id="podpiska-imya"></span><span class="srok" id="podpiska-srok"></span>
-    </div>
+    <!-- Точка крепления «наверху»: сюда переезжает .podpiska, когда срок
+         ключа на исходе (obnovit(), ветка dney <= 7) — это единственный
+         случай, когда строку нельзя прятать внизу настроек. -->
+    <div id="mesto-podpiski-verh"></div>
 
     <div id="uzly"></div>
 
@@ -312,6 +333,11 @@
     <button class="tihaya" id="knopka-polnaya" hidden>Включить полную защиту</button>
     <div style="height:8px"></div>
     <button class="tihaya" id="knopka-smenit">Сменить код доступа</button>
+    <!-- Обычное место: ключ доступа читают раз в месяц, ему место рядом со
+         сменой кода, а не между заметкой режима и списком узлов. -->
+    <div class="podpiska" id="podpiska" hidden>
+      <span id="podpiska-imya"></span><span class="srok" id="podpiska-srok"></span>
+    </div>
   </div>
 
   <div style="margin-top:10px">
@@ -469,6 +495,10 @@ async function obnovit() {
 
   $("vniz").textContent = bayty(s.vniz_bayt);
   $("vverh").textContent = bayty(s.vverh_bayt);
+  // «Скачано 0 Б / Отдано 0 Б» — самое дорогое место экрана, а не несёт
+  // ничего, когда защита выключена и трафика не было. Если что-то уже
+  // натекло (например, только что отключились) — плитки остаются.
+  $("plitki").hidden = s.sost !== "rabotaet" && !s.vniz_bayt && !s.vverh_bayt;
   const zametka = $("zametka");
   zametka.textContent = s.zametka || "";
   // Ручной прокси означает, что без вписанного адреса трафик вообще не пойдёт
@@ -477,7 +507,8 @@ async function obnovit() {
       (s.ruchnoy_proksi ? " vnimanie" : " spokoyno");
 
   const est = !!(s.imya || s.do_unix);
-  $("podpiska").hidden = !est;
+  const podpiska = $("podpiska");
+  podpiska.hidden = !est;
   if (est) {
     // Без слова «ключ доступа» строка «Вова … до 15 сентября» — загадка:
     // человек видит своё имя и дату и не знает, что именно кончается.
@@ -487,7 +518,13 @@ async function obnovit() {
         ? (dney !== null && dney <= 7 ? "кончится " : "действует до ")
           + new Date(s.do_unix * 1000).toLocaleDateString("ru-RU",
             {day:"numeric", month:"long"}) : "";
-    $("podpiska").className = "podpiska" + (dney !== null && dney <= 7 ? " istekaet" : "");
+    const istekaet = dney !== null && dney <= 7;
+    podpiska.className = "podpiska" + (istekaet ? " istekaet" : "");
+    // Обычно строка живёт внизу, рядом со сменой кода — её читают раз в
+    // месяц. Когда срок на исходе, она обязана быть наверху, там, где на
+    // неё точно наткнутся, а не спрятана под списком узлов и настройками.
+    if (istekaet) $("mesto-podpiski-verh").after(podpiska);
+    else $("knopka-smenit").after(podpiska);
   }
   $("knopka-polnaya").hidden = !s.mozhno_tun;
 
