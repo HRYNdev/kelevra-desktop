@@ -2,74 +2,279 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
+<meta name="color-scheme" content="dark">
 <title>Kelevra</title>
 <style>
-  :root { --fon:#101216; --karta:#181b21; --tekst:#e8eaee; --tihiy:#8b93a1;
-          --akcent:#3ddc84; --beda:#ff6b6b; }
+  :root {
+    --fon:#0b0d11; --karta:#14171d; --karta-verh:#191d24; --gran:#242a34;
+    --tekst:#e9edf3; --tihiy:#8b94a4; --slabyy:#5f6877;
+    --akcent:#3ddc84; --akcent-tem:#0b1a11;
+    --zhdem:#f0b429; --beda:#ff6b6b;
+    --shapka:56px; --nizhnyaya:98px;
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--fon); color:var(--tekst); font:15px/1.45
-         "Segoe UI", system-ui, sans-serif; display:flex; flex-direction:column;
-         min-height:100vh; padding:22px; gap:16px; }
-  h1 { font-size:19px; margin:0; letter-spacing:.5px; }
-  .karta { background:var(--karta); border-radius:14px; padding:18px; }
-  .krug { width:132px; height:132px; border-radius:50%; margin:6px auto 14px;
-          display:flex; align-items:center; justify-content:center;
-          border:3px solid #2a2f39; color:var(--tihiy); font-size:14px;
-          transition:.25s; text-align:center; padding:10px; }
-  .krug.rabotaet { border-color:var(--akcent); color:var(--akcent);
-                   box-shadow:0 0 26px rgba(61,220,132,.22); }
-  .krug.podnimaem { border-color:#e8c15a; color:#e8c15a; }
-  .krug.slomalos { border-color:var(--beda); color:var(--beda); }
-  button { width:100%; padding:13px; border:0; border-radius:10px; font-size:15px;
-           font-weight:600; cursor:pointer; background:var(--akcent); color:#08130c; }
-  button.seryy { background:#2a2f39; color:var(--tekst); }
-  button:disabled { opacity:.5; cursor:default; }
-  input { width:100%; padding:12px; border-radius:10px; border:1px solid #2a2f39;
-          background:#0d0f13; color:var(--tekst); font-size:15px; letter-spacing:1px; }
-  .tihiy { color:var(--tihiy); font-size:13px; }
-  .beda { color:var(--beda); font-size:13px; white-space:pre-wrap; word-break:break-word; }
-  .ryad { display:flex; justify-content:space-between; margin-top:8px; font-size:13px; }
-  .rastyanut { flex:1; }
-  .uzel { display:flex; align-items:center; gap:10px; width:100%; padding:10px 12px;
-          margin-top:6px; border-radius:10px; border:1px solid #2a2f39; background:#0d0f13;
-          color:var(--tekst); font-size:14px; font-weight:400; cursor:pointer; text-align:left; }
-  .uzel.vybran { border-color:var(--akcent); color:var(--akcent); }
-  .uzel .ms { margin-left:auto; color:var(--tihiy); font-size:12px; }
-  .uzel.vybran .ms { color:var(--akcent); }
+  html, body { height:100%; }
+  body {
+    margin:0; background:var(--fon); color:var(--tekst);
+    font:15px/1.45 "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing:antialiased; overflow:hidden;
+    user-select:none;
+  }
+
+  /* Шапка приклеена сверху, кнопка действия — снизу, а всё, что между ними,
+     прокручивается. Раньше страница просто росла вниз, и на окне 420x660
+     «Сменить код доступа» и журнал уезжали за нижний край. */
+  .shapka {
+    position:fixed; top:0; left:0; right:0; height:var(--shapka); z-index:3;
+    display:flex; align-items:center; gap:10px; padding:0 18px;
+    background:rgba(11,13,17,.92); backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--gran);
+  }
+  .shapka .imya { font-size:16px; font-weight:650; letter-spacing:.3px; }
+  .znachok { display:block; }
+  .chip {
+    margin-left:auto; display:flex; align-items:center; gap:7px;
+    font-size:12px; color:var(--tihiy); padding:5px 10px 5px 8px;
+    border:1px solid var(--gran); border-radius:999px; background:var(--karta);
+  }
+  .tochka { width:7px; height:7px; border-radius:50%; background:var(--slabyy); }
+  .chip.rabotaet .tochka { background:var(--akcent); box-shadow:0 0 8px var(--akcent); }
+  .chip.rabotaet { color:var(--akcent); border-color:rgba(61,220,132,.35); }
+  .chip.podnimaem .tochka { background:var(--zhdem); animation:pulse 1.1s infinite; }
+  .chip.podnimaem { color:var(--zhdem); }
+  .chip.slomalos .tochka { background:var(--beda); }
+  .chip.slomalos { color:var(--beda); }
+  @keyframes pulse { 50% { opacity:.25; } }
+
+  .lenta {
+    position:absolute; top:var(--shapka); bottom:0; left:0; right:0;
+    overflow-y:auto; overflow-x:hidden; padding:16px 18px var(--nizhnyaya);
+  }
+  .lenta.bez-nizhney { padding-bottom:18px; }
+  .lenta::-webkit-scrollbar { width:8px; }
+  .lenta::-webkit-scrollbar-thumb { background:#242a34; border-radius:4px; }
+  .lenta::-webkit-scrollbar-thumb:hover { background:#313a48; }
+
+  .karta { background:var(--karta); border:1px solid var(--gran); border-radius:16px; padding:16px; }
+  .karta + .karta, .karta + .polosa, .polosa + .karta { margin-top:12px; }
+
+  /* Состояние: широкая карточка вместо круга на треть экрана. */
+  .sostoyanie {
+    display:flex; align-items:center; gap:14px; padding:18px 16px;
+    background:linear-gradient(160deg, var(--karta-verh), var(--karta));
+    border:1px solid var(--gran); border-radius:16px; transition:border-color .25s;
+  }
+  .sostoyanie .shchit {
+    width:52px; height:52px; flex:none; border-radius:14px;
+    display:flex; align-items:center; justify-content:center;
+    background:#1d222b; color:var(--slabyy); transition:.25s;
+  }
+  .sostoyanie .zvanie { font-size:19px; font-weight:650; letter-spacing:.2px; }
+  .sostoyanie .pod { font-size:12.5px; color:var(--tihiy); margin-top:3px;
+                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sostoyanie .stolb { min-width:0; }
+  .sostoyanie.rabotaet { border-color:rgba(61,220,132,.4); }
+  .sostoyanie.rabotaet .shchit { background:rgba(61,220,132,.13); color:var(--akcent);
+                                 box-shadow:0 0 24px rgba(61,220,132,.16); }
+  .sostoyanie.rabotaet .zvanie { color:var(--akcent); }
+  .sostoyanie.podnimaem .shchit { background:rgba(240,180,41,.13); color:var(--zhdem); }
+  .sostoyanie.podnimaem .zvanie { color:var(--zhdem); }
+  .sostoyanie.slomalos { border-color:rgba(255,107,107,.4); }
+  .sostoyanie.slomalos .shchit { background:rgba(255,107,107,.13); color:var(--beda); }
+  .sostoyanie.slomalos .zvanie { color:var(--beda); }
+
+  /* Трафик двумя плитками: цифра крупная, подпись мелкая. */
+  .plitki { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+  .plitka { background:var(--karta); border:1px solid var(--gran); border-radius:14px; padding:12px 14px; }
+  .plitka .podpis { font-size:11.5px; color:var(--tihiy); display:flex; align-items:center; gap:6px; }
+  .plitka .chislo { font-size:18px; font-weight:650; margin-top:5px; font-variant-numeric:tabular-nums; }
+
+  .zagolovok-bloka {
+    display:flex; align-items:center; margin:18px 2px 8px;
+    font-size:11.5px; letter-spacing:.9px; text-transform:uppercase; color:var(--slabyy);
+  }
+  .zagolovok-bloka .sprava { margin-left:auto; text-transform:none; letter-spacing:0; font-size:12px; }
+
+  .uzel {
+    display:flex; align-items:center; gap:11px; width:100%; padding:11px 13px;
+    margin-top:8px; border-radius:12px; border:1px solid var(--gran); background:var(--karta);
+    color:var(--tekst); font:inherit; font-size:14px; cursor:pointer; text-align:left;
+    transition:border-color .15s, background .15s;
+  }
+  .uzel:hover:not(:disabled) { background:#191d24; border-color:#313a48; }
+  .uzel.vybran { border-color:rgba(61,220,132,.45); background:rgba(61,220,132,.06); }
+  .uzel.vybran .imya { color:var(--akcent); font-weight:600; }
+  .uzel .signal { width:8px; height:8px; border-radius:50%; flex:none; background:var(--slabyy); }
+  .uzel .signal.bystro { background:var(--akcent); }
+  .uzel .signal.sredne { background:var(--zhdem); }
+  .uzel .signal.medlenno { background:#ef8354; }
+  .uzel .signal.mertv { background:var(--beda); }
+  .uzel .imya { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .uzel .ms { margin-left:auto; color:var(--tihiy); font-size:12px; font-variant-numeric:tabular-nums; }
+  .uzel:disabled { cursor:default; opacity:.75; }
+
+  button {
+    font:inherit; cursor:pointer; border:0; border-radius:12px;
+    -webkit-tap-highlight-color:transparent;
+  }
+  button:focus-visible, input:focus-visible { outline:2px solid var(--akcent); outline-offset:2px; }
+  .glavnaya {
+    width:100%; padding:14px; font-size:15.5px; font-weight:650;
+    background:var(--akcent); color:var(--akcent-tem); transition:.15s;
+  }
+  .glavnaya:hover:not(:disabled) { filter:brightness(1.07); }
+  .glavnaya:active:not(:disabled) { transform:translateY(1px); }
+  /* Разрыв связи — не праздник: гасим кнопку, чтобы самой яркой в окне была
+     та, что защищает, а не та, что выключает. */
+  .glavnaya.opasnaya { background:#1e242e; color:var(--tekst); border:1px solid var(--gran); }
+  .glavnaya.opasnaya:hover:not(:disabled) { border-color:rgba(255,107,107,.5); color:var(--beda); filter:none; }
+  .glavnaya:disabled { opacity:.55; cursor:default; }
+  .tihaya {
+    width:100%; padding:11px; font-size:13.5px; font-weight:500;
+    background:transparent; color:var(--tihiy); border:1px solid var(--gran);
+  }
+  .tihaya:hover { color:var(--tekst); border-color:#313a48; }
+  .ssylka {
+    background:none; border:0; padding:0; color:var(--tihiy); font-size:12px;
+    text-decoration:underline; text-underline-offset:3px;
+  }
+  .ssylka:hover { color:var(--tekst); }
+  .ssylka:disabled { color:var(--slabyy); cursor:default; text-decoration:none; }
+
+  .niz {
+    position:fixed; left:0; right:0; bottom:0; z-index:3; padding:12px 18px 14px;
+    background:linear-gradient(to top, var(--fon) 62%, rgba(11,13,17,0));
+  }
+
+  input {
+    width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--gran);
+    background:#0d1014; color:var(--tekst); font:inherit; font-size:16px; letter-spacing:2px;
+    user-select:text;
+  }
+  input::placeholder { letter-spacing:.5px; color:var(--slabyy); }
+
+  .beda {
+    display:none; margin-top:12px; padding:11px 13px; border-radius:12px;
+    background:rgba(255,107,107,.08); border:1px solid rgba(255,107,107,.28);
+    color:#ffb1b1; font-size:12.5px; line-height:1.45;
+    white-space:pre-wrap; word-break:break-word; user-select:text;
+  }
+  .beda.vidno { display:block; }
+  .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
+  .beda.vnimanie { background:rgba(240,180,41,.09); border-color:rgba(240,180,41,.3); color:#f3cf86; }
+  .podpiska {
+    display:flex; align-items:center; gap:8px; margin-top:12px; padding:11px 13px;
+    border:1px solid var(--gran); border-radius:12px; background:var(--karta);
+    font-size:12.5px; color:var(--tihiy);
+  }
+  .podpiska .srok { margin-left:auto; color:var(--tekst); }
+  .podpiska.istekaet .srok { color:var(--zhdem); }
+
+  #zhurnal {
+    max-height:190px; overflow:auto; margin-top:10px; padding:10px 12px;
+    background:#0d1014; border:1px solid var(--gran); border-radius:12px;
+    font:11.5px/1.45 "Cascadia Mono", Consolas, monospace; color:var(--tihiy);
+    white-space:pre-wrap; word-break:break-word; text-align:left; user-select:text;
+  }
+  #zhurnal::-webkit-scrollbar { width:8px; }
+  #zhurnal::-webkit-scrollbar-thumb { background:#242a34; border-radius:4px; }
+
+  /* Экран кода — единственный, у него нет нижней панели: центрируем по окну. */
+  #karta-koda { margin-top:52px; }
+  #karta-koda .vstuplenie { font-size:13px; color:var(--tihiy); margin:8px 0 14px; line-height:1.5; }
+  #karta-koda h2 { font-size:17px; margin:0; font-weight:650; }
 </style>
 </head>
 <body>
-  <h1>Kelevra</h1>
 
-  <div class="karta" id="karta-koda" hidden>
-    <div class="tihiy" style="margin-bottom:10px">Введите код доступа</div>
-    <input id="pole-koda" placeholder="код" autocomplete="off" spellcheck="false">
-    <div style="height:10px"></div>
-    <button id="knopka-koda">Сохранить</button>
-    <div class="beda" id="beda-koda"></div>
+<div class="shapka">
+  <svg class="znachok" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M12 2.5 4.5 5.6v6.1c0 4.6 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.2 7.5-9.8V5.6L12 2.5Z"
+          stroke="#3ddc84" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="m8.6 12.1 2.4 2.4 4.4-4.6" stroke="#3ddc84" stroke-width="1.8"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <span class="imya">Kelevra</span>
+  <span class="chip" id="chip"><span class="tochka"></span><span id="chip-tekst">—</span></span>
+</div>
+
+<div class="lenta" id="lenta">
+
+  <div id="karta-koda" hidden>
+    <div class="karta">
+      <h2>Код доступа</h2>
+      <div class="vstuplenie">Введите код, который вам выдали. Он сохранится на этом
+        компьютере — вводить каждый раз не нужно.</div>
+      <input id="pole-koda" placeholder="код" autocomplete="off" spellcheck="false">
+      <div style="height:12px"></div>
+      <button class="glavnaya" id="knopka-koda">Сохранить</button>
+      <div class="beda" id="beda-koda"></div>
+    </div>
   </div>
 
-  <div class="karta rastyanut" id="karta-svyazi" hidden>
-    <div class="krug" id="krug">отключено</div>
-    <button id="knopka-svyazi">Подключить</button>
-    <div id="uzly"></div>
-    <div class="ryad"><span class="tihiy">Скачано</span><span id="vniz">—</span></div>
-    <div class="ryad"><span class="tihiy">Отдано</span><span id="vverh">—</span></div>
-    <div class="ryad"><span class="tihiy">Режим</span><span id="rezhim">—</span></div>
-    <div class="ryad"><span class="tihiy" id="podpis">&nbsp;</span><span class="tihiy" id="pid"></span></div>
-    <div class="tihiy" id="zametka" style="margin-top:6px"></div>
-    <div style="height:8px"></div>
-    <button class="seryy" id="knopka-polnaya" hidden>Включить полную защиту</button>
+  <div id="karta-svyazi" hidden>
+    <div class="sostoyanie" id="sostoyanie">
+      <div class="shchit" id="shchit">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 2.5 4.5 5.6v6.1c0 4.6 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.2 7.5-9.8V5.6L12 2.5Z"
+                stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+          <path id="shchit-galka" d="m8.6 12.1 2.4 2.4 4.4-4.6" stroke="currentColor"
+                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="stolb">
+        <div class="zvanie" id="zvanie">отключено</div>
+        <div class="pod" id="podzagolovok">трафик идёт напрямую</div>
+      </div>
+    </div>
+
+    <div class="plitki">
+      <div class="plitka">
+        <div class="podpis">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14m0 0-5.5-5.5M12 19l5.5-5.5" stroke="#3ddc84"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Скачано
+        </div>
+        <div class="chislo" id="vniz">—</div>
+      </div>
+      <div class="plitka">
+        <div class="podpis">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 19V5m0 0L6.5 10.5M12 5l5.5 5.5" stroke="#8b94a4"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Отдано
+        </div>
+        <div class="chislo" id="vverh">—</div>
+      </div>
+    </div>
+
     <div class="beda" id="beda-svyazi"></div>
-    <div style="height:10px"></div>
-    <button class="seryy" id="knopka-smenit">Сменить код доступа</button>
+    <div class="beda" id="zametka"></div>
+    <div class="podpiska" id="podpiska" hidden>
+      <span id="podpiska-imya"></span><span class="srok" id="podpiska-srok"></span>
+    </div>
+
+    <div id="uzly"></div>
+
+    <div class="zagolovok-bloka" id="zag-nastroyki">Настройки</div>
+    <button class="tihaya" id="knopka-polnaya" hidden>Включить полную защиту</button>
+    <div style="height:8px"></div>
+    <button class="tihaya" id="knopka-smenit">Сменить код доступа</button>
   </div>
 
   <div style="margin-top:10px">
-    <button class="seryy" id="knopka-zhurnal">Что-то не так? Показать журнал</button>
-    <pre id="zhurnal" hidden style="max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.35;text-align:left;background:rgba(0,0,0,.25);border-radius:8px;padding:8px;margin-top:8px"></pre>
-    <button class="seryy" id="knopka-kopirovat" hidden>Скопировать журнал</button>
+    <button class="tihaya" id="knopka-zhurnal">Что-то не так? Показать журнал</button>
+    <pre id="zhurnal" hidden></pre>
+    <div style="height:8px"></div>
+    <button class="tihaya" id="knopka-kopirovat" hidden>Скопировать журнал</button>
   </div>
+
+</div>
+
+<div class="niz" id="niz" hidden>
+  <button class="glavnaya" id="knopka-svyazi">Подключить</button>
+</div>
 
 <script>
 const koren = location.pathname.replace(/index\.html$/, "");
@@ -93,67 +298,136 @@ function bayty(n) {
 
 const podpisi = {stoit:"отключено", podnimaem:"подключаюсь", rabotaet:"защищено", slomalos:"ядро упало"};
 
+// Вторая строка карточки состояния: человеку важно не слово «stoit», а что
+// именно сейчас с его трафиком и через какой узел он идёт.
+function podzagolovok(s) {
+  if (s.sost === "rabotaet") {
+    const rezhim = s.rezhim === "tunnel" ? "весь трафик" : "трафик браузеров";
+    return tekushchiyUzel ? rezhim + " · " + tekushchiyUzel : rezhim;
+  }
+  if (s.sost === "podnimaem") return "поднимаю ядро, пара секунд";
+  if (s.sost === "slomalos") return "связь разорвана, журнал ниже";
+  return "трафик идёт напрямую";
+}
+
+function pokazatBedu(uzel, tekst, spokoyno) {
+  uzel.textContent = tekst || "";
+  uzel.classList.toggle("vidno", !!tekst);
+  uzel.classList.toggle("spokoyno", !!spokoyno);
+}
+
+let poslednee = null;
+
 async function obnovit() {
   let s;
   try { s = await api("sostoyanie"); } catch (e) { return; }
+  poslednee = s;
   const nuzhenKod = !s.kod_est || smenaKoda;
   $("karta-koda").hidden = !nuzhenKod;
   $("karta-svyazi").hidden = nuzhenKod;
+  $("niz").hidden = nuzhenKod;
+  $("lenta").classList.toggle("bez-nizhney", nuzhenKod);
 
-  const k = $("krug");
-  k.className = "krug " + s.sost;
-  k.textContent = podpisi[s.sost] || s.sost;
-  $("knopka-svyazi").textContent = s.sost === "rabotaet" ? "Отключить" : "Подключить";
-  $("knopka-svyazi").disabled = s.sost === "podnimaem";
+  $("sostoyanie").className = "sostoyanie " + s.sost;
+  $("zvanie").textContent = podpisi[s.sost] || s.sost;
+  $("podzagolovok").textContent = podzagolovok(s);
+  $("chip").className = "chip " + s.sost;
+  $("chip-tekst").textContent = s.versiya ? "v" + s.versiya : (podpisi[s.sost] || s.sost);
+  $("shchit-galka").style.opacity = s.sost === "rabotaet" ? 1 : .35;
+
+  const knopka = $("knopka-svyazi");
+  knopka.textContent = s.sost === "rabotaet" ? "Отключить" : "Подключить";
+  knopka.classList.toggle("opasnaya", s.sost === "rabotaet");
+  knopka.disabled = s.sost === "podnimaem";
+
   $("vniz").textContent = bayty(s.vniz_bayt);
   $("vverh").textContent = bayty(s.vverh_bayt);
-  $("pid").textContent = s.pid ? "ядро " + s.pid : "";
-  $("podpis").textContent = s.imya || "";
-  $("rezhim").textContent = s.rezhim === "tunnel" ? "весь трафик" : (s.rezhim ? "только прокси" : "—");
-  $("zametka").textContent = s.zametka || "";
+  const zametka = $("zametka");
+  zametka.textContent = s.zametka || "";
+  // Ручной прокси означает, что без вписанного адреса трафик вообще не пойдёт
+  // через Kelevra: такое нельзя показывать серой сноской под цифрами.
+  zametka.className = "beda" + (s.zametka ? " vidno" : "") +
+      (s.ruchnoy_proksi ? " vnimanie" : " spokoyno");
+
+  const est = !!(s.imya || s.do_unix);
+  $("podpiska").hidden = !est;
+  if (est) {
+    $("podpiska-imya").textContent = s.imya || "Ключ доступа";
+    const dney = s.do_unix ? Math.ceil((s.do_unix * 1000 - Date.now()) / 86400000) : null;
+    $("podpiska-srok").textContent = s.do_unix
+        ? "до " + new Date(s.do_unix * 1000).toLocaleDateString("ru-RU",
+            {day:"numeric", month:"long"}) : "";
+    $("podpiska").className = "podpiska" + (dney !== null && dney <= 7 ? " istekaet" : "");
+  }
   $("knopka-polnaya").hidden = !s.mozhno_tun;
-  let beda = s.beda || "";
-  if (s.kachaem_yadro) beda = "Скачиваю ядро, это разово и занимает пару минут…";
-  else if (!s.yadro_est) beda = "Ядро скачается само при первом подключении.";
-  $("beda-svyazi").textContent = beda;
+
+  let beda = s.beda || "", spokoyno = false;
+  if (s.kachaem_yadro) { beda = "Скачиваю ядро — это разово и занимает пару минут."; spokoyno = true; }
+  else if (!s.yadro_est) { beda = "Ядро скачается само при первом подключении."; spokoyno = true; }
+  pokazatBedu($("beda-svyazi"), beda, spokoyno);
 }
 
 // Выбор узла. Список перерисовывается только когда он ДЕЙСТВИТЕЛЬНО изменился:
 // иначе опрос раз в две секунды сбрасывал бы нажатие под пальцем.
 let uzlySlepok = "";
 let zamerIdet = false;
+let tekushchiyUzel = "";  // s.imya — это владелец ключа, узел живёт только в /api/uzly
+
+function signalKlass(u) {
+  if (u.beda) return "mertv";
+  if (!u.zaderzhka) return "";
+  if (u.zaderzhka < 120) return "bystro";
+  if (u.zaderzhka < 250) return "sredne";
+  return "medlenno";
+}
 
 function risovatUzly(gruppy) {
   const koren2 = $("uzly");
   koren2.innerHTML = "";
   for (const g of gruppy) {
+    if (g.seychas && g.seychas !== tekushchiyUzel) {
+      tekushchiyUzel = g.seychas;
+      // Узел приезжает вторым запросом: без этого подпись под «защищено»
+      // висела бы без имени узла до следующего опроса.
+      if (poslednee) $("podzagolovok").textContent = podzagolovok(poslednee);
+    }
     const zag = document.createElement("div");
-    zag.className = "ryad";
-    zag.innerHTML = '<span class="tihiy"></span><span class="tihiy"></span>';
-    zag.children[0].textContent = g.imya;
-    if (g.sam) zag.children[1].textContent = "выбирает сам";
+    zag.className = "zagolovok-bloka";
+    const levo = document.createElement("span");
+    levo.textContent = g.imya;
+    zag.appendChild(levo);
+    if (g.sam) {
+      const pravo = document.createElement("span");
+      pravo.className = "sprava";
+      pravo.textContent = "выбирает сам";
+      zag.appendChild(pravo);
+    }
     koren2.appendChild(zag);
     for (const u of g.uzly) {
       const b = document.createElement("button");
       b.className = "uzel" + (u.imya === g.seychas ? " vybran" : "");
+      const signal = document.createElement("span");
+      signal.className = "signal " + signalKlass(u);
       const imya = document.createElement("span");
+      imya.className = "imya";
       imya.textContent = u.imya;
       const ms = document.createElement("span");
       ms.className = "ms";
       ms.textContent = u.beda ? u.beda : (u.zaderzhka ? u.zaderzhka + " мс" : "");
-      b.append(imya, ms);
-      if (g.sam) { b.disabled = true; b.style.cursor = "default"; }
+      b.append(signal, imya, ms);
+      if (g.sam) b.disabled = true;
       else b.onclick = async () => {
         try { await api("vybrat", {gruppa: g.imya, uzel: u.imya}); uzlySlepok = ""; }
-        catch (e) { $("beda-svyazi").textContent = e.message; }
+        catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
         obnovitUzly();
       };
       koren2.appendChild(b);
     }
     if (!g.sam && g.uzly.length > 1) {
+      const ryad = document.createElement("div");
+      ryad.style.cssText = "margin-top:10px;text-align:right";
       const z = document.createElement("button");
-      z.className = "seryy";
-      z.style.marginTop = "8px";
+      z.className = "ssylka";
       z.textContent = zamerIdet ? "Проверяю…" : "Проверить скорость";
       z.disabled = zamerIdet;
       z.onclick = async () => {
@@ -166,10 +440,11 @@ function risovatUzly(gruppy) {
           }
           zamerIdet = false; uzlySlepok = "zamer"; risovatUzly(gruppy);
           return;
-        } catch (e) { $("beda-svyazi").textContent = e.message; }
+        } catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
         zamerIdet = false; uzlySlepok = ""; obnovitUzly();
       };
-      koren2.appendChild(z);
+      ryad.appendChild(z);
+      koren2.appendChild(ryad);
     }
   }
 }
@@ -185,20 +460,24 @@ async function obnovitUzly() {
 
 $("knopka-koda").onclick = async () => {
   const knopka = $("knopka-koda");
-  knopka.disabled = true; $("beda-koda").textContent = "";
+  knopka.disabled = true; pokazatBedu($("beda-koda"), "");
   try {
     await api("kod", {kod: $("pole-koda").value});
     smenaKoda = false; $("pole-koda").value = "";
-  } catch (e) { $("beda-koda").textContent = e.message; }
+  } catch (e) { pokazatBedu($("beda-koda"), e.message); }
   knopka.disabled = false; obnovit();
 };
+
+$("pole-koda").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("knopka-koda").click();
+});
 
 $("knopka-svyazi").onclick = async () => {
   const knopka = $("knopka-svyazi");
   const bylo = knopka.textContent;
-  knopka.disabled = true; knopka.textContent = "…"; $("beda-svyazi").textContent = "";
+  knopka.disabled = true; knopka.textContent = "…"; pokazatBedu($("beda-svyazi"), "");
   try { await api(bylo === "Отключить" ? "otklyuchit" : "podklyuchit"); }
-  catch (e) { $("beda-svyazi").textContent = e.message; }
+  catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
   knopka.disabled = false; obnovit();
 };
 
@@ -206,11 +485,11 @@ $("knopka-svyazi").onclick = async () => {
 // перезапускается через окно UAC, эта копия закрывается сама.
 $("knopka-polnaya").onclick = async () => {
   const knopka = $("knopka-polnaya");
-  knopka.disabled = true; $("beda-svyazi").textContent = "";
+  knopka.disabled = true; pokazatBedu($("beda-svyazi"), "");
   try {
     const d = await api("polnaya_zashchita", {});
-    if (d.perezapusk) $("beda-svyazi").textContent = "Перезапускаюсь с правами администратора…";
-  } catch (e) { $("beda-svyazi").textContent = e.message; }
+    if (d.perezapusk) pokazatBedu($("beda-svyazi"), "Перезапускаюсь с правами администратора…", true);
+  } catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
   knopka.disabled = false;
 };
 
