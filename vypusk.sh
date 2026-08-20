@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Выпуск версии: приёмка → сборка → тег → релиз с Kelevra.exe.
+#
+# Зачем скриптом. Kelevra обновляется у человека САМА, из последнего релиза
+# этого репозитория. Значит «сделать релиз» — это не публикация файла, а правка
+# прямо на его машине, и делать её руками, по памяти, нельзя: забытый шаг
+# приёмки уезжает к нему целиком. Поэтому приёмка тут не «рекомендуется», а
+# стоит первой и её нельзя пропустить иначе как явным BEZ_PRIYOMKI=1.
+#
+#   GITHUB_TOKEN=… ./vypusk.sh 0.6.1 "что нового, строкой"
+set -eu
+VERSIYA=${1:?нужна версия, например 0.6.1}
+OPISANIE=${2:-}
+KOREN=$(cd "$(dirname "$0")" && pwd)
+REPO=HRYNdev/kelevra-desktop
+TEG="app-v$VERSIYA"
+export PATH="$PATH:/usr/local/go/bin"
+export HOME=${HOME:-/root}
+export GOCACHE=${GOCACHE:-$HOME/.cache/go-build}
+cd "$KOREN"
+
+: "${GITHUB_TOKEN:?нет GITHUB_TOKEN}"
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "✗ в дереве есть неучтённые правки — выпускать нечего или выпустится не то"
+  git status --short
+  exit 1
+fi
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
+  echo "✗ выпуск только с main"; exit 1
+fi
+git fetch -q origin main
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+  echo "✗ main разъехался с origin/main: сперва подтяни"; exit 1
+fi
+
+if [ "${BEZ_PRIYOMKI:-0}" = "1" ]; then
+  echo "⚠ приёмка ПРОПУЩЕНА по BEZ_PRIYOMKI=1 — это уедет на машину человека как есть"
+else
+  echo "── приёмка перед выпуском"
+  bash stend/vse.sh
+fi
+
+echo "── сборка $VERSIYA"
+VYHOD=$(mktemp -d)
+trap 'rm -rf "$VYHOD"' EXIT
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
+  -ldflags "-H=windowsgui -s -w -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$VERSIYA" \
+  -o "$VYHOD/Kelevra.exe" ./cmd/kelevra
+
+# Версия обязана быть ВНУТРИ файла: пустой -X молча оставляет «0.1.0-rabota»,
+# и тогда обновление у человека не сработает — он останется на старой навсегда.
+if ! grep -qa "$VERSIYA" "$VYHOD/Kelevra.exe"; then
+  echo "✗ в собранном exe нет строки $VERSIYA: ldflags не сработали"; exit 1
+fi
+echo "   $(stat -c%s "$VYHOD/Kelevra.exe") байт, версия внутри найдена"
+
+api() { curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+             -H "Accept: application/vnd.github+json" "$@"; }
+
+if api "https://api.github.com/repos/$REPO/releases/tags/$TEG" | grep -q '"tag_name"'; then
+  echo "✗ релиз $TEG уже есть"; exit 1
+fi
+
+echo "── тег и релиз $TEG"
+git tag -f "$TEG" && git push -q "https://x-access-token:$GITHUB_TOKEN@github.com/$REPO.git" "$TEG"
+TELO=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":"Kelevra "+sys.argv[2],"body":sys.argv[3]}))' \
+       "$TEG" "$VERSIYA" "$OPISANIE")
+ID=$(api -X POST "https://api.github.com/repos/$REPO/releases" -d "$TELO" \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
+curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @"$VYHOD/Kelevra.exe" \
+  "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=Kelevra.exe" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   выложено:", d.get("name"), d.get("size"), "байт")'
+
+echo "✓ https://github.com/$REPO/releases/tag/$TEG"
