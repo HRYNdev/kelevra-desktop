@@ -46,6 +46,17 @@ SCENY = {
                             "initialize inbound/tun[0]: configure tun interface: "
                             "permission denied"),
     "6_kachaem": dict(BAZA, kachaem_yadro=True, yadro_est=False),
+    # Автозапуск живёт только на Windows, и облик прячет его ряд целиком по
+    # avtozapusk_podderzhivaetsya. Стенд гоняется на Linux, поэтому без этих
+    # сцен галочку не видит НИКТО — ни я, ни снимок: 20.08 она уехала в
+    # релиз, ни разу не показавшись глазам. Поле подаём руками.
+    "8_avtozapusk_vykl": dict(BAZA, zametka="Ядро на месте, всё готово.",
+                              avtozapusk_podderzhivaetsya=True, avtozapusk_vklyuchen=False),
+    "9_avtozapusk_vkl": dict(BAZA, zametka="Ядро на месте, всё готово.",
+                             avtozapusk_podderzhivaetsya=True, avtozapusk_vklyuchen=True),
+    "10_avtozapusk_ustarela": dict(BAZA, zametka="Ядро на месте, всё готово.",
+                                   avtozapusk_podderzhivaetsya=True, avtozapusk_vklyuchen=True,
+                                   avtozapusk_ustarela=True),
 }
 
 sostoyanie = {"tek": SCENY["2_otklyucheno"]}
@@ -84,9 +95,94 @@ class Ruchki(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+SHIRINA, VYSOTA = 420, 660
+
+# JS-щуп: геометрия каждой видимой интерактивной штуки (кнопки, переключатели)
+# плюс полная высота документа. getBoundingClientRect() меряет РЕАЛЬНОЕ место
+# в окне — то же самое, что видит человек, открыв окно и ничего не тронув
+# (scrollTop=0 — это и есть первый кадр, который на самом деле ловят люди).
+IZMERENIE_JS = """() => {
+  function skryt(el) {
+    if (el.hidden) return true;
+    const st = getComputedStyle(el);
+    if (st.display === "none" || st.visibility === "hidden") return true;
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (p.hidden) return true;
+      const ps = getComputedStyle(p);
+      if (ps.display === "none" || ps.visibility === "hidden") return true;
+    }
+    return false;
+  }
+  const shtuki = [...document.querySelectorAll("button, [role=switch]")]
+    .filter((el) => !skryt(el))
+    .map((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return null;
+      return {
+        imya: (el.id || el.textContent || "").trim().replace(/\\s+/g, " ").slice(0, 70),
+        top: r.top, bottom: r.bottom, left: r.left, right: r.right,
+      };
+    })
+    .filter(Boolean);
+  return {shtuki, scrollHeight: document.documentElement.scrollHeight};
+}"""
+
+
+def proverit_geometriyu(str_, imya_sceny):
+    """Возвращает список бед (строк) для сцены: что уехало и на сколько px.
+
+    Две беды под одним именем «уехал за границы»:
+    1. штука целиком вне холста 420x660 — старый баг без прокрутки (об.
+       662f757), когда страница просто росла вниз;
+    2. штука ВНУТРИ холста, но под зафиксированной снизу панелью («.niz»,
+       z-index:3) — новый баг: «.niz» ловит клики по всему своему
+       прямоугольнику, так что перекрытая кнопка не видна и не тыкается,
+       хотя формально «в окне». Мерим на первом кадре (scrollTop=0) —
+       это и есть то, что видит человек, открыв окно и ничего не тронув.
+    """
+    dannye = str_.evaluate(IZMERENIE_JS)
+    shtuki = dannye["shtuki"]
+    bedy = []
+
+    for sh in shtuki:
+        if sh["left"] < 0:
+            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за левый край '
+                        f'на {-sh["left"]:.0f}px')
+        if sh["right"] > SHIRINA:
+            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за правый край '
+                        f'на {sh["right"] - SHIRINA:.0f}px')
+        if sh["top"] < 0:
+            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за верхний край '
+                        f'на {-sh["top"]:.0f}px')
+        if sh["bottom"] > VYSOTA:
+            bedy.append(f'{imya_sceny}: «{sh["imya"]}» уехал за нижний край '
+                        f'на {sh["bottom"] - VYSOTA:.0f}px (bottom={sh["bottom"]:.0f})')
+
+    # Перекрытие двух интерактивных штук: одна лежит поверх другой (обычно —
+    # зафиксированная снизу панель наезжает на то, что прокручивается). Та,
+    # что снизу по слоям, для человека не существует — не видна и не тыкается,
+    # даже если формально её bottom меньше 660.
+    for i in range(len(shtuki)):
+        for j in range(i + 1, len(shtuki)):
+            a, b = shtuki[i], shtuki[j]
+            verh = max(a["top"], b["top"])
+            niz_ = min(a["bottom"], b["bottom"])
+            levo = max(a["left"], b["left"])
+            pravo = min(a["right"], b["right"])
+            if niz_ > verh and pravo > levo:
+                bedy.append(f'{imya_sceny}: «{a["imya"]}» перекрыт «{b["imya"]}» '
+                            f'на {niz_ - verh:.0f}px по высоте')
+
+    if dannye["scrollHeight"] > VYSOTA:
+        bedy.append(f'{imya_sceny}: документ выше окна на '
+                    f'{dannye["scrollHeight"] - VYSOTA:.0f}px (scrollHeight={dannye["scrollHeight"]:.0f})')
+    return bedy
+
+
 def snyat():
     from playwright.sync_api import sync_playwright
     VYHOD.mkdir(parents=True, exist_ok=True)
+    vse_bedy = []
     with socketserver.TCPServer(("127.0.0.1", 0), Ruchki) as srv:
         port = srv.server_address[1]
         threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -94,20 +190,30 @@ def snyat():
             br = p.chromium.launch()
             for imya, sost in SCENY.items():
                 sostoyanie["tek"] = sost
-                str_ = br.new_page(viewport={"width": 420, "height": 660})
+                str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
                 str_.goto(f"http://127.0.0.1:{port}/index.html")
                 str_.wait_for_timeout(700)
                 if imya == "5_slomalos":  # журнал раскрыт: его видно только так
                     str_.click("#knopka-zhurnal")
                     str_.wait_for_timeout(400)
+                bedy = proverit_geometriyu(str_, imya)
+                vse_bedy.extend(bedy)
                 put = VYHOD / f"{imya}.png"
                 str_.screenshot(path=str(put))
-                print(f"  {put}")
+                znak = "🔴" if bedy else "🟢"
+                print(f"  {znak} {put}")
+                for b in bedy:
+                    print(f"      {b}")
                 str_.close()
             br.close()
         srv.shutdown()
+    return vse_bedy
 
 
 if __name__ == "__main__":
     print(f"облик: {OBLIK}")
-    snyat()
+    bedy = snyat()
+    if bedy:
+        print(f"\nКРАСНО: {len(bedy)} находок уезжают за границы окна {SHIRINA}x{VYSOTA}.")
+        sys.exit(1)
+    print("\nВсе сцены зелёные.")

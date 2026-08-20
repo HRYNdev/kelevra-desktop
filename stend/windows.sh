@@ -65,7 +65,11 @@ fi
 export KELEVRA_YADRO="Z:$(printf '%s' "$STEND" | tr '/' '\\')\\sing-box.exe"
 
 echo "── тесты windows-сборкой ──"
-for p in konfig yadro kopiya podpiska sluzhba; do
+# Список пакетов НЕ перечисляем руками: 20.08 пакет avtozapusk выпал из приёмки
+# молча — на Linux он не собирается (//go:build windows), а в захардкоженном
+# списке его забыли, и тест реестра не исполнился ни разу нигде. Берём всё, что
+# лежит в internal/, чтобы следующий новый пакет не пропал тем же способом.
+for p in $(cd "$KORFN/internal" && ls -d */ 2>/dev/null | tr -d '/'); do
   [ -d "$KORFN/internal/$p" ] || continue
   sborka=$(GOOS=windows GOARCH=amd64 go test -c -o "$STEND/t_$p.exe" "./internal/$p" 2>&1)
   if printf '%s' "$sborka" | grep -q "no test files"; then echo "  $p: тестов нет"; continue; fi
