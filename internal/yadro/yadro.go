@@ -8,10 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -103,29 +105,32 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 
 	cmd := exec.Command(y.Bin, "run", "-c", y.PutKonfiga(), "-D", y.Papka)
 	cmd.Dir = y.Papka
-	log, err := os.Create(filepath.Join(y.Papka, "yadro.log"))
+	zhurnalYadra, err := os.Create(filepath.Join(y.Papka, "yadro.log"))
 	if err != nil {
 		y.zamok.Unlock()
 		return err
 	}
-	cmd.Stdout, cmd.Stderr = log, log
+	cmd.Stdout, cmd.Stderr = zhurnalYadra, zhurnalYadra
 	spryatatOkno(cmd) // на Windows у ядра не должно мигать чёрное окно
 	if err := cmd.Start(); err != nil {
-		log.Close()
+		zhurnalYadra.Close()
 		y.zamok.Unlock()
+		log.Printf("ядро не запустилось: %v", err)
 		return fmt.Errorf("ядро не запустилось: %w", err)
 	}
+	log.Printf("ядро запущено: pid %d, конфиг %s, Clash API %s", cmd.Process.Pid, y.PutKonfiga(), y.api())
 	y.process, y.sost, y.umer = cmd, Podnimaem, make(chan struct{})
 	umer := y.umer
 	y.zamok.Unlock()
 
 	go func() {
 		_ = cmd.Wait()
-		log.Close()
+		zhurnalYadra.Close()
 		y.zamok.Lock()
 		if y.process == cmd { // не мы его остановили — значит упал
 			y.process, y.sost = nil, Slomalos
 			y.poslLog = hvostLoga(filepath.Join(y.Papka, "yadro.log"))
+			log.Printf("ядро упало само: %s", y.poslLog)
 		}
 		y.zamok.Unlock()
 		close(umer)
@@ -137,10 +142,14 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 	for {
 		select {
 		case <-umer:
-			return fmt.Errorf("ядро упало при старте: %s", hvostLoga(filepath.Join(y.Papka, "yadro.log")))
+			hvost := hvostLoga(filepath.Join(y.Papka, "yadro.log"))
+			log.Printf("ядро упало при старте: %s", hvost)
+			return fmt.Errorf("ядро упало при старте: %s", hvost)
 		case <-srok.Done():
 			_ = y.Ostanovit()
-			return fmt.Errorf("ядро не ответило за 45 секунд: %s", hvostLoga(filepath.Join(y.Papka, "yadro.log")))
+			hvost := hvostLoga(filepath.Join(y.Papka, "yadro.log"))
+			log.Printf("ядро не ответило за 45 секунд: %s", hvost)
+			return fmt.Errorf("ядро не ответило за 45 секунд: %s", hvost)
 		case <-time.After(300 * time.Millisecond):
 			if y.Zhivo() {
 				y.zamok.Lock()
@@ -148,6 +157,7 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 				// иначе окно показывает красную строку поверх работающей связи.
 				y.sost, y.poslLog = Rabotaet, ""
 				y.zamok.Unlock()
+				log.Printf("ядро ответило: связь работает")
 				return nil
 			}
 		}
@@ -163,7 +173,9 @@ func (y *Yadro) Ostanovit() error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	log.Printf("останавливаю ядро")
 	if err := zavershit(cmd); err != nil {
+		log.Printf("не смог остановить ядро: %v", err)
 		return err
 	}
 	select {
@@ -236,16 +248,37 @@ func (y *Yadro) Trafik() (*Trafik, error) {
 	return &Trafik{VverhBayt: v.UploadTotal, VnizBayt: v.DownloadTotal}, nil
 }
 
+// cveta — раскраска вывода ядра. В файле и в окне она выглядит абракадаброй
+// вида «[36mINFO[0m»: терминала, который её понимает, у приложения нет.
+var cveta = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
 // hvostLoga — последние строки лога ядра, чтобы показать причину, а не «ошибку».
+//
+// Если ядро само назвало причину падения строкой FATAL или ERROR — показываются
+// именно они: остальное в его логе INFO-шум про интерфейсы и порты, а человеку
+// в окне нужна одна строка, по которой видно, что случилось.
 func hvostLoga(put string) string {
 	b, err := os.ReadFile(put)
 	if err != nil {
 		return ""
 	}
-	if len(b) > 4096 {
-		b = b[len(b)-4096:]
+	if len(b) > 8192 {
+		b = b[len(b)-8192:]
 	}
-	stroki := strings.Split(strings.TrimSpace(string(b)), "\n")
+	chistyy := cveta.ReplaceAllString(strings.TrimSpace(string(b)), "")
+	stroki := strings.Split(chistyy, "\n")
+	var vazhnye []string
+	for _, str := range stroki {
+		if strings.Contains(str, "FATAL") || strings.Contains(str, "ERROR") {
+			vazhnye = append(vazhnye, strings.TrimSpace(str))
+		}
+	}
+	if len(vazhnye) > 0 {
+		if len(vazhnye) > 3 {
+			vazhnye = vazhnye[len(vazhnye)-3:]
+		}
+		return strings.Join(vazhnye, " | ")
+	}
 	if len(stroki) > 6 {
 		stroki = stroki[len(stroki)-6:]
 	}
