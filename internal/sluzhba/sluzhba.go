@@ -18,10 +18,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/avtozapusk"
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
@@ -136,6 +138,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
 	m.HandleFunc(pref+"/api/polnaya_zashchita", s.polnayaZashchita)
+	m.HandleFunc(pref+"/api/avtozapusk", s.avtozapuskRuchka)
 	m.HandleFunc(pref+"/api/uzly", s.uzly)
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
@@ -242,6 +245,14 @@ type otvetSostoyaniya struct {
 	Prava      bool   `json:"prava"`                // запущены ли мы администратором
 	// RuchnoyProksi — система отказалась настроить прокси сама, адрес придётся вписать руками.
 	RuchnoyProksi bool `json:"ruchnoy_proksi,omitempty"`
+	// Автозапуск с Windows. Podderzhivaetsya — ложь на не-Windows сборке (тумблер
+	// там нечестно показывать хоть включённым, хоть выключенным: он ничего не
+	// делает). Ustarela — запись есть, но ведёт на другой .exe (переустановка в
+	// другую папку) — человеку это тоже нужно видеть, а не молчаливое «выключено».
+	AvtozapuskPodderzhivaetsya bool   `json:"avtozapusk_podderzhivaetsya"`
+	AvtozapuskVklyuchen        bool   `json:"avtozapusk_vklyuchen,omitempty"`
+	AvtozapuskUstarela         bool   `json:"avtozapusk_ustarela,omitempty"`
+	AvtozapuskBeda             string `json:"avtozapusk_beda,omitempty"`
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +278,44 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	o.Prava = prava.Est()
 	o.MozhnoTun = k.EstTunnel && !o.Prava
 	o.RuchnoyProksi = k.RuchnoyProksi
+	// runtime.GOOS, а не сам факт ошибки: на не-Windows avtozapusk всегда
+	// отвечает своей заглушкой avtozapusk.Ne, и эту ошибку незачем нести в
+	// окно текстом — там и так спрятан весь блок.
+	o.AvtozapuskPodderzhivaetsya = runtime.GOOS == "windows"
+	if o.AvtozapuskPodderzhivaetsya {
+		vkl, err := avtozapusk.Vklyuchen()
+		if err != nil {
+			o.AvtozapuskBeda = err.Error()
+		} else {
+			o.AvtozapuskVklyuchen = vkl
+			if vkl {
+				if ust, err := avtozapusk.Ustarela(); err == nil {
+					o.AvtozapuskUstarela = ust
+				}
+			}
+		}
+	}
 	otdat(w, o, nil)
+}
+
+// avtozapuskRuchka включает или выключает запуск Kelevra вместе с Windows.
+// Повторное «включить» на устаревшей записи — это и есть починка: Vklyuchit
+// перезаписывает путь на нынешний .exe.
+func (s *Sluzhba) avtozapuskRuchka(w http.ResponseWriter, r *http.Request) {
+	var vhod struct {
+		Vklyuchit bool `json:"vklyuchit"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
+		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		return
+	}
+	var err error
+	if vhod.Vklyuchit {
+		err = avtozapusk.Vklyuchit()
+	} else {
+		err = avtozapusk.Vyklyuchit()
+	}
+	otdat(w, map[string]any{"gotovo": true}, err)
 }
 
 // kod принимает код доступа, качает по нему конфиг и запоминает код,

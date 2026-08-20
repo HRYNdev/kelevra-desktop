@@ -95,6 +95,30 @@
   }
   .zagolovok-bloka .sprava { margin-left:auto; text-transform:none; letter-spacing:0; font-size:12px; }
 
+  /* Переключатель автозапуска: строка-карточка вместо чекбокса, чтобы попасть
+     в общий тёмный стиль настроек. */
+  .perekl-ryad {
+    display:flex; align-items:center; gap:10px; margin-top:8px;
+    padding:11px 13px; border:1px solid var(--gran); border-radius:12px; background:var(--karta);
+  }
+  /* Явный display:flex у .perekl-ryad перебивает встроенное [hidden]{display:none} —
+     без этого правила скрытый (не-Windows) тумблер всё равно рисовался бы. */
+  .perekl-ryad[hidden] { display:none; }
+  .perekl-ryad .perekl-tekst { font-size:13.5px; flex:1; min-width:0; }
+  .perekl {
+    flex:none; width:40px; height:24px; padding:0; border-radius:999px;
+    background:#242a34; position:relative; transition:background .15s;
+  }
+  .perekl .knob {
+    position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
+    background:var(--tihiy); transition:left .15s, background .15s;
+  }
+  .perekl.vklyuchen { background:rgba(61,220,132,.32); }
+  .perekl.vklyuchen .knob { left:18px; background:var(--akcent); }
+  .perekl.ustarela { background:rgba(240,180,41,.32); }
+  .perekl.ustarela .knob { background:var(--zhdem); }
+  .perekl:disabled { opacity:.55; cursor:default; }
+
   .uzel {
     display:flex; align-items:center; gap:11px; width:100%; padding:11px 13px;
     margin-top:8px; border-radius:12px; border:1px solid var(--gran); background:var(--karta);
@@ -258,6 +282,14 @@
     <div id="uzly"></div>
 
     <div class="zagolovok-bloka" id="zag-nastroyki">Настройки</div>
+    <div class="perekl-ryad" id="ryad-avtozapusk" hidden>
+      <span class="perekl-tekst">Запускать вместе с Windows</span>
+      <button class="perekl" id="perekl-avtozapusk" type="button" role="switch" aria-checked="false">
+        <span class="knob"></span>
+      </button>
+    </div>
+    <div class="beda" id="beda-avtozapusk"></div>
+    <div style="height:8px"></div>
     <button class="tihaya" id="knopka-polnaya" hidden>Включить полную защиту</button>
     <div style="height:8px"></div>
     <button class="tihaya" id="knopka-smenit">Сменить код доступа</button>
@@ -360,6 +392,28 @@ async function obnovit() {
     $("podpiska").className = "podpiska" + (dney !== null && dney <= 7 ? " istekaet" : "");
   }
   $("knopka-polnaya").hidden = !s.mozhno_tun;
+
+  // Автозапуск: на не-Windows сборке (стенд, будущий Linux-порт) тумблер
+  // прячем целиком — показывать переключатель, который ничего не делает,
+  // хуже, чем не показывать его вовсе.
+  const ryadAvt = $("ryad-avtozapusk"), bedaAvt = $("beda-avtozapusk");
+  ryadAvt.hidden = !s.avtozapusk_podderzhivaetsya;
+  if (s.avtozapusk_podderzhivaetsya) {
+    const perekl = $("perekl-avtozapusk");
+    perekl.className = "perekl" + (s.avtozapusk_vklyuchen ? " vklyuchen" : "") +
+        (s.avtozapusk_ustarela ? " ustarela" : "");
+    perekl.setAttribute("aria-checked", s.avtozapusk_vklyuchen ? "true" : "false");
+    if (s.avtozapusk_beda) {
+      bedaAvt.textContent = "Автозапуск с Windows: " + s.avtozapusk_beda;
+      bedaAvt.className = "beda vidno";
+    } else if (s.avtozapusk_ustarela) {
+      bedaAvt.textContent = "Автозапуск ведёт на старую копию приложения — нажмите переключатель, чтобы починить.";
+      bedaAvt.className = "beda vidno vnimanie";
+    } else {
+      bedaAvt.className = "beda";
+      bedaAvt.textContent = "";
+    }
+  }
 
   let beda = s.beda || "", spokoyno = false;
   if (s.kachaem_yadro) { beda = "Скачиваю ядро — это разово и занимает пару минут."; spokoyno = true; }
@@ -491,6 +545,21 @@ $("knopka-polnaya").onclick = async () => {
     if (d.perezapusk) pokazatBedu($("beda-svyazi"), "Перезапускаюсь с правами администратора…", true);
   } catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
   knopka.disabled = false;
+};
+
+// Клик всегда делает «правильную» вещь для того, что видно на экране:
+// выключено → включить, включено и свежо → выключить, включено но
+// устарело → включить заново (Vklyuchit перезаписывает путь).
+$("perekl-avtozapusk").onclick = async () => {
+  const perekl = $("perekl-avtozapusk");
+  const vklyuchit = !poslednee || !poslednee.avtozapusk_vklyuchen || poslednee.avtozapusk_ustarela;
+  perekl.disabled = true;
+  try { await api("avtozapusk", {vklyuchit}); }
+  catch (e) {
+    $("beda-avtozapusk").textContent = "Автозапуск с Windows: " + e.message;
+    $("beda-avtozapusk").className = "beda vidno";
+  }
+  perekl.disabled = false; obnovit();
 };
 
 $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
