@@ -7,8 +7,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"syscall"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
@@ -23,6 +25,12 @@ func main() {
 	defer zakryt()
 	defer lovitPaniku(putZhurnala)
 	log.Printf("--- запуск Kelevra %s (%s/%s), данные: %s", podpiska.Versiya, runtime.GOOS, runtime.GOARCH, papka)
+
+	// Свежесть — забота приложения, а не человека: иначе каждая новая сборка
+	// это моё письмо со ссылкой и его ручное «скачай заново».
+	if obnovitsya() {
+		return
+	}
 
 	// Приложение уже работает: открываем его окно, а не поднимаем второе ядро
 	// на те же порты. Для человека двойной запуск выглядит как «показать окно».
@@ -57,8 +65,27 @@ func main() {
 
 	// Окно живёт ровно столько, сколько приложение; после закрытия гасим ядро,
 	// чтобы не оставлять за собой работающий процесс.
-	pokazatOkno(url)
+	//
+	// KELEVRA_BEZ_OKNA — служебный режим без окна: всё то же самое, но вместо
+	// WebView2 приложение просто ждёт сигнала. Нужен там, где окна нет и быть не
+	// может: мой стенд (сборка для Windows под wine) и разбор беды у человека,
+	// у которого окно не открывается вовсе.
+	if os.Getenv("KELEVRA_BEZ_OKNA") == "1" {
+		log.Printf("служебный режим: окна нет, служба слушает %s", url)
+		fmt.Println("KELEVRA-SLUZHBA", url)
+		zhdatSignal()
+	} else {
+		pokazatOkno(url)
+	}
 	_ = s.Yadro.Ostanovit()
+}
+
+// zhdatSignal держит служебный режим живым до Ctrl+C или остановки извне.
+func zhdatSignal() {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+	log.Printf("служебный режим: получен сигнал, останавливаюсь")
 }
 
 // umeret — единственный выход из строя, который видит пользователь.
