@@ -90,10 +90,6 @@ func (s *Sluzhba) perestroit(bezSistemnogoProksi bool) error {
 		return err
 	}
 	s.Yadro.Api, s.Yadro.Sekret = k.ClashAdres, k.ClashSekret
-	// Ядро попросили прописать себя системным прокси только в этом случае
-	// (см. konfig.Prigotovit) — значит, только в этом случае на остановке
-	// систему за ним прибираем сами (Yadro.Ostanovit).
-	s.Yadro.SistemnyProksi = k.Rezhim == konfig.Proksi && !k.RuchnoyProksi
 	s.zamok.Lock()
 	s.kartina = k
 	s.zamok.Unlock()
