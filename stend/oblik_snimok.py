@@ -83,7 +83,7 @@ BAZA = {"versiya": "0.5.3", "kod_est": True, "sost": "stoit",
 SCENY = {
     "1_kod": dict(BAZA, kod_est=False),
     "2_otklyucheno": dict(BAZA),
-    "3_podnimaem": dict(BAZA, sost="podnimaem", imya="Нидерланды 2"),
+    "3_podnimaem": dict(BAZA, sost="podnimaem"),
     "4_rabotaet": dict(BAZA, sost="rabotaet", pid="8124",
                        rezhim="proksi", vniz_bayt=418_365_440, vverh_bayt=21_495_808,
                        mozhno_tun=True, zametka=ZAMETKI["ZametkaBezPrav"]),
@@ -132,6 +132,13 @@ SCENY = {
     "17_srok_na_ishode": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                               do_unix=DO_SKORO, zametka=ZAMETKI["ZametkaVes"]),
 }
+
+# Автозапуск, смена кода и журнал переехали на вкладку «Настройки» (спека
+# 04.08: на «Сети» — только круг, заметка режима, кнопка полной защиты и
+# список узлов). Без переключения вкладки эти сцены снимали бы вкладку
+# «Сеть», где автозапуска попросту нет — то же немое исчезновение, что уже
+# было 20.08 с этим самым переключателем.
+NASTROYKI_SCENY = {"8_avtozapusk_vykl", "9_avtozapusk_vkl", "10_avtozapusk_ustarela"}
 
 sostoyanie = {"tek": SCENY["2_otklyucheno"]}
 
@@ -356,7 +363,7 @@ def proverit_pereliv(str_, imya_sceny):
 
 
 SOSTOYANIE_V_KADRE_JS = """() => {
-  const el = document.getElementById("sostoyanie");
+  const el = document.getElementById("vkladki");
   if (!el.offsetParent) return null;   // скрыт (сцена ввода кода) — нечего мерить
   const lenta = document.getElementById("lenta");
   lenta.scrollTop = lenta.scrollHeight;   // докрутить до конца, как рукой
@@ -367,8 +374,11 @@ SOSTOYANIE_V_KADRE_JS = """() => {
 
 
 def proverit_sostoyanie_v_kadre(str_, imya_sceny):
-    """Карточка состояния держит ответ «я под защитой?» и не должна уезжать
-    из кадра при прокрутке — она sticky (см. .sostoyanie в index.html).
+    """Переключатель вкладок «Сеть»/«Настройки» не должен уезжать из кадра
+    при прокрутке — он sticky (см. .vkladki в index.html). До 21.08 тут же
+    стояла карточка состояния (id="sostoyanie", вырезана по спеке 04.08 —
+    круг вместо карточки), но смысл проверки тот же: без вкладок человек не
+    вернётся с длинного списка узлов или журнала обратно, не прокрутив назад.
 
     Диагноз 20.08: на сцене «сломалось» с открытым журналом лента вырастает
     выше окна, и заголовок статуса уезжал за верхний край — человек в момент
@@ -381,11 +391,99 @@ def proverit_sostoyanie_v_kadre(str_, imya_sceny):
         return []
     bedy = []
     if r["top"] < 0:
-        bedy.append(f"{imya_sceny}: карточка состояния уезжает за верхний край "
+        bedy.append(f"{imya_sceny}: вкладки уезжают за верхний край "
                     f"на {round(-r['top'])}px при прокрутке ленты до конца")
     if r["bottom"] > VYSOTA:
-        bedy.append(f"{imya_sceny}: карточка состояния уезжает за нижний край "
+        bedy.append(f"{imya_sceny}: вкладки уезжают за нижний край "
                     f"на {round(r['bottom'] - VYSOTA)}px")
+    return bedy
+
+
+OBREZKA_JS = """() => {
+  const bedy = [];
+  for (const el of document.querySelectorAll("*")) {
+    if (!el.offsetParent) continue;                       // не виден — не мерим
+    const svoy = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+    if (!svoy) continue;                                  // только листья со СВОИМ текстом
+    const st = getComputedStyle(el);
+    const dx = el.scrollWidth  - el.clientWidth;
+    const dy = el.scrollHeight - el.clientHeight;
+    const tekst = el.textContent.trim().replace(/\\s+/g, " ").slice(0, 40);
+    // Режет только тот, кому нечем прокрутить: overflow:hidden. У ленты
+    // (auto/scroll) переполнение законно — человек докрутит колесом.
+    if (st.overflowX === "hidden" && dx > 2)
+      bedy.push(`«${tekst}» обрезан по ширине на ${dx}px`);
+    else if (st.overflowY === "hidden" && dy > 2)
+      bedy.push(`«${tekst}» обрезан по высоте на ${dy}px`);
+  }
+  return bedy;
+}"""
+
+
+def proverit_obrezku(str_, imya_sceny):
+    """Текст, срезанный многоточием, — это порча, а не «компактно».
+
+    21.08: стенд светил 17 зелёных сцен, а в круге стояло «трафик браузеров ·…»
+    — пара «режим · узел» не влезала в 144px и резалась line-clamp'ом. Ни один
+    из четырёх щупов её не видел: геометрия мерила достижимость кнопок, перелив
+    — уезд ЗА край окна. Обрезка не уезжает никуда, она молча съедает слово
+    внутри своей рамки, и снаружи выглядит как штатная вёрстка.
+
+    Мерим scrollWidth/scrollHeight против client* только там, где overflow
+    скрыт: если у элемента есть прокрутка, переполнение — не потеря.
+    """
+    return [f"{imya_sceny}: {b}" for b in str_.evaluate(OBREZKA_JS)]
+
+
+SLOVO_V_KRUGE_JS = """() => {
+  const serdtse = document.querySelector(".krug-serdtse");
+  // Границу берём у САМОЙ окружности, а не у её обёртки: обёртка 144px, а
+  // круг внутри неё 130 (r=65) — семь пикселей запаса с каждой стороны,
+  // ровно в которых 21.08 и пряталось торчащее слово.
+  const okruzhnost = document.querySelector(".krug-fon");
+  if (!serdtse || !serdtse.offsetParent || !okruzhnost) return [];
+  const k = okruzhnost.getBoundingClientRect();
+  const bedy = [];
+  for (const el of serdtse.children) {
+    if (!el.offsetParent || !el.textContent.trim()) continue;
+    // Мерим САМ ТЕКСТ через Range, а не рамку блока: блок сидит в padding'е
+    // круга и всегда внутри него, а за окружность вылезают именно буквы —
+    // рамка о них не знает и покажет зелень (поймано 21.08 на «не
+    // подключилось»: по блоку 2px, по буквам 20px).
+    const rng = document.createRange(); rng.selectNodeContents(el);
+    const r = rng.getBoundingClientRect();
+    const tekst = el.textContent.trim().replace(/\\s+/g, " ").slice(0, 40);
+    // Окружность вписана в обёртку, поэтому её горизонтальные края — края
+    // обёртки. Текст, вылезший за них, ВИДНО торчащим по бокам круга.
+    if (r.left < k.left - 1 || r.right > k.right + 1)
+      bedy.push(`«${tekst}» торчит за круг на ` +
+                `${Math.round(Math.max(k.left - r.left, r.right - k.right))}px`);
+  }
+  return bedy;
+}"""
+
+
+def proverit_slovo_v_kruge(str_, imya_sceny):
+    """Круг — главная вещь окна, и слово обязано в него влезать.
+
+    21.08: на четырёх сценах беды «не подключилось» торчало за окружность
+    буквами с обеих сторон. Ни щуп обрезки (overflow тут visible — текст не
+    режется, а вылезает), ни щуп перелива (за край ОКНА не уехало) этого не
+    видят: порча живёт между их зонами.
+    """
+    return [f"{imya_sceny}: {b}" for b in str_.evaluate(SLOVO_V_KRUGE_JS)]
+
+
+def kontrol_slova_v_kruge(br, port):
+    """Щуп обязан покраснеть на той самой строке, из-за которой появился."""
+    sostoyanie["tek"] = SCENY["5_slomalos"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.evaluate("() => { document.getElementById('zvanie').textContent = 'не подключилось'; }")
+    str_.wait_for_timeout(200)
+    bedy = proverit_slovo_v_kruge(str_, "контроль-круг")
+    str_.close()
     return bedy
 
 
@@ -413,6 +511,25 @@ def proverit_pokrytie():
     return bedy
 
 
+def kontrol_obrezki(br, port):
+    """Щуп обрезки обязан покраснеть на строке, которой ужали рамку.
+
+    Порчу берём ту самую, из-за которой щуп и появился: возвращаем в круг
+    пару «режим · узел» длиной больше двух строк. Если после такой подмены
+    щуп молчит — молчание на чистых сценах ничего не стоит.
+    """
+    sostoyanie["tek"] = SCENY["4_rabotaet"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.evaluate("() => { document.getElementById('podzagolovok').textContent = "
+                  "'трафик браузеров · Нидерланды 2'; }")
+    str_.wait_for_timeout(200)
+    bedy = proverit_obrezku(str_, "контроль-обрезка")
+    str_.close()
+    return bedy
+
+
 def kontrol_pereliva(br, port):
     """Щуп перелива обязан покраснеть, если строке запретить перенос."""
     sostoyanie["tek"] = SCENY["16_dlinnoe_imya"]
@@ -427,10 +544,15 @@ def kontrol_pereliva(br, port):
 
 
 def kontrol_sostoyaniya(br, port):
-    """Sticky-щуп обязан покраснеть, если карточку состояния расклеить.
+    """Sticky-щуп обязан покраснеть, если вкладки расклеить.
 
     Проверяем ровно на той сцене, где беда была живой 20.08: «сломалось» с
-    развёрнутым журналом — там лента вырастает выше окна. Снимаем sticky
+    развёрнутым журналом — там лента вырастает выше окна. Журнал с 21.08
+    живёт на вкладке «Настройки» (спека 04.08), туда и переключаемся перед
+    кликом. На этой сцене вкладка «Настройки» короче окна (автозапуска нет —
+    сборка не Windows, журнал — 4 строки), поэтому сама по себе не
+    прокручивается — добавляем безобидный распорный блок, чтобы получить ту
+    же длинную ленту, что и на боевом Windows-журнале за день. Снимаем sticky
     вручную (position:static) и смотрим, что проверка это заметит сама, без
     моей памятливости.
     """
@@ -438,9 +560,12 @@ def kontrol_sostoyaniya(br, port):
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
+    str_.click("#vkladka-nastroyki")
     str_.click("#knopka-zhurnal")
     str_.wait_for_timeout(400)
-    str_.add_style_tag(content="#sostoyanie { position: static !important; }")
+    str_.add_style_tag(content="#tab-nastroyki { min-height: 900px; }")
+    str_.wait_for_timeout(200)
+    str_.add_style_tag(content="#vkladki { position: static !important; }")
     str_.wait_for_timeout(200)
     bedy = proverit_sostoyanie_v_kadre(str_, "контроль-sticky")
     str_.close()
@@ -487,9 +612,13 @@ def snyat():
                 str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
                 str_.goto(f"http://127.0.0.1:{port}/index.html")
                 str_.wait_for_timeout(700)
-                if imya == "5_slomalos":  # журнал раскрыт: его видно только так
-                    str_.click("#knopka-zhurnal")
-                    str_.wait_for_timeout(400)
+                if imya in NASTROYKI_SCENY:
+                    str_.click("#vkladka-nastroyki")
+                    str_.wait_for_timeout(200)
+                # Журнал переехал на вкладку «Настройки» (спека 04.08: круг
+                # и ошибка живут на «Сети», журнал — «всё остальное» на
+                # «Настройках») — сцена «сломалось» теперь снимает вкладку
+                # «Сеть» как есть, открытый журнал отдельно бьёт kontrol_sostoyaniya().
                 # Снимок ПЕРВЫМ: щуп крутит страницу, а глазам нужен первый
                 # кадр — то, что человек видит, ничего не тронув.
                 put = VYHOD / f"{imya}.png"
@@ -497,6 +626,8 @@ def snyat():
                 bedy = proverit_geometriyu(str_, imya)
                 bedy += proverit_zhargon(str_, imya)
                 bedy += proverit_pereliv(str_, imya)
+                bedy += proverit_obrezku(str_, imya)
+                bedy += proverit_slovo_v_kruge(str_, imya)
                 bedy += proverit_sostoyanie_v_kadre(str_, imya)
                 if imya in ZHDEM_V_OKNE:
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
@@ -521,41 +652,36 @@ def snyat():
             if not pokrytie:
                 print(f"  🈯 заметки окна: {len(ZAMETKI)} из {len(ZAMETKI)} взяты "
                       "из konfig.go и показаны на снимках")
-            kontrol = kontrol_shchupa(br, port)
-            kontrol_zh = kontrol_zhargona(br, port)
-            kontrol_per = kontrol_pereliva(br, port)
-            kontrol_sost = kontrol_sostoyaniya(br, port)
+            kontroli = {
+                "круга": (kontrol_slova_v_kruge(br, port),
+                          "слово, торчащее за окружность, его не разбудило"),
+                "обрезки": (kontrol_obrezki(br, port),
+                            "строка, которой ужали рамку, его не разбудила"),
+                "sticky": (kontrol_sostoyaniya(br, port),
+                           "расклеенная карточка состояния его не разбудила"),
+                "перелива": (kontrol_pereliva(br, port),
+                             "строка, которой запретили перенос, его не разбудила"),
+                "жаргона": (kontrol_zhargona(br, port),
+                            "жаргонная строка в окне его не разбудила"),
+                "достижимости": (kontrol_shchupa(br, port),
+                                 "на заведомо испорченной странице он смолчал"),
+            }
             br.close()
         srv.shutdown()
-    return vse_bedy, kontrol, kontrol_zh, kontrol_per, kontrol_sost
+    return vse_bedy, kontroli
 
 
 if __name__ == "__main__":
     print(f"облик: {OBLIK}")
-    bedy, kontrol, kontrol_zh, kontrol_per, kontrol_sost = snyat()
-    if kontrol_sost:
-        print(f"\n  🧪 контроль sticky: щуп видит порчу — {kontrol_sost[0]}")
-    else:
-        print("\n🔴 ЩУП STICKY МЁРТВ: расклеенная карточка состояния его не разбудила.")
-        sys.exit(2)
-    if kontrol_per:
-        print(f"\n  🧪 контроль перелива: щуп видит порчу — {kontrol_per[0]}")
-    else:
-        print("\n🔴 ЩУП ПЕРЕЛИВА МЁРТВ: строка, которой запретили перенос, его не разбудила.")
-        sys.exit(2)
-    if kontrol_zh:
-        print(f"\n  🧪 контроль жаргона: гейт видит порчу — {kontrol_zh[0]}")
-    else:
-        print("\n🔴 ГЕЙТ ЖАРГОНА МЁРТВ: жаргонная строка в окне его не разбудила.")
-        sys.exit(2)
-    if kontrol:
-        print(f"\n  🧪 контроль: щуп видит порчу ({len(kontrol)} находок), например:")
-        print(f"      {kontrol[0]}")
-    else:
-        print("\n🔴 ЩУП МЁРТВ: на заведомо испорченной странице он смолчал. "
-              "Зелень остальных сцен ничего не доказывает.")
-        sys.exit(2)
+    bedy, kontroli = snyat()
+    for imya, (nashel, pochemu) in kontroli.items():
+        if nashel:
+            print(f"\n  🧪 контроль {imya}: щуп видит порчу — {nashel[0]}")
+        else:
+            print(f"\n🔴 ЩУП «{imya.upper()}» МЁРТВ: {pochemu}. "
+                  "Зелень остальных сцен ничего не доказывает.")
+            sys.exit(2)
     if bedy:
-        print(f"\nКРАСНО: {len(bedy)} кнопок не достать в окне {SHIRINA}x{VYSOTA}.")
+        print(f"\nКРАСНО: {len(bedy)} бед в окне {SHIRINA}x{VYSOTA}.")
         sys.exit(1)
     print("\nВсе сцены зелёные.")
