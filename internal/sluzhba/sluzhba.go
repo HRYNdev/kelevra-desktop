@@ -165,16 +165,33 @@ func (s *Sluzhba) zhurnal(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-// uzly — какие группы выходов есть у работающего ядра и что в них выбрано.
-// Пока ядро стоит, спрашивать некого: отдаём пустой список, а не ошибку.
+// uzly — какие группы выходов есть у ядра и что в них выбрано.
+//
+// Пока ядро работает, спрашиваем сам Clash API — это правда с точностью до
+// секунды. Пока оно стоит, спросить некого, но список узлов — не тайна: он
+// часть конфига, который уже лежит на диске (PerestroitKonfig пишет его при
+// каждом сохранении кода доступа, до всякого «Подключить»). Раньше в этом
+// состоянии окно отдавало пустой список и человек видел 300px пустоты вместо
+// списка (хозяин, снимок 21.08) — здесь показываем ту же конфигурацию, только
+// без задержек: их взять неоткуда без живого ядра.
 func (s *Sluzhba) uzly(w http.ResponseWriter, r *http.Request) {
-	if s.Yadro.Sost() != yadro.Rabotaet {
-		otdat(w, map[string]any{"gruppy": []any{}}, nil)
+	if s.Yadro.Sost() == yadro.Rabotaet {
+		g, err := s.Yadro.Gruppy()
+		if err != nil {
+			otdat(w, nil, err)
+			return
+		}
+		otdat(w, map[string]any{"gruppy": g}, nil)
 		return
 	}
-	g, err := s.Yadro.Gruppy()
+	syroy, err := os.ReadFile(s.Yadro.PutKonfiga())
 	if err != nil {
-		otdat(w, nil, err)
+		otdat(w, map[string]any{"gruppy": []any{}}, nil) // код ещё не введён — конфига нет
+		return
+	}
+	g, err := yadro.GruppyStatik(syroy, s.Nastroyki.Uzly)
+	if err != nil {
+		otdat(w, map[string]any{"gruppy": []any{}}, nil) // конфиг битый — не валим окно из-за списка узлов
 		return
 	}
 	otdat(w, map[string]any{"gruppy": g}, nil)
@@ -189,7 +206,49 @@ func (s *Sluzhba) vybrat(w http.ResponseWriter, r *http.Request) {
 		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
 		return
 	}
-	otdat(w, map[string]any{"gotovo": true}, s.Yadro.Vybrat(vhod.Gruppa, vhod.Uzel))
+	if vhod.Gruppa == "" || vhod.Uzel == "" {
+		otdat(w, nil, fmt.Errorf("не сказано, что и на что переключить"))
+		return
+	}
+	var err error
+	// Ядро работает — переключаем прямо сейчас через Clash API. Ядро стоит —
+	// переключать пока нечего, но выбор всё равно обязан запомниться: человек
+	// выбирает узел ДО «Подключить», а не только когда защита уже включена.
+	// podklyuchit() применит сохранённое, как только ядро поднимется.
+	if s.Yadro.Sost() == yadro.Rabotaet {
+		err = s.Yadro.Vybrat(vhod.Gruppa, vhod.Uzel)
+	}
+	if err == nil {
+		s.zapomnitUzel(vhod.Gruppa, vhod.Uzel)
+	}
+	otdat(w, map[string]any{"gotovo": true}, err)
+}
+
+// zapomnitUzel сохраняет выбор человека на диске — единое хранилище что для
+// «выбрал до подключения», что для «выбрал во время работы» (второе тоже
+// стоит запомнить: свежий выбор обязан пережить следующий холодный старт,
+// даже если cache_file ядра почему-то не поднимется).
+func (s *Sluzhba) zapomnitUzel(gruppa, uzel string) {
+	if s.Nastroyki.Uzly == nil {
+		s.Nastroyki.Uzly = map[string]string{}
+	}
+	s.Nastroyki.Uzly[gruppa] = uzel
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("не сохранил выбор узла: %v", err)
+	}
+}
+
+// primenitSohranennyeUzly переносит выбор узла, сделанный раньше (в том числе
+// до самого первого подключения), на только что поднятое ядро: у него своя
+// Clash API появляется именно сейчас, а не раньше. Ошибка одной группы — не
+// повод рушить подключение целиком: профиль мог обновиться, и сохранённое имя
+// узла — устареть.
+func (s *Sluzhba) primenitSohranennyeUzly() {
+	for gruppa, uzel := range s.Nastroyki.Uzly {
+		if err := s.Yadro.Vybrat(gruppa, uzel); err != nil {
+			log.Printf("не применил сохранённый узел %q для группы %q: %v", uzel, gruppa, err)
+		}
+	}
 }
 
 // zamerit гоняет пробу через каждый узел группы. Ошибка одного узла — это его
@@ -414,6 +473,11 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 		// что был на «Отключить» и закрытии окна (хозяин, 20.08), только на
 		// неудачном подключении.
 		proksi.Snyat()
+	} else {
+		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
+		// применяем прямо сейчас: раньше выбор до подключения был декорацией —
+		// список стоял пустым, а нажать было нечего.
+		s.primenitSohranennyeUzly()
 	}
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
