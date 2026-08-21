@@ -46,6 +46,21 @@ cd "$KOREN" || exit 1
 shag "go build" go build ./...
 shag "go test" go test ./...
 
+# TestYadroPrinimaetGotovyyKonfig щупает конфиг настоящим ядром (sing-box
+# check) и МОЛЧА пропускается, если бинаря нет, — `go test ./...` выше
+# зеленеет что с ядром, что без него, а «зелень» без ядра означает лишь
+# «конфиг согласен сам с собой» (та беда, что уже дважды роняла старт у
+# человека: override_android_vpn, store_selected). Здесь, в приёмке, тишина
+# недопустима: нет ядра — красный с прямой строкой, а не молчаливый пропуск.
+shag "ядро настоящее (не пропущен щуп)" bash -c '
+  [ -n "${KELEVRA_YADRO:-}" ] && [ -f "$KELEVRA_YADRO" ] && exit 0
+  for p in "'"$KOREN"'/.stend/dom/yadro/sing-box" "'"$KOREN"'/.stend/sing-box-linux"; do
+    [ -f "$p" ] && exit 0
+  done
+  echo "настоящего ядра нет ни в KELEVRA_YADRO, ни в $KOREN/.stend/{dom/yadro/sing-box,sing-box-linux} — щуп TestYadroPrinimaetGotovyyKonfig пропущен, приёмка это доказательство НЕ считает" >&2
+  exit 1
+'
+
 for put in "$KOREN"/stend/*.sh "$KOREN"/stend/*.py; do
   [ -e "$put" ] || continue
   imya=$(basename "$put")

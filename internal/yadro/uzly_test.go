@@ -115,3 +115,55 @@ func TestZameritMertvyyUzelOtdayotPrichinu(t *testing.T) {
 		t.Fatalf("причина отказа потеряна: %v", err)
 	}
 }
+
+// Форма конфига ядра (outbounds сингбокса), а не ответа Clash API — та же,
+// что кладёт konfig.Prigotovit на диск.
+const konfigOutbounds = `{"outbounds":[
+ {"type":"selector","tag":"Соединение","outbounds":["Нидерланды","Комната"],"default":"Нидерланды"},
+ {"type":"urltest","tag":"Нидерланды","outbounds":["Нидерланды · прямой"]},
+ {"type":"direct","tag":"direct"},
+ {"type":"vless","tag":"Нидерланды · прямой"},
+ {"type":"socks","tag":"Комната"}]}`
+
+// GruppyStatik — единственный способ показать список узлов, пока ядро стоит:
+// спросить Clash API некого. Раньше в этом состоянии окно отдавало пустой
+// список (Вова, снимок 21.08 — 300px пустоты вместо списка).
+func TestGruppyStatikBeretIzKonfigaBezZadershki(t *testing.T) {
+	g, err := GruppyStatik([]byte(konfigOutbounds), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g) != 1 {
+		t.Fatalf("групп %d, ждал одну («Соединение»): %+v", len(g), g)
+	}
+	s := g[0]
+	if s.Imya != "Соединение" || s.Sam {
+		t.Fatalf("группа выбора разобрана неверно: %+v", s)
+	}
+	if s.Seychas != "Нидерланды" {
+		t.Fatalf("без сохранённого выбора обязан взять default из конфига: %+v", s)
+	}
+	if len(s.Uzly) != 2 || s.Uzly[0].Imya != "Нидерланды" || !s.Uzly[0].Gruppa {
+		t.Fatalf("узлы группы разобраны неверно: %+v", s.Uzly)
+	}
+	for _, u := range s.Uzly {
+		if u.Zaderzhka != 0 {
+			// Задержка — это запрос ЧЕРЕЗ ядро; пока оно стоит, спрашивать
+			// некого. Ноль тут — omitempty, окно печатает его как «—», а не
+			// как «0 мс» (0 читался бы как «быстрее всех» — неправда).
+			t.Errorf("у статического узла не может быть замеренной задержки: %+v", u)
+		}
+	}
+}
+
+// Сохранённый человеком выбор (Nastroyki.Uzly) обязан победить default из
+// конфига: иначе выбор «до Подключить» был бы декорацией.
+func TestGruppyStatikSohranennyyVyborPobezhdaetDefault(t *testing.T) {
+	g, err := GruppyStatik([]byte(konfigOutbounds), map[string]string{"Соединение": "Комната"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g[0].Seychas != "Комната" {
+		t.Fatalf("сохранённый выбор не применился: %+v", g[0])
+	}
+}
