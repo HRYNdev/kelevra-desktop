@@ -602,7 +602,12 @@ function signalKlass(u) {
   return "medlenno";
 }
 
+// Задержки берёт только живое ядро (замер — запрос ЧЕРЕЗ него). Пока ядро
+// стоит, список узлов уже виден (та же конфигурация, что и в подключённом
+// состоянии — Вова, снимок 21.08: список пустовал, хотя показывать было что),
+// а вот цифры честно неизвестны. Прочерк вместо тишины или лживого «0 мс».
 function risovatUzly(gruppy) {
+  const podklyucheno = !!(poslednee && poslednee.sost === "rabotaet");
   const koren2 = $("uzly");
   koren2.innerHTML = "";
   for (const g of gruppy) {
@@ -634,7 +639,9 @@ function risovatUzly(gruppy) {
       imya.textContent = u.imya;
       const ms = document.createElement("span");
       ms.className = "ms";
-      ms.textContent = u.beda ? u.beda : (u.zaderzhka ? u.zaderzhka + " мс" : "");
+      ms.textContent = u.beda ? u.beda
+          : u.zaderzhka ? u.zaderzhka + " мс"
+          : podklyucheno ? "" : "—";
       b.append(signal, imya, ms);
       if (g.sam) b.disabled = true;
       else b.onclick = async () => {
@@ -644,7 +651,11 @@ function risovatUzly(gruppy) {
       };
       koren2.appendChild(b);
     }
-    if (!g.sam && g.uzly.length > 1) {
+    // «Проверить скорость» бьёт /api/zamerit, а тот сам стучится в узел ЧЕРЕЗ
+    // ядро — без запущенного ядра он не даст ничего, кроме беды на ровном
+    // месте. Пока ядро стоит, кнопки просто нет: список узлов остаётся, а
+    // мерить нечем и не через что.
+    if (!g.sam && g.uzly.length > 1 && podklyucheno) {
       const ryad = document.createElement("div");
       ryad.style.cssText = "margin-top:10px;text-align:right";
       const z = document.createElement("button");
@@ -673,7 +684,10 @@ function risovatUzly(gruppy) {
 async function obnovitUzly() {
   let d;
   try { d = await api("uzly"); } catch (e) { return; }
-  const slepok = JSON.stringify(d.gruppy);
+  // «rabotaet или нет» — часть слепка: сами группы могут не измениться ни на
+  // байт (тот же список, тот же выбор), а вот доступность замера и подпись
+  // задержки («—» против чисел) зависят именно от этого поля.
+  const slepok = JSON.stringify(d.gruppy) + "|" + (poslednee && poslednee.sost);
   if (slepok === uzlySlepok) return;
   uzlySlepok = slepok;
   risovatUzly(d.gruppy);

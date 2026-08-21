@@ -26,6 +26,20 @@ UZLY = {"gruppy": [{
         {"imya": "Финляндия 1", "beda": "нет ответа"},
     ]}]}
 
+# Пока ядро не работает, настоящий обработчик (internal/sluzhba/sluzhba.go:
+# uzly()) отдаёт список статикой из config.json — те же узлы, что и у живого
+# ядра, но без zaderzhka: замер идёт только запросом ЧЕРЕЗ ядро, а его нет.
+# Ключ "zaderzhka" тут просто отсутствует (как и делает GruppyStatik с omitempty),
+# а не стоит нулём — 0 в окне читался бы как «быстрее всех», это была бы ложь.
+UZLY_OTKLYUCHENO = {"gruppy": [{
+    "imya": "Выбор узла", "sam": False, "seychas": "Нидерланды 2",
+    "uzly": [
+        {"imya": "Нидерланды 1"},
+        {"imya": "Нидерланды 2"},
+        {"imya": "Германия 1"},
+        {"imya": "Финляндия 1"},
+    ]}]}
+
 def zametki_iz_go():
     """Заметки окна — ИЗ konfig.go, а не выдуманные тут.
 
@@ -160,7 +174,7 @@ class Ruchki(http.server.SimpleHTTPRequestHandler):
             return self._json(sostoyanie["tek"])
         if self.path.startswith("/api/uzly"):
             return self._json(UZLY if sostoyanie["tek"]["sost"] == "rabotaet"
-                              else {"gruppy": []})
+                              else UZLY_OTKLYUCHENO)
         if self.path.startswith("/api/zhurnal"):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")

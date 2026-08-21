@@ -167,6 +167,63 @@ func (y *Yadro) Zamerit(ctx context.Context, uzel string) (int, error) {
 	return v.Delay, nil
 }
 
+// GruppyStatik читает группы прямо из конфига на диске, а не у живого ядра:
+// нужна, пока ядро стоит и спросить Clash API некого (окно раньше в этом
+// состоянии показывало пустой список — Вова, снимок 21.08, «300px пустого
+// места»). Задержки взять неоткуда: замер — это запрос через само ядро, а оно
+// не поднято. Zaderzhka остаётся 0 (omitempty), окно печатает такой узел как
+// «—», а не как «0 мс» — ноль тут был бы неправдой (быстрее всех остальных).
+//
+// vybor — выбор человека, сделанный ДО подключения (Sluzhba хранит его в
+// Nastroyki.Uzly, ключ — имя группы). Пуст или не содержит группу — берём
+// «default» из конфига, а нет и его — первый вариант по порядку.
+func GruppyStatik(syroyKonfig []byte, vybor map[string]string) ([]Gruppa, error) {
+	var d struct {
+		Outbounds []struct {
+			Type      string   `json:"type"`
+			Tag       string   `json:"tag"`
+			Outbounds []string `json:"outbounds"`
+			Default   string   `json:"default"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(syroyKonfig, &d); err != nil {
+		return nil, err
+	}
+	tipy := make(map[string]string, len(d.Outbounds))
+	for _, o := range d.Outbounds {
+		tipy[o.Tag] = o.Type
+	}
+	var out []Gruppa
+	for _, o := range d.Outbounds {
+		sam := strings.EqualFold(o.Type, "urltest")
+		if !strings.EqualFold(o.Type, "selector") && !sam {
+			continue
+		}
+		// Та же оговорка, что и в Gruppy(): группа-автоматика с единственным
+		// вариантом нечего переключать, показывать её нечего.
+		if sam && len(o.Outbounds) < 2 {
+			continue
+		}
+		seychas := vybor[o.Tag]
+		if seychas == "" {
+			seychas = o.Default
+		}
+		if seychas == "" && len(o.Outbounds) > 0 {
+			seychas = o.Outbounds[0]
+		}
+		g := Gruppa{Imya: o.Tag, Seychas: seychas, Sam: sam}
+		for _, n := range o.Outbounds {
+			g.Uzly = append(g.Uzly, Uzel{
+				Imya:   n,
+				Gruppa: strings.EqualFold(tipy[n], "selector") || strings.EqualFold(tipy[n], "urltest"),
+			})
+		}
+		out = append(out, g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Imya < out[j].Imya })
+	return out, nil
+}
+
 func poslednyaya(h []struct {
 	Delay int `json:"delay"`
 }) int {
