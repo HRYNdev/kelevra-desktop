@@ -61,6 +61,11 @@ type Nastroyki struct {
 	DeviceID      string `json:"device_id"`     // постоянный идентификатор устройства
 	Avtopodklyuch bool   `json:"avtopodklyuch"` // подключаться сразу при запуске
 	ObnovlyatMin  int    `json:"obnovlyat_min"` // как часто перекачивать профиль, минут
+	// Uzly — выбор узла в каждой группе (ключ — имя группы), сделанный из окна.
+	// Пока ядро работает, тот же выбор помнит само ядро (cache_file в профиле,
+	// см. konfig.zapomnitVybor) — но ЭТО хранилище живёт и когда ядро ещё не
+	// запускалось ни разу: без него выбор «до Подключить» был бы декорацией.
+	Uzly map[string]string `json:"uzly,omitempty"`
 }
 
 var zamok sync.Mutex
