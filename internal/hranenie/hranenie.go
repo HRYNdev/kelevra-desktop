@@ -16,14 +16,23 @@ import (
 
 // Papka — корень данных приложения.
 // Windows: %LOCALAPPDATA%\Kelevra, остальное: ~/.local/share/kelevra (для отладки на сервере).
+//
+// KELEVRA_DIR перекрывает всё и на ЛЮБОЙ системе. Так было не всегда: до 22.08
+// на Windows первым стояло %LOCALAPPDATA%, и переменная там не значила ничего.
+// Из-за этого windows-тесты, которые честно ставят себе t.TempDir(), все до
+// единого писали в ЖИВУЮ папку приложения: `nastroyki.json` в стенде накопил
+// `"uzly": {"Соединение": "Комната"}` от одного теста, и следующий прогон
+// другого теста читал этот чужой выбор вместо профиля (стенд краснел на
+// TestUzlySoStatikaPokaYadroStoit). На настоящей машине это означало бы, что
+// прогон тестов затирает человеку его собственные настройки и профиль.
 func Papka() string {
+	if d := os.Getenv("KELEVRA_DIR"); d != "" {
+		return d
+	}
 	if runtime.GOOS == "windows" {
 		if d := os.Getenv("LOCALAPPDATA"); d != "" {
 			return filepath.Join(d, "Kelevra")
 		}
-	}
-	if d := os.Getenv("KELEVRA_DIR"); d != "" {
-		return d
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
