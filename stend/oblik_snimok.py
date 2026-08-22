@@ -161,6 +161,16 @@ SCENY = {
                                    zametka=ZAMETKI["ZametkaVes"]),
     "20_avtorezhim_neizvestno": dict(BAZA, sost="stoit", avtorezhim_vklyuchen=True,
                                      avtorezhim_obstanovka="неизвестно"),
+    # 22.08: /api/sostoyanie отдавало k.Zametka из последней сборки конфига
+    # независимо от того, поднята ли защита сейчас (sluzhba.go: s.kartina не
+    # чистится в OpustitZashchitu). Человек выключил защиту вручную — не
+    # авторежимом, avtorezhim_vklyuchen=False — и всё равно читал «Защищены
+    # только браузеры», хотя не защищено было НИЧЕГО. rezhim="proksi" тут
+    # нарочно оставлен (сам по себе не враньё: он не показывается, пока
+    # sost != rabotaet, — врёт именно zametka), zametka — пустая: ровно то,
+    # что теперь честно отдаёт исправленная ручка.
+    "21_vyklyucheno_vruchnuyu": dict(BAZA, sost="stoit", rezhim="proksi",
+                                     mozhno_tun=True, zametka=""),
 }
 
 # Автозапуск, смена кода и журнал переехали на вкладку «Настройки» (спека
@@ -337,6 +347,28 @@ ZHDEM_AVTOREZHIM = {
     "19_avtorezhim_vne_doma": ["Защищён весь компьютер", "Защиту включил авторежим"],
     "20_avtorezhim_neizvestno": ["ещё смотрит, что это за сеть"],
 }
+
+
+# 22.08: заметка про ОБЪЁМ защиты («Защищены только браузеры», «Защищён весь
+# компьютер» и соседи, ZAMETKI выше — все из konfig.go) переживала выключение
+# защиты молча: s.kartina в sluzhba.go не чистится ни ручным тумблером
+# (OpustitZashchitu), ни авторежимом. Правда только пока защита реально
+# поднята (sost == rabotaet) — иначе человек читает про объём того, чего
+# сейчас нет вовсе.
+def proverit_net_zametki_obema(str_, imya_sceny):
+    """Когда защита не поднята, окно не должно утверждать её объём.
+
+    Сверяем с ZAMETKI из konfig.go, а не с вручную вписанной строкой: новая
+    формулировка заметки поймается тем же щупом, без моей памятливости.
+    """
+    tekst = str_.evaluate("() => document.getElementById('zametka').textContent") or ""
+    bedy = []
+    for imya_zametki, obrazec in ZAMETKI.items():
+        kusok = obrazec.split("%s")[0].strip()
+        if kusok and kusok in tekst:
+            bedy.append(f"{imya_sceny}: защита не поднята, а заметка всё ещё "
+                        f"«{imya_zametki}»: «{tekst}»")
+    return bedy
 
 
 def proverit_avtorezhim(str_, imya_sceny, kuski):
@@ -631,6 +663,23 @@ def kontrol_zhargona(br, port):
     return bedy
 
 
+def kontrol_zametki_obema(br, port):
+    """Щуп обязан покраснеть, если Zametka переживёт выключение защиты.
+
+    Порча — ровно баг 22.08: подсовываем сцену «выключено вручную» с тем
+    самым текстом про объём защиты, который раньше уезжал бы на этот экран
+    (до правки sluzhba.go отдавал бы k.Zametka безусловно). Молчит — щуп мёртв.
+    """
+    sostoyanie["tek"] = dict(SCENY["21_vyklyucheno_vruchnuyu"],
+                             zametka=ZAMETKI["ZametkaBezTunnelya"])
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    bedy = proverit_net_zametki_obema(str_, "контроль-заметка")
+    str_.close()
+    return bedy
+
+
 def kontrol_avtorezhima(br, port):
     """Щуп заметки авторежима обязан покраснеть, если объяснение из неё убрать.
 
@@ -700,6 +749,8 @@ def snyat():
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 if imya in ZHDEM_AVTOREZHIM:
                     bedy += proverit_avtorezhim(str_, imya, ZHDEM_AVTOREZHIM[imya])
+                if sost.get("sost") != "rabotaet":
+                    bedy += proverit_net_zametki_obema(str_, imya)
                 vse_bedy.extend(bedy)
                 znak = "🔴" if bedy else "🟢"
                 print(f"  {znak} {put}")
@@ -736,6 +787,8 @@ def snyat():
                                  "на заведомо испорченной странице он смолчал"),
                 "авторежима": (kontrol_avtorezhima(br, port),
                                "заметка авторежима его не разбудила"),
+                "заметки объёма": (kontrol_zametki_obema(br, port),
+                                   "заметка объёма, пережившая выключение защиты, его не разбудила"),
             }
             br.close()
         srv.shutdown()
