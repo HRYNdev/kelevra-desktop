@@ -346,7 +346,18 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	}
 	k := s.kartina
 	s.zamok.Unlock()
-	o.Rezhim, o.Zametka = string(k.Rezhim), k.Zametka
+	o.Rezhim = string(k.Rezhim)
+	// Zametka описывает ОБЪЁМ защиты («защищены только браузеры» и соседи,
+	// internal/konfig/konfig.go) — правда, только пока защита реально
+	// поднята (API ядра отвечает). k.kartina не чистится, когда защита
+	// опущена — ни ручным тумблером (OpustitZashchitu), ни авторежимом
+	// (avtorezhimKolbek), — так что без этого условия окно продолжало бы
+	// врать про объём защиты, которой в этот момент нет вовсе. Заметка
+	// авторежима (зачем защита опущена) — отдельный текст, живёт в JS
+	// (zametkaAvtorezhima, oblik/index.html) и этой правки не касается.
+	if o.Sost == string(yadro.Rabotaet) {
+		o.Zametka = k.Zametka
+	}
 	o.Prava = prava.Est()
 	o.MozhnoTun = k.EstTunnel && !o.Prava
 	o.RuchnoyProksi = k.RuchnoyProksi
