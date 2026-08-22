@@ -444,6 +444,7 @@ func (s *Sluzhba) ZapustitAvtorezhim(roditelskiy context.Context) {
 	ctx, otmena := context.WithCancel(roditelskiy)
 	s.avtorezhimOtmena = otmena
 	s.avtorezhimEkz = avtorezhim.Novyy()
+	s.avtorezhimEkz.TunnelPodnyat = s.tunnelPodnyat
 	sluzh := &avtorezhim.Sluzhitel{
 		Avtorezhim: s.avtorezhimEkz,
 		Sledchik:   avtorezhim.NovySledchik(),
@@ -465,6 +466,23 @@ func (s *Sluzhba) OstanovitAvtorezhim() {
 	s.avtorezhimOtmena()
 	s.avtorezhimOtmena = nil
 	s.avtorezhimEkz = nil
+}
+
+// tunnelPodnyat — стоит ли сейчас НАШ туннель на пути зондов авторежима.
+// Именно туннель, а не «защита вообще»: в прокси-режиме ядро прописано
+// системным прокси, а зонды авторежима ходят мимо системного прокси
+// (net.Resolver и net.Dialer его не читают) — там они мерят настоящую сеть
+// и слепыми не становятся.
+// Зачем признак нужен — см. avtorezhim.Nablyudeniye.ZondSlep: в туннеле
+// зонды видят подмену нашего же fakeip и решают «дома» где угодно.
+func (s *Sluzhba) tunnelPodnyat() bool {
+	if s.Yadro == nil || s.Yadro.Sost() != yadro.Rabotaet {
+		return false
+	}
+	s.zamok.Lock()
+	rezhim := s.kartina.Rezhim
+	s.zamok.Unlock()
+	return rezhim == konfig.Tunnel
 }
 
 // avtorezhimKolbek — что делать при реальной смене обстановки: дома —
