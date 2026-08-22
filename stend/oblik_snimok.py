@@ -145,6 +145,22 @@ SCENY = {
                             zametka=ZAMETKI["ZametkaVes"]),
     "17_srok_na_ishode": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                               do_unix=DO_SKORO, zametka=ZAMETKI["ZametkaVes"]),
+    # Авторежим (internal/avtorezhim) опускает и поднимает защиту сам, а круг
+    # с подзаголовком об этом ничего не знают — «отключено» / «трафик идёт
+    # напрямую» выглядит ровно как поломка. Три сцены — по три исхода
+    # avtorezhim_obstanovka (internal/avtorezhim/avtorezhim.go:51). Заметка
+    # в «18» нарочно унаследовала СТАРУЮ s.zametka (как оно и бывает: s.kartina
+    # не чистится при отключении, sluzhba.go) — сцена доказывает, что окно её
+    # подменяет, а не показывает вперемешку с тем, что сейчас неправда.
+    "18_avtorezhim_doma": dict(BAZA, sost="stoit", avtorezhim_vklyuchen=True,
+                               avtorezhim_obstanovka="дома",
+                               zametka=ZAMETKI["ZametkaBezTunnelya"]),
+    "19_avtorezhim_vne_doma": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                                   vniz_bayt=204_800_000, vverh_bayt=9_961_472,
+                                   avtorezhim_vklyuchen=True, avtorezhim_obstanovka="вне дома",
+                                   zametka=ZAMETKI["ZametkaVes"]),
+    "20_avtorezhim_neizvestno": dict(BAZA, sost="stoit", avtorezhim_vklyuchen=True,
+                                     avtorezhim_obstanovka="неизвестно"),
 }
 
 # Автозапуск, смена кода и журнал переехали на вкладку «Настройки» (спека
@@ -310,6 +326,23 @@ ZHDEM_V_OKNE = {
     "12_beda_seti": "Не достучались до сервера",
     "13_beda_konfig": "Настройки под твоим кодом доступа не читаются",
 }
+
+
+# Заметка авторежима (id="zametka" — тот же блок, что несёт ZAMETKI выше)
+# обязана назвать ПРИЧИНУ, а не молчать так же, как при поломке или ручном
+# выключении. «19» держит две подстроки разом: доказывает, что новый текст
+# не стирает старую заметку режима защиты («не ломай существующий текст»).
+ZHDEM_AVTOREZHIM = {
+    "18_avtorezhim_doma": ["обход блокировок уже делает роутер", "защита не нужна"],
+    "19_avtorezhim_vne_doma": ["Защищён весь компьютер", "Защиту включил авторежим"],
+    "20_avtorezhim_neizvestno": ["ещё смотрит, что это за сеть"],
+}
+
+
+def proverit_avtorezhim(str_, imya_sceny, kuski):
+    tekst = str_.evaluate("() => document.getElementById('zametka').textContent") or ""
+    return [f"{imya_sceny}: заметка авторежима не сказала «{kusok}» (в блоке: «{tekst}»)"
+            for kusok in kuski if kusok not in tekst]
 
 
 def proverit_okno_bedy(str_, imya_sceny, zhdem):
@@ -598,6 +631,26 @@ def kontrol_zhargona(br, port):
     return bedy
 
 
+def kontrol_avtorezhima(br, port):
+    """Щуп заметки авторежима обязан покраснеть, если объяснение из неё убрать.
+
+    Порча — ровно та, ради которой заметка появилась: авторежим опустил
+    защиту («дома»), а окно молчит об этом так же, как при поломке или
+    ручном выключении. Глушим функцию, которая пишет причину в заметку
+    (zametkaAvtorezhima в index.html), и смотрим, что проверка это заметит
+    сама, без моей памятливости.
+    """
+    sostoyanie["tek"] = SCENY["18_avtorezhim_doma"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.evaluate("async () => { window.zametkaAvtorezhima = () => null; await obnovit(); }")
+    str_.wait_for_timeout(200)
+    bedy = proverit_avtorezhim(str_, "контроль-авторежим", ZHDEM_AVTOREZHIM["18_avtorezhim_doma"])
+    str_.close()
+    return bedy
+
+
 def proverit_perevod(br, port):
     """Каждая примета обязана дать свой заголовок, а не правдоподобный чужой."""
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
@@ -645,6 +698,8 @@ def snyat():
                 bedy += proverit_sostoyanie_v_kadre(str_, imya)
                 if imya in ZHDEM_V_OKNE:
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
+                if imya in ZHDEM_AVTOREZHIM:
+                    bedy += proverit_avtorezhim(str_, imya, ZHDEM_AVTOREZHIM[imya])
                 vse_bedy.extend(bedy)
                 znak = "🔴" if bedy else "🟢"
                 print(f"  {znak} {put}")
@@ -679,6 +734,8 @@ def snyat():
                             "жаргонная строка в окне его не разбудила"),
                 "достижимости": (kontrol_shchupa(br, port),
                                  "на заведомо испорченной странице он смолчал"),
+                "авторежима": (kontrol_avtorezhima(br, port),
+                               "заметка авторежима его не разбудила"),
             }
             br.close()
         srv.shutdown()
