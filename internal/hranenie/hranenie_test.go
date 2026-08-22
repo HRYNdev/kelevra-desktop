@@ -1,6 +1,7 @@
 package hranenie
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -44,5 +45,31 @@ func TestBezPeremennoyWindowsBeretLocalAppData(t *testing.T) {
 
 	if got, want := Papka(), filepath.Join(chuzhaya, "Kelevra"); got != want {
 		t.Fatalf("папка %q вместо %q", got, want)
+	}
+}
+
+// TestZagruzitStaryyFayBezAvtorezhimaDayotVyklyucheno: файл настроек, записанный
+// до появления поля Avtorezhim, не должен ронять Zagruzit — и авторежим на нём
+// обязан читаться выключенным (он сам дёргает VPN пользователя, включать это
+// молча за него нельзя).
+func TestZagruzitStaryyFaylBezAvtorezhimaDayotVyklyucheno(t *testing.T) {
+	t.Setenv("KELEVRA_DIR", t.TempDir())
+	staryy := `{"kod":"abc","device_id":"xyz","avtopodklyuch":true,"obnovlyat_min":30}`
+	if err := os.MkdirAll(Papka(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(putNastroek(), []byte(staryy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := Zagruzit()
+	if err != nil {
+		t.Fatalf("Zagruzit на старом файле без поля avtorezhim упал: %v", err)
+	}
+	if n.Avtorezhim {
+		t.Fatal("Avtorezhim прочитан включённым на файле, где его вообще не было")
+	}
+	if n.Kod != "abc" || n.ObnovlyatMin != 30 {
+		t.Fatalf("остальные поля старого файла не сохранились: %+v", n)
 	}
 }

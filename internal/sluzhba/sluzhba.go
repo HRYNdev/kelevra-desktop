@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
 	"github.com/HRYNdev/kelevra-desktop/internal/avtozapusk"
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
@@ -47,6 +48,13 @@ type Sluzhba struct {
 	klyuch     string
 	kachaemBin bool // идёт скачивание ядра
 	kartina    konfig.Kartina
+
+	// Авторежим (переключение защиты по смене сети) живёт под своим замком,
+	// отдельным от zamok выше: запуск/остановка служителя не должны ждать
+	// того же замка, что держат при пересборке конфига или скачивании ядра.
+	avtorezhimZamok  sync.Mutex
+	avtorezhimOtmena context.CancelFunc // не nil, пока служитель крутится
+	avtorezhimEkz    *avtorezhim.Avtorezhim // тот же экземпляр — источник обстановки для /api/sostoyanie
 }
 
 // Novaya собирает службу на настоящих путях приложения.
@@ -139,6 +147,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
 	m.HandleFunc(pref+"/api/polnaya_zashchita", s.polnayaZashchita)
 	m.HandleFunc(pref+"/api/avtozapusk", s.avtozapuskRuchka)
+	m.HandleFunc(pref+"/api/avtorezhim", s.avtorezhimRuchka)
 	m.HandleFunc(pref+"/api/uzly", s.uzly)
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
@@ -312,6 +321,10 @@ type otvetSostoyaniya struct {
 	AvtozapuskVklyuchen        bool   `json:"avtozapusk_vklyuchen,omitempty"`
 	AvtozapuskUstarela         bool   `json:"avtozapusk_ustarela,omitempty"`
 	AvtozapuskBeda             string `json:"avtozapusk_beda,omitempty"`
+	// Avtorezhim — переключение защиты по смене сети (дома/не дома).
+	// Obstanovka пустая, пока служитель не крутится (Vklyuchen == false).
+	AvtorezhimVklyuchen  bool   `json:"avtorezhim_vklyuchen"`
+	AvtorezhimObstanovka string `json:"avtorezhim_obstanovka,omitempty"`
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +367,12 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.avtorezhimZamok.Lock()
+	o.AvtorezhimVklyuchen = s.Nastroyki.Avtorezhim
+	if s.avtorezhimEkz != nil {
+		o.AvtorezhimObstanovka = s.avtorezhimEkz.Zadvizhka.Tekushcheye().String()
+	}
+	s.avtorezhimZamok.Unlock()
 	otdat(w, o, nil)
 }
 
@@ -375,6 +394,87 @@ func (s *Sluzhba) avtozapuskRuchka(w http.ResponseWriter, r *http.Request) {
 		err = avtozapusk.Vyklyuchit()
 	}
 	otdat(w, map[string]any{"gotovo": true}, err)
+}
+
+// avtorezhimRuchka включает или выключает автоматическое переключение
+// защиты по смене сети (дома/не дома) — по образцу avtozapuskRuchka выше.
+func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
+	var vhod struct {
+		Vklyuchit bool `json:"vklyuchit"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
+		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		return
+	}
+	s.Nastroyki.Avtorezhim = vhod.Vklyuchit
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		otdat(w, nil, err)
+		return
+	}
+	if vhod.Vklyuchit {
+		s.ZapustitAvtorezhim(context.Background())
+	} else {
+		s.OstanovitAvtorezhim()
+	}
+	otdat(w, map[string]any{"gotovo": true}, nil)
+}
+
+// ZapustitAvtorezhim поднимает фонового служителя авторежима (see
+// internal/avtorezhim.Sluzhitel), если он ещё не крутится. Идемпотентно:
+// повторный вызов, пока служитель уже работает, ничего не делает — так
+// вызвать можно и из ручки /api/avtorezhim, и один раз при старте службы
+// (cmd/kelevra/main.go), не заботясь, кто из них подоспел первым.
+func (s *Sluzhba) ZapustitAvtorezhim(roditelskiy context.Context) {
+	s.avtorezhimZamok.Lock()
+	defer s.avtorezhimZamok.Unlock()
+	if s.avtorezhimOtmena != nil {
+		return
+	}
+	ctx, otmena := context.WithCancel(roditelskiy)
+	s.avtorezhimOtmena = otmena
+	s.avtorezhimEkz = avtorezhim.Novyy()
+	sluzh := &avtorezhim.Sluzhitel{
+		Avtorezhim: s.avtorezhimEkz,
+		Sledchik:   avtorezhim.NovySledchik(),
+		Kolbek:     s.avtorezhimKolbek,
+	}
+	log.Printf("авторежим: включаю слежение за сетью")
+	go sluzh.Krutit(ctx)
+}
+
+// OstanovitAvtorezhim гасит служителя авторежима, если он крутится.
+// Идемпотентно так же, как ZapustitAvtorezhim.
+func (s *Sluzhba) OstanovitAvtorezhim() {
+	s.avtorezhimZamok.Lock()
+	defer s.avtorezhimZamok.Unlock()
+	if s.avtorezhimOtmena == nil {
+		return
+	}
+	log.Printf("авторежим: выключаю слежение за сетью")
+	s.avtorezhimOtmena()
+	s.avtorezhimOtmena = nil
+	s.avtorezhimEkz = nil
+}
+
+// avtorezhimKolbek — что делать при реальной смене обстановки: дома —
+// опустить защиту (обход уже делает роутер), вне дома — поднять (нужен
+// полный туннель). Neizvestno нарочно не делает ничего — неизвестность не
+// повод дёргать чужой туннель.
+func (s *Sluzhba) avtorezhimKolbek(ctx context.Context, sost avtorezhim.Sostoyanie) {
+	switch sost {
+	case avtorezhim.Doma:
+		log.Printf("авторежим: обстановка «дома» — опускаю защиту")
+		if err := s.OpustitZashchitu(); err != nil {
+			log.Printf("авторежим: не опустил защиту: %v", err)
+		}
+	case avtorezhim.VneDoma:
+		log.Printf("авторежим: обстановка «вне дома» — поднимаю защиту")
+		if err := s.PodnyatZashchitu(ctx); err != nil {
+			log.Printf("авторежим: не поднял защиту: %v", err)
+		}
+	default:
+		// Neizvestno — ничего не делаем нарочно, см. комментарий выше.
+	}
 }
 
 // kod принимает код доступа, качает по нему конфиг и запоминает код,
@@ -414,22 +514,29 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 	otdat(w, map[string]any{"gotovo": true}, nil)
 }
 
-// podklyuchit поднимает ядро, а если ядра на машине ещё нет — сначала
-// приносит его сам. Пользователь ничего не устанавливает руками.
-func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
+// PodnyatZashchitu поднимает ядро, а если ядра на машине ещё нет — сначала
+// приносит его сам. Общее тело для ручки «Подключить» (podklyuchit) и для
+// авторежима (вызывается из avtorezhimKolbek, когда обстановка стала «вне
+// дома») — раньше это было только внутри HTTP-обработчика, и авторежиму
+// подключиться было некуда.
+//
+// ctx — основа для собственных таймаутов метода (15 минут на скачивание
+// ядра, 70 секунд на его старт); HTTP-обработчик передаёт context.Background()
+// — так же, как было устроено до выноса метода, чтобы поведение ручки не
+// изменилось ни на йоту.
+func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	if !s.Yadro.EstBinar() {
 		s.zamok.Lock()
 		uzhe := s.kachaemBin
 		s.kachaemBin = true
 		s.zamok.Unlock()
 		if uzhe {
-			otdat(w, nil, fmt.Errorf("ядро уже качается"))
-			return
+			return fmt.Errorf("ядро уже качается")
 		}
 		log.Printf("ядра на машине нет, качаю")
-		ctx, otmena := context.WithTimeout(context.Background(), 15*time.Minute)
+		zctx, otmena := context.WithTimeout(ctx, 15*time.Minute)
 		nachalo := time.Now()
-		err := s.Yadro.Zagruzit(ctx)
+		err := s.Yadro.Zagruzit(zctx)
 		otmena()
 		if err == nil {
 			log.Printf("ядро скачано за %s", time.Since(nachalo).Round(time.Second))
@@ -440,20 +547,18 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 		s.kachaemBin = false
 		s.zamok.Unlock()
 		if err != nil {
-			otdat(w, nil, err)
-			return
+			return err
 		}
 	}
 	// Права могли появиться (человек перезапустил приложение администратором) —
 	// пересобираем конфиг перед стартом, иначе режим останется вчерашним.
 	if err := s.PerestroitKonfig(); err != nil {
 		log.Printf("не подготовил конфиг: %v", err)
-		otdat(w, nil, fmt.Errorf("не подготовил конфиг: %w", err))
-		return
+		return fmt.Errorf("не подготовил конфиг: %w", err)
 	}
-	ctx, otmena := context.WithTimeout(context.Background(), 70*time.Second)
+	zctx, otmena := context.WithTimeout(ctx, 70*time.Second)
 	defer otmena()
-	err := s.Yadro.Zapustit(ctx)
+	err := s.Yadro.Zapustit(zctx)
 	// Отказ системы настроить прокси ядро считает поводом упасть. Человеку от
 	// этого одна беда: связи нет вообще. Поднимаем ядро без просьбы к системе
 	// и говорим адрес прокси прямо в окне (проверено живьём: ядро падает
@@ -461,9 +566,9 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 	if err != nil && strings.Contains(err.Error(), "initialize system proxy") {
 		log.Printf("система не дала настроить прокси, поднимаю ядро без этой просьбы")
 		if e := s.perestroit(true); e == nil {
-			ctx2, otmena2 := context.WithTimeout(context.Background(), 70*time.Second)
+			zctx2, otmena2 := context.WithTimeout(ctx, 70*time.Second)
 			defer otmena2()
-			err = s.Yadro.Zapustit(ctx2)
+			err = s.Yadro.Zapustit(zctx2)
 		}
 	}
 	if err != nil {
@@ -479,18 +584,27 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 		// список стоял пустым, а нажать было нечего.
 		s.primenitSohranennyeUzly()
 	}
+	return err
+}
+
+func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
+	err := s.PodnyatZashchitu(context.Background())
 	otdat(w, map[string]any{"gotovo": true}, err)
+}
+
+// OpustitZashchitu останавливает ядро и снимает системный прокси. Общее тело
+// для ручки «Отключить» (otklyuchit) и для авторежима (когда обстановка
+// стала «дома»). Снимаем прокси безусловно: ядро могло умереть само ещё до
+// вызова, запись в реестре всё равно висит.
+func (s *Sluzhba) OpustitZashchitu() error {
+	err := s.Yadro.Ostanovit()
+	proksi.Snyat()
+	return err
 }
 
 func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 	log.Printf("человек нажал «Отключить»")
-	err := s.Yadro.Ostanovit()
-	// Снимаем системный прокси прямо здесь, а не полагаемся на выход из main:
-	// приложение после «Отключить» остаётся открытым, и следующая точка выхода
-	// может случиться нескоро — а сайты должны заработать сразу. Снимаем
-	// безусловно: ядро могло умереть само ещё до нажатия, запись в реестре
-	// всё равно висит.
-	proksi.Snyat()
+	err := s.OpustitZashchitu()
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
 

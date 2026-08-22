@@ -389,7 +389,7 @@
     </div>
 
     <div id="tab-nastroyki" hidden>
-      <div class="zagolovok-bloka" id="zag-avtozapusk" hidden>Приложение</div>
+      <div class="zagolovok-bloka" id="zag-avtozapusk">Приложение</div>
       <div class="perekl-ryad" id="ryad-avtozapusk" hidden>
         <span class="perekl-tekst">Запускать вместе с Windows
           <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
@@ -399,6 +399,13 @@
         </button>
       </div>
       <div class="beda" id="beda-avtozapusk"></div>
+      <div class="perekl-ryad" id="ryad-avtorezhim">
+        <span class="perekl-tekst">Переключать защиту автоматически</span>
+        <button class="perekl" id="perekl-avtorezhim" type="button" role="switch" aria-checked="false">
+          <span class="knob"></span>
+        </button>
+      </div>
+      <div class="beda" id="zametka-avtorezhim"></div>
       <div class="zagolovok-bloka">Доступ</div>
       <button class="tihaya" id="knopka-smenit">Сменить код доступа</button>
 
@@ -611,7 +618,11 @@ async function obnovit() {
   // хуже, чем не показывать его вовсе.
   const ryadAvt = $("ryad-avtozapusk"), bedaAvt = $("beda-avtozapusk"), podpisAvt = $("podpis-ustarela");
   ryadAvt.hidden = !s.avtozapusk_podderzhivaetsya;
-  $("zag-avtozapusk").hidden = ryadAvt.hidden;
+  // Заголовок раздела теперь держит не только автозапуск, но и авторежим
+  // ниже — тот показывается всегда, так что и заголовок больше не прячется
+  // целиком на не-Windows сборке (как было, пока в разделе был только
+  // автозапуск, который целиком платформенный).
+  $("zag-avtozapusk").hidden = false;
   if (s.avtozapusk_podderzhivaetsya) {
     const perekl = $("perekl-avtozapusk");
     perekl.className = "perekl" + (s.avtozapusk_vklyuchen ? " vklyuchen" : "") +
@@ -631,6 +642,20 @@ async function obnovit() {
       bedaAvt.className = "beda";
       bedaAvt.textContent = "";
     }
+  }
+
+  // Авторежим: тумблер сам по себе виден всегда, тихая строка обстановки
+  // под ним — только пока авторежим включён (выключенному нечего показывать:
+  // служитель не крутится, обстановка не считается).
+  const pereklAvtorezhim = $("perekl-avtorezhim"), zametkaAvtorezhim = $("zametka-avtorezhim");
+  pereklAvtorezhim.className = "perekl" + (s.avtorezhim_vklyuchen ? " vklyuchen" : "");
+  pereklAvtorezhim.setAttribute("aria-checked", s.avtorezhim_vklyuchen ? "true" : "false");
+  if (s.avtorezhim_vklyuchen && s.avtorezhim_obstanovka) {
+    zametkaAvtorezhim.textContent = "сейчас: " + s.avtorezhim_obstanovka;
+    zametkaAvtorezhim.className = "beda spokoyno vidno";
+  } else {
+    zametkaAvtorezhim.className = "beda";
+    zametkaAvtorezhim.textContent = "";
   }
 
   let beda = s.beda || "", spokoyno = false;
@@ -790,6 +815,18 @@ $("perekl-avtozapusk").onclick = async () => {
   catch (e) {
     $("beda-avtozapusk").textContent = "Автозапуск с Windows: " + e.message;
     $("beda-avtozapusk").className = "beda vidno";
+  }
+  perekl.disabled = false; obnovit();
+};
+
+$("perekl-avtorezhim").onclick = async () => {
+  const perekl = $("perekl-avtorezhim");
+  const vklyuchit = !poslednee || !poslednee.avtorezhim_vklyuchen;
+  perekl.disabled = true;
+  try { await api("avtorezhim", {vklyuchit}); }
+  catch (e) {
+    $("zametka-avtorezhim").textContent = "Авторежим: " + e.message;
+    $("zametka-avtorezhim").className = "beda vidno";
   }
   perekl.disabled = false; obnovit();
 };
