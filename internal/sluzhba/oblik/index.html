@@ -507,6 +507,30 @@ function perevestiBedu(syroe) {
           delat: "Нажми «Подключить» ещё раз. Если повторяется — открой журнал и пришли его мне."};
 }
 
+// Авторежим сам опускает и поднимает защиту, а круг и подзаголовок ничего
+// об этом не знают: «отключено» / «трафик идёт напрямую» — ровно те же
+// слова, что при поломке или ручном выключении (круг 144px и так на
+// пределе — см. комментарий у podpisi чуть выше, третий смысл в него не
+// внести). Человек, не видя разницы, решает, что приложение сломалось.
+// Показываем причину не в круге, а в заметке под ключом доступа — том же
+// блоке, что уже объясняет режим защиты (ZametkaBezPrav и соседи,
+// internal/konfig/konfig.go).
+function zametkaAvtorezhima(s) {
+  if (!s.avtorezhim_vklyuchen) return null;
+  if (s.avtorezhim_obstanovka === "неизвестно") {
+    return "Авторежим ещё смотрит, что это за сеть.";
+  }
+  if (s.avtorezhim_obstanovka === "дома" && s.sost !== "rabotaet") {
+    return "Вы дома — обход блокировок уже делает роутер, защита не нужна. " +
+           "Она включится сама, как только вы уйдёте из дома.";
+  }
+  if (s.avtorezhim_obstanovka === "вне дома" && s.sost === "rabotaet") {
+    return "Защиту включил авторежим: сеть не похожа на домашнюю.";
+  }
+  return null; // переходные сочетания (например, «дома» с ещё не опущенной
+               // защитой) заметку не трогают — ниже ничего не сказано зря.
+}
+
 // Перерисовываем только когда текст беды ДЕЙСТВИТЕЛЬНО сменился: обновление
 // идёт по таймеру, а раскрытые «подробности» не должны схлопываться каждый тик.
 let bedaNaEkrane = null;
@@ -587,10 +611,20 @@ async function obnovit() {
   knopka.disabled = s.sost === "podnimaem";
 
   const zametka = $("zametka");
-  zametka.textContent = s.zametka || "";
+  const avtoZametka = zametkaAvtorezhima(s);
+  // «Дома» и «неизвестно» подменяют текст целиком, а не дописывают к нему:
+  // s.zametka держится с последней сборки профиля (sluzhba.go, s.kartina не
+  // чистится при отключении) и в эти два состояния попросту неправда — она
+  // же про то, ЧТО защищено, а защиты в этот момент нет вовсе. «Вне дома»
+  // её не отменяет: там s.sost === "rabotaet", защита правда поднята тем
+  // видом, который s.zametka описывает, — туда только дописываем причину.
+  const zametkaTekst = !avtoZametka ? (s.zametka || "")
+      : s.avtorezhim_obstanovka === "вне дома" ? (s.zametka ? s.zametka + " " : "") + avtoZametka
+      : avtoZametka;
+  zametka.textContent = zametkaTekst;
   // Ручной прокси означает, что без вписанного адреса трафик вообще не пойдёт
   // через Kelevra: такое нельзя показывать серой сноской под цифрами.
-  zametka.className = "beda" + (s.zametka ? " vidno" : "") +
+  zametka.className = "beda" + (zametkaTekst ? " vidno" : "") +
       (s.ruchnoy_proksi ? " vnimanie" : " spokoyno");
 
   const est = !!(s.imya || s.do_unix);
