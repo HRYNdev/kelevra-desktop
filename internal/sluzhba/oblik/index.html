@@ -50,7 +50,16 @@
     position:absolute; top:var(--shapka); bottom:0; left:0; right:0;
     overflow-y:auto; overflow-x:hidden; padding:0 18px var(--nizhnyaya);
   }
-  .lenta.bez-nizhney { padding-bottom:18px; }
+  /* Экран кода — единственный без нижней панели, и высота .lenta тут задана
+     жёстко (absolute top/bottom). Центрируем ПО-НАСТОЯЩЕМУ: раньше комментарий
+     ниже обещал «центрируем по окну», а делал margin-top:68px — карточка
+     висела в верхней трети, под ней зияло ~270px пустоты (снимок 1_kod).
+     Карточка кода ~270px при окне 604px — переполнения, при котором flex
+     обрезал бы верх, тут быть не может. */
+  .lenta.bez-nizhney {
+    padding-bottom:18px;
+    display:flex; flex-direction:column; justify-content:center;
+  }
   .lenta::-webkit-scrollbar { width:8px; }
   .lenta::-webkit-scrollbar-thumb { background:#242a34; border-radius:4px; }
   .lenta::-webkit-scrollbar-thumb:hover { background:#313a48; }
@@ -127,10 +136,18 @@
   .krug-blok.slomalos .krug-slovo { color:var(--beda); }
   .krug-blok.stoit .krug-koltso { stroke:var(--slabyy); }
 
+  /* margin 13px, не 2px: слева от текста должен быть тот же отступ, что и у
+     карточек/узлов ниже (их padding 13-16px от края .lenta) — раньше «ВЫБОР
+     УЗЛА» торчал на 11px левее собственного списка, рваный левый край.
+     Цвет — tihiy, не slabyy: у slabyy контраст 3.46:1 на фоне (WCAG требует
+     4.5:1 для текста 11.5px), обмерено формулой относительной яркости. */
   .zagolovok-bloka {
-    display:flex; align-items:center; margin:18px 2px 8px;
-    font-size:11.5px; letter-spacing:.9px; text-transform:uppercase; color:var(--slabyy);
+    display:flex; align-items:center; margin:18px 13px 8px;
+    font-size:11.5px; letter-spacing:.9px; text-transform:uppercase; color:var(--tihiy);
   }
+  /* Тот же капкан, что у .perekl-ryad: явный display:flex перебивает
+     встроенное [hidden]{display:none}, и скрытый заголовок остался бы виден. */
+  .zagolovok-bloka[hidden] { display:none; }
   .zagolovok-bloka .sprava { margin-left:auto; text-transform:none; letter-spacing:0; font-size:12px; }
 
   /* Переключатель автозапуска: строка-карточка вместо чекбокса, чтобы попасть
@@ -179,6 +196,10 @@
   .uzel .signal.mertv { background:var(--beda); }
   .uzel .imya { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .uzel .ms { margin-left:auto; color:var(--tihiy); font-size:12px; font-variant-numeric:tabular-nums; }
+  /* Узел с бедой (сигнал mertv, красная точка) раньше писал текст беды тем же
+     серым, что и обычные мс — глазом не отличить «64 мс» от «нет ответа» без
+     точки. Текст теперь того же цвета, что и точка рядом. */
+  .uzel .ms.mertv { color:var(--beda); }
   .uzel:disabled { cursor:default; opacity:.75; }
 
   button {
@@ -201,6 +222,33 @@
     width:100%; padding:11px; font-size:13.5px; font-weight:500;
     background:transparent; color:var(--tihiy); border:1px solid var(--gran);
   }
+  /* Полная защита — единственное на экране предложение стать защищённее, и
+     карточка над ней прямо показывает пальцем: «нажмите ниже "Включить полную
+     защиту"». Обычная .tihaya красит её СЛАБЕЕ вкладок «Сеть»/«Настройки»:
+     зовущий текст и выключенный вид спорят друг с другом, глаз читает кнопку
+     как недоступную. Даём акцент — заметнее вкладок, но тише круга и главной
+     кнопки внизу, чтобы порядок важности остался прежним. */
+  .tihaya.zovyot {
+    color:var(--akcent); font-weight:600;
+    background:rgba(61,220,132,.07); border-color:rgba(61,220,132,.42);
+  }
+  .tihaya.zovyot:hover:not(:disabled) {
+    background:rgba(61,220,132,.13); border-color:var(--akcent);
+  }
+  /* В настройках .tihaya — пункты списка, а не призыв к действию: ставим их
+     по левому краю, чтобы он совпал со строкой тумблера, заголовками блоков и
+     узлами на соседней вкладке. Раньше надписи стояли по центру, и левый край
+     экрана был рваным. Кнопка полной защиты на вкладке «Сеть» — призыв, она
+     остаётся центрованной. */
+  #tab-nastroyki .tihaya {
+    text-align:left; padding-left:14px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  /* Рамка + текст слева читались как ПОЛЕ ВВОДА. Шеврон возвращает пункту
+     смысл действия — тот же приём, что в списках настроек телефона. */
+  #tab-nastroyki .tihaya::after { content:"\203A"; color:var(--slabyy); font-size:18px; line-height:1; }
+  /* Опять display:flex поверх [hidden] — «Скопировать журнал» скрыт по умолчанию. */
+  #tab-nastroyki .tihaya[hidden] { display:none; }
   .tihaya:hover { color:var(--tekst); border-color:#313a48; }
   .ssylka {
     background:none; border:0; padding:0; color:var(--tihiy); font-size:12px;
@@ -269,7 +317,7 @@
      52px + те же 16px, что раньше давал padding-top у .lenta (он переехал в
      #karta-svyazi ради sticky-карточки состояния) — экран кода этим не
      затронут, но отступ обязан остаться тем же. */
-  #karta-koda { margin-top:68px; }
+  #karta-koda { margin-top:0; }
   #karta-koda .vstuplenie { font-size:13px; color:var(--tihiy); margin:8px 0 14px; line-height:1.5; }
   #karta-koda h2 { font-size:17px; margin:0; font-weight:650; }
 </style>
@@ -335,12 +383,13 @@
       <div class="beda" id="beda-svyazi"></div>
       <div class="beda" id="zametka"></div>
 
-      <button class="tihaya" id="knopka-polnaya" hidden>Включить полную защиту</button>
+      <button class="tihaya zovyot" id="knopka-polnaya" hidden>Включить полную защиту</button>
 
       <div id="uzly"></div>
     </div>
 
     <div id="tab-nastroyki" hidden>
+      <div class="zagolovok-bloka" id="zag-avtozapusk" hidden>Приложение</div>
       <div class="perekl-ryad" id="ryad-avtozapusk" hidden>
         <span class="perekl-tekst">Запускать вместе с Windows
           <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
@@ -350,11 +399,12 @@
         </button>
       </div>
       <div class="beda" id="beda-avtozapusk"></div>
-      <div style="height:8px"></div>
+      <div class="zagolovok-bloka">Доступ</div>
       <button class="tihaya" id="knopka-smenit">Сменить код доступа</button>
 
-      <div style="margin-top:10px">
-        <button class="tihaya" id="knopka-zhurnal">Что-то не так? Показать журнал</button>
+      <div class="zagolovok-bloka">Если что-то не так</div>
+      <div>
+        <button class="tihaya" id="knopka-zhurnal">Показать журнал</button>
         <pre id="zhurnal" hidden></pre>
         <div style="height:8px"></div>
         <button class="tihaya" id="knopka-kopirovat" hidden>Скопировать журнал</button>
@@ -561,6 +611,7 @@ async function obnovit() {
   // хуже, чем не показывать его вовсе.
   const ryadAvt = $("ryad-avtozapusk"), bedaAvt = $("beda-avtozapusk"), podpisAvt = $("podpis-ustarela");
   ryadAvt.hidden = !s.avtozapusk_podderzhivaetsya;
+  $("zag-avtozapusk").hidden = ryadAvt.hidden;
   if (s.avtozapusk_podderzhivaetsya) {
     const perekl = $("perekl-avtozapusk");
     perekl.className = "perekl" + (s.avtozapusk_vklyuchen ? " vklyuchen" : "") +
@@ -638,7 +689,7 @@ function risovatUzly(gruppy) {
       imya.className = "imya";
       imya.textContent = u.imya;
       const ms = document.createElement("span");
-      ms.className = "ms";
+      ms.className = "ms" + (u.beda ? " mertv" : "");
       ms.textContent = u.beda ? u.beda
           : u.zaderzhka ? u.zaderzhka + " мс"
           : podklyucheno ? "" : "—";
