@@ -65,6 +65,25 @@ type Nablyudeniye struct {
 	// EstSet — физическая сеть вообще есть (адаптер поднят, не «нет Wi-Fi и кабеля»).
 	EstSet bool
 
+	// ZondSlep — зонды в этот заход мерили не физическую сеть, а наш же
+	// туннель, и верить им нельзя НИ В ОДНУ сторону.
+	//
+	// Почему так. Домашний отпечаток — это подмена контрольных доменов на
+	// адрес из 198.18.0.0/15 (см. fakeIPPervyy/fakeIPPosledniy). Ровно этот
+	// диапазон стоит в боевом профиле у нашего же ядра
+	// (dns.servers[fakeip].inet4_range = 198.18.0.0/15), и youtube.com с
+	// discord.com — два из трёх контрольных доменов при Nuzhno=2 — входят в
+	// списки, которые ядро в fakeip и заворачивает (rule_set youtube,
+	// discord). Значит при поднятом туннеле DNS-зонд видит подмену не
+	// роутера, а нашу собственную, а прямой зонд ходит наружу ЧЕРЕЗ туннель
+	// и, понятно, проходит. Без этого флага итог такой: вне дома авторежим
+	// решает «дома» и САМ ОПУСКАЕТ защиту, потом зонд (уже честный) говорит
+	// «вне дома», защита поднимается — и так по кругу.
+	// Чем именно кончится, решает даже не наш код, а чужой список правил с
+	// сервера подписки (попал ли туда контрольный домен gosuslugi.ru), — то
+	// есть поведение фичи зависит от файла, который мы не контролируем.
+	ZondSlep bool
+
 	// DnsPriznakDoma — DNS-зонд насчитал подмену на ≥2 из 3 контрольных доменов.
 	DnsPriznakDoma bool
 
@@ -82,6 +101,10 @@ type Nablyudeniye struct {
 func Reshit(n Nablyudeniye) Sostoyanie {
 	switch {
 	case !n.EstSet:
+		return Neizvestno
+	case n.ZondSlep:
+		// Мерили собственный туннель. Неизвестность здесь честнее любой
+		// догадки: молчим и не трогаем защиту, которая уже поднята.
 		return Neizvestno
 	case !n.DnsPriznakDoma:
 		return VneDoma
@@ -114,6 +137,17 @@ type Avtorezhim struct {
 	Dns       DnsProver
 	Trafik    TrafikProver
 	Zadvizhka *Zadvizhka
+
+	// TunnelPodnyat — стоит ли сейчас наш туннель на пути зондов. nil значит
+	// «не стоит» (так собран Novyy: сам по себе пакет про ядро ничего не
+	// знает, признак приносит служба — internal/sluzhba).
+	// Когда возвращает true, зонды в этот заход НЕ спрашиваются вовсе: они
+	// мерили бы наш же туннель (см. Nablyudeniye.ZondSlep), а платить двумя
+	// сетевыми запросами за заведомо негодный ответ незачем.
+	// Важно: в прокси-режиме признак должен быть false — системный прокси
+	// зонды не уважают (net.Dialer и net.Resolver идут мимо него), так что
+	// там они честны.
+	TunnelPodnyat func() bool
 }
 
 // Novyy собирает авторежим с рабочими зондами по умолчанию.
@@ -138,6 +172,16 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool) (nablyudeniye Nably
 		n := Nablyudeniye{EstSet: false}
 		izm := a.Zadvizhka.Predlozhit(Reshit(n))
 		return n, izm, a.Zadvizhka.Tekushcheye()
+	}
+
+	if a.TunnelPodnyat != nil && a.TunnelPodnyat() {
+		// Задвижке не предлагаем НИЧЕГО, даже Neizvestno: слепой заход — это
+		// отсутствие наблюдения, а не наблюдение «не знаю». Предложи мы
+		// Neizvestno — три слепых захода подряд (шесть минут по страховочному
+		// тикеру) сдвинули бы обстановку, окно показало бы человеку
+		// «неизвестно» вместо честного «вне дома», а из этой ямы авторежим
+		// уже не выбрался бы: туннель-то поднят, следующий заход тоже слепой.
+		return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
 	}
 
 	dnsDoma, err := a.Dns.DomaPoDns(ctx)
