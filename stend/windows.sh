@@ -29,6 +29,9 @@ export HOME=${HOME:-/root}
 # (замерено 20.08: mkdir «кириллица_проба» → File not found), и тесты с русскими
 # именами подтестов краснеют на ровном месте. Это про стенд, а не про продукт.
 export LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8}
+# Без go стенд не стенд, а имитация: собрать нечего, и весь смысл теряется.
+# Говорим это ОДИН раз и громко, а не десять раз «command not found» внутри цикла.
+command -v go >/dev/null 2>&1 || { echo "СТЕНД НЕ ЗАПУЩЕН: go нет в PATH (обычно /usr/local/go/bin; зови через bash -lc)"; exit 2; }
 STEND=$KORFN/.stend_win
 mkdir -p "$STEND" "$WINEPREFIX"
 
@@ -71,6 +74,10 @@ echo "── тесты windows-сборкой ──"
 # лежит в internal/, чтобы следующий новый пакет не пропал тем же способом.
 for p in $(cd "$KORFN/internal" && ls -d */ 2>/dev/null | tr -d '/'); do
   [ -d "$KORFN/internal/$p" ] || continue
+  # Старый бинарь сносим ДО сборки. Иначе несобравшийся пакет исполняет
+  # позавчерашний .exe и печатает «зелёный» про код, которого уже нет
+  # (22.08: без go в PATH стенд так отчитался за 6 пакетов из 10).
+  rm -f "$STEND/t_$p.exe"
   sborka=$(GOOS=windows GOARCH=amd64 go test -c -o "$STEND/t_$p.exe" "./internal/$p" 2>&1)
   if printf '%s' "$sborka" | grep -q "no test files"; then echo "  $p: тестов нет"; continue; fi
   [ -f "$STEND/t_$p.exe" ] || { echo "  $p: НЕ СОБРАЛСЯ"; printf '%s\n' "$sborka" | tail -3; bed=1; continue; }
