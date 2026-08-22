@@ -145,6 +145,14 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	defer otmena()
 	go s.ObnovlyatProfil(ctx)
 
+	// Авторежим по умолчанию выключен (см. hranenie.Nastroyki.Avtorezhim) —
+	// заводим служителя, только если человек сам его включил в прошлый раз.
+	// Останавливать отдельно не нужно: служитель слушает тот же ctx, что
+	// ObnovlyatProfil выше, и defer otmena() гасит обоих разом.
+	if s.Nastroyki.Avtorezhim {
+		s.ZapustitAvtorezhim(ctx)
+	}
+
 	log.Printf("служба слушает %s", url)
 	fmt.Println("KELEVRA-SLUZHBA", url)
 
