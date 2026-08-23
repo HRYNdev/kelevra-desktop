@@ -467,8 +467,27 @@ rm -f "$YADRO_PAPKA/popytka.marker" "$METKA"
 : > "$YADRO_PAPKA/tiho.marker"
 cp "$KORFN/internal/konfig/testdata/profil_stend_bez_seti.json" "$PROFIL"
 cp "$STEND/lzhe_yadro.exe" "$YADRO_PAPKA/sing-box.exe"
+# Уборка площадки. Сценарии 6-7 намеренно оставляют осиротевшее НАСТОЯЩЕЕ ядро
+# в живых, а оно, умирая от SIGTERM, ещё успевает тронуть реестр — и его хвост
+# приезжал в этот сценарий (замер 23.08: после сценария 8 в реестре стоял
+# «http://127.0.0.1:2412» со схемой, а так пишет только настоящее ядро, наш
+# Postavit пишет адрес без схемы). Здесь площадка чистится ЖЁСТКО и сверяется:
+# лже-ядру никто не должен мешать, иначе сценарий судит не продукт, а соседа.
+pkill -KILL -f '[K]elevra\.exe' 2>/dev/null
+pkill -KILL -f '[s]ing-box\.exe' 2>/dev/null
+sleep 2
+if pgrep -f '[K]elevra\.exe|[s]ing-box\.exe' >/dev/null 2>&1; then
+  echo "⚫ ПРИБОР МЁРТВ: на площадке сценария 8 остались чужие процессы:"
+  pgrep -a -f '[K]elevra\.exe|[s]ing-box\.exe' | head -5
+  exit 7
+fi
 reg_set 0 10.0.0.9:9999
-echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой выключенный прокси, метки нет)"
+proverka_do=$(reg_get ProxyServer)
+if [ "$proverka_do" != "10.0.0.9:9999" ] || [ "$(reg_get ProxyEnable)" != "0x0" ]; then
+  echo "⚫ ПРИБОР МЁРТВ: площадку не удалось выставить (ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$proverka_do)"
+  exit 7
+fi
+echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$proverka_do (чужой выключенный прокси, метки нет, площадка чиста)"
 url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk8.log")
 if [ "$?" -eq 77 ]; then
   echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
@@ -478,6 +497,7 @@ if [ -z "$url" ]; then
   echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
 else
   echo "  служба: $url"
+  echo "  перед подключением: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer)"
   otvet=$(curl -s -m 120 "${url}api/podklyuchit")
   echo "  POST podklyuchit -> $otvet"
   sost=$(curl -s -m 10 "${url}api/sostoyanie")
