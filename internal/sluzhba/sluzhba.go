@@ -643,9 +643,17 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	err := s.Yadro.Zapustit(zctx)
 	// Отказ системы настроить прокси ядро считает поводом упасть. Человеку от
 	// этого одна беда: связи нет вообще. Поднимаем ядро без просьбы к системе
-	// и говорим адрес прокси прямо в окне (проверено живьём: ядро падает
-	// строкой «initialize system proxy»).
-	if err != nil && strings.Contains(err.Error(), "initialize system proxy") {
+	// и говорим адрес прокси прямо в окне.
+	//
+	// 23.08: сеть подстраховки не ловила ровно тот случай, ради которого её
+	// сделали. На Linux ядро падает строкой «initialize system proxy», а на
+	// WINDOWS — «start inbound/mixed[mixed-in]: set system proxy:
+	// InternetSetOption(ProxySettingsChanged): winapi error #12009» (замер под
+	// wine, stend/proksi.sh сценарий 4). Слова «initialize» там нет, и вся
+	// подстраховка на Windows молча простаивала: вместо половинной защиты с
+	// запиской «пропишите прокси руками» человек получал «ядро упало при
+	// старте» и связь никакую. Сверяем по общей части — «system proxy».
+	if err != nil && strings.Contains(err.Error(), "system proxy") {
 		log.Printf("система не дала настроить прокси, поднимаю ядро без этой просьбы")
 		if e := s.perestroit(true); e == nil {
 			zctx2, otmena2 := context.WithTimeout(ctx, 70*time.Second)
