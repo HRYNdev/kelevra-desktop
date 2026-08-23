@@ -107,6 +107,13 @@ SCENY = {
     "15_tolko_brauzery": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
                               vniz_bayt=12_582_912, vverh_bayt=1_048_576,
                               zametka=ZAMETKI["ZametkaBezTunnelya"]),
+    # 23.08: источник правил маршрутизации недоступен (пустой кеш + слабая сеть
+    # или провайдер режет домен правил) — раньше ядро на этом падало целиком и
+    # связи не было вовсе, теперь защита поднимается без правил и гонит всё в
+    # туннель. Человеку это надо ВИДЕТЬ: защита работает, но объём иной.
+    "22_bez_setevyh_pravil": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                                  vniz_bayt=88_080_384, vverh_bayt=6_291_456,
+                                  zametka=ZAMETKI["ZametkaBezSetevyhPravil"]),
     "7_ruchnoy_proksi": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
                              vniz_bayt=5_242_880, vverh_bayt=524_288, ruchnoy_proksi=True,
                              zametka=ZAMETKI["ZametkaRuchnoyProksi"] % "127.0.0.1:2412"),
