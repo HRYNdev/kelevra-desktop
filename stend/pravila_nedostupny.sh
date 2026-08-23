@@ -20,19 +20,41 @@
 # "direct" на туннельный выход, а не просто выбросить правила (это тихо
 # пустило бы трафик мимо VPN — хуже падения).
 #
+# 24.08: у C (BezSetevyhPravil) есть цена — человек теряет умную
+# маршрутизацию насовсем, пока источник правил не отдышится. Замер живьём:
+# все 22 .srs вместе весят 495 039 байт (0.47 МБ, ads.srs — 94.7%), 18 из 22
+# не менялись с 3 августа — комплект стареет медленно, его можно возить прямо
+# в бинаре (internal/pravila) и подставлять вместо remote при беде
+# (konfig.Vybor.PravilaIzKomplekta): route.final не переставляется, разбор
+# трафика по доменам/подсетям остаётся живым.
+#
 # Сценарии:
-#   A. контроль    — источник жив,  кеш пуст, BezSetevyhPravil=false → живо.
+#   A. контроль    — источник жив,  кеш пуст, ничего не взведено → живо.
 #   B. беда        — источник мёртв (http://127.0.0.1:1, connection refused),
-#                     кеш пуст, BezSetevyhPravil=false → ядро падает, порт НЕ
+#                     кеш пуст, ничего не взведено → ядро падает, порт НЕ
 #                     открывается. Это ОЖИДАЕМОЕ красное поведение ядра — стенд
 #                     фиксирует его как «вот от чего лечим», не как свой провал.
-#   C. лечение     — тот же мёртвый источник, кеш пуст, BezSetevyhPravil=true
-#                     → ядро стартует, порт открыт, в записанном конфиге нет ни
-#                     одного rule_set и route.final != "direct".
+#   C. лечение (упрощённое)  — тот же мёртвый источник, кеш пуст,
+#                     BezSetevyhPravil=true → ядро стартует, порт открыт, в
+#                     записанном конфиге нет ни одного rule_set и
+#                     route.final != "direct".
+#   D. лечение (комплект)    — тот же мёртвый источник, кеш пуст, встроенный
+#                     комплект разложен на диск и подставлен
+#                     (PravilaIzKomplekta) → ядро стартует, порт открыт, в
+#                     записанном конфиге все 22 rule_set на месте, все
+#                     type:"local", route.final остаётся "direct" — умная
+#                     маршрутизация НЕ выродилась в «всё в VPN».
+#   E. контроль порчей (обязателен) — тот же сценарий D, но один .srs в
+#                     разложенной папке комплекта перезаписан мусором ПОСЛЕ
+#                     сборки конфига, ПЕРЕД стартом ядра → ядро обязано
+#                     ПАДАТЬ. Без E зелёный D ничего не доказывает: он мог бы
+#                     зеленеть и в мире, где ядро тихо игнорирует битый
+#                     rule_set (а не читает файл по указанному пути).
 #
 # Стенд красный (ненулевой код), только если A не поднялось, B неожиданно
-# поднялось (значит источник данных для диагноза сам протух и B ничего не
-# проверяет), или C не поднялось / не долечило final.
+# поднялось (значит источник данных для диагноза сам протух и стенд ничего не
+# проверяет), C не поднялось / не долечило final, D не поднялось / потеряло
+# rule_set или final, либо E НЕ упало (значит комплект не читается взаправду).
 #
 # Среда: в этой LXC нет /dev/net/tun — гоняем только «Проксирование»
 # (Vybor.Prava=false), туннель не поднимаем. Порты — из диапазона 224xx,
@@ -80,15 +102,18 @@ json.dump(d, open(vyhod, "w"))
 PY
 }
 
-# sobrat_konfig <profil.json> <konfig.json> <bez_pravil 0|1> — зовёт настоящий
-# Prigotovit (не самодельный JSON). BezSistemnogoProksi всегда взведён: на
-# Linux ядро без него падает строкой «initialize system proxy» (отдельная,
-# не наша беда) — она бы замаскировала ровно то падение, которое мы мерим.
+# sobrat_konfig <profil.json> <konfig.json> <bez_pravil 0|1> [komplekt_dir] —
+# зовёт настоящий Prigotovit (не самодельный JSON). BezSistemnogoProksi всегда
+# взведён: на Linux ядро без него падает строкой «initialize system proxy»
+# (отдельная, не наша беда) — она бы замаскировала ровно то падение, которое
+# мы мерим. komplekt_dir, если задан, зовёт настоящий pravila.Razlozhit
+# (internal/pravila) и подставляет Vybor.PravilaIzKomplekta — главнее bez_pravil.
 sobrat_konfig() {
-  local profil=$1 konfig=$2 bez_pravil=$3
+  local profil=$1 konfig=$2 bez_pravil=$3 komplekt_dir=${4:-}
   local log="$STEND/zamer_$(basename "$konfig").log"
   local flag=""
   [ "$bez_pravil" = "1" ] && flag="-bez-pravil"
+  [ -n "$komplekt_dir" ] && flag="$flag -komplekt-dir $komplekt_dir"
   if ! "$ZAMER" -profil "$profil" -prava=false -bez-proksi $flag > "$konfig" 2> "$log"; then
     echo "  КРАСНЫЙ: cmd/zamer_konfig не собрал конфиг:"; cat "$log"; bed=1; return 1
   fi
@@ -208,6 +233,80 @@ PY
     echo "  зелёный: ядро стартовало БЕЗ источника правил, порт открыт — деградация лечит"
   fi
   pogasit "$PID_C"
+fi
+
+echo
+echo "── D. лечение (комплект): тот же мёртвый источник, кеш пуст, встроенный комплект разложен ──"
+PORT_D=22413
+KOMPLEKT_D="$STEND/komplekt_d"
+gotov_profil "$STEND/profil_d.json" "$PORT_D" 1
+sobrat_konfig "$STEND/profil_d.json" "$STEND/konfig_d.json" 0 "$KOMPLEKT_D" || true
+if [ -s "$STEND/konfig_d.json" ]; then
+  RAZBOR=$(python3 - "$STEND/konfig_d.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+r = d.get("route", {})
+final = r.get("final", "")
+rs = r.get("rule_set", [])
+tipy = sorted(set(x.get("type", "?") for x in rs))
+print(final)
+print(len(rs))
+print(",".join(tipy))
+PY
+  )
+  FINAL_D=$(echo "$RAZBOR" | sed -n 1p)
+  KOL_RULE_SET_D=$(echo "$RAZBOR" | sed -n 2p)
+  TIPY_D=$(echo "$RAZBOR" | sed -n 3p)
+  echo "  конфиг: route.final=$FINAL_D, rule_set=$KOL_RULE_SET_D шт, типы=$TIPY_D"
+  if [ "$FINAL_D" != "direct" ]; then
+    echo "  КРАСНЫЙ: route.final=$FINAL_D — комплект не должен трогать final, умная маршрутизация выродилась"; bed=1
+  elif [ "$KOL_RULE_SET_D" != "22" ]; then
+    echo "  КРАСНЫЙ: в конфиге $KOL_RULE_SET_D rule_set вместо 22"; bed=1
+  elif [ "$TIPY_D" != "local" ]; then
+    echo "  КРАСНЫЙ: не все rule_set стали type:local (видел: $TIPY_D)"; bed=1
+  else
+    echo "  конфиг вылечен: все 22 rule_set локальные, final не трогали"
+  fi
+
+  PID_D=$(zapustit_yadro "$STEND/dom_d" "$STEND/konfig_d.json" "$STEND/yadro_d.log")
+  ITOG_D=$(zhdat "$PID_D" "$PORT_D" 20)
+  echo "  итог: $ITOG_D (порт $PORT_D, pid $PID_D)"
+  if [ "$ITOG_D" != "otkryt" ]; then
+    echo "  КРАСНЫЙ: со встроенным комплектом ядро обязано подняться даже с мёртвым источником правил — не поднялось"
+    tail -20 "$STEND/yadro_d.log"
+    bed=1
+  else
+    echo "  зелёный: ядро стартовало на встроенном комплекте, порт открыт — умная маршрутизация сохранена"
+  fi
+  pogasit "$PID_D"
+fi
+
+echo
+echo "── E. контроль порчей (обязателен): тот же комплект, но один .srs испорчен ПОСЛЕ сборки конфига ──"
+PORT_E=22414
+KOMPLEKT_E="$STEND/komplekt_e"
+gotov_profil "$STEND/profil_e.json" "$PORT_E" 1
+sobrat_konfig "$STEND/profil_e.json" "$STEND/konfig_e.json" 0 "$KOMPLEKT_E" || true
+if [ -s "$STEND/konfig_e.json" ]; then
+  ISPORCHEN=$(ls "$KOMPLEKT_E"/*.srs 2>/dev/null | head -1)
+  if [ -z "$ISPORCHEN" ]; then
+    echo "  КРАСНЫЙ: комплект не разложился в $KOMPLEKT_E — портить нечего"
+    bed=1
+  else
+    printf 'мусор-вместо-правила-24.08' > "$ISPORCHEN"
+    echo "  испорчен файл: $ISPORCHEN"
+    PID_E=$(zapustit_yadro "$STEND/dom_e" "$STEND/konfig_e.json" "$STEND/yadro_e.log")
+    ITOG_E=$(zhdat "$PID_E" "$PORT_E" 15)
+    echo "  итог: $ITOG_E (порт $PORT_E, pid $PID_E)"
+    echo "  хвост журнала ядра:"; tail -5 "$STEND/yadro_e.log" | sed 's/^/    /'
+    if [ "$ITOG_E" = "otkryt" ]; then
+      echo "  КРАСНЫЙ: ядро поднялось на испорченном .srs — значит либо игнорирует файл, либо D зелёный просто так"
+      bed=1
+    else
+      echo "  ожидаемое красное поведение ЯДРА зафиксировано ($ITOG_E): ядро реально читает комплект с диска — D что-то доказывает"
+    fi
+    pogasit "$PID_E"
+  fi
 fi
 
 echo
