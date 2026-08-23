@@ -71,12 +71,18 @@ ostanovit() { # гасит процесс стенда по короткому �
   # wine-процесса — виндовый путь "Z:\...\Kelevra.exe" (обратные слэши, без
   # $STEND), полный POSIX-путь в нём никогда не совпадёт. SIGTERM не всегда
   # доходит до эмулированного Windows-процесса, поэтому ждём и добиваем SIGKILL.
+  # Гасим и ЯДРО: сценарий 4 поднимает настоящий sing-box.exe, а он — отдельный
+  # процесс, переживающий смерть Kelevra.exe. 23.08 переживший ядро держал порт
+  # 2412 и ронял соседние стенды в общей приёмке (proksi.sh зелёный в одиночку,
+  # красный внутри vse.sh) — беда была не в продукте, а в этой уборке.
   pkill -TERM -f Kelevra.exe 2>/dev/null
+  pkill -TERM -f sing-box.exe 2>/dev/null
   for _ in $(seq 1 10); do
-    pgrep -f Kelevra.exe >/dev/null 2>&1 || return 0
+    pgrep -f 'Kelevra.exe|sing-box.exe' >/dev/null 2>&1 || return 0
     sleep 1
   done
   pkill -KILL -f Kelevra.exe 2>/dev/null
+  pkill -KILL -f sing-box.exe 2>/dev/null
   sleep 1
 }
 
