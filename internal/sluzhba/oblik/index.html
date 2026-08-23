@@ -5,18 +5,30 @@
 <meta name="color-scheme" content="dark">
 <title>Kelevra</title>
 <style>
+  /* Палитра и шрифты — байт в байт из мобильного эталона (theme/Kelevra.kt):
+     десктоп подстраивается под телефон, а не наоборот (спека 22.08). */
+  @font-face {
+    font-family:"Montserrat"; src:url("montserrat.woff2") format("woff2");
+    font-weight:300 700; font-style:normal; font-display:swap;
+  }
+  @font-face {
+    font-family:"Roboto Mono"; src:url("roboto_mono.woff2") format("woff2");
+    font-weight:400 700; font-style:normal; font-display:swap;
+  }
   :root {
-    --fon:#0b0d11; --karta:#14171d; --karta-verh:#191d24; --gran:#242a34;
-    --tekst:#e9edf3; --tihiy:#8b94a4; --slabyy:#5f6877;
-    --akcent:#3ddc84; --akcent-tem:#0b1a11;
-    --zhdem:#f0b429; --beda:#ff6b6b;
-    --shapka:56px; --nizhnyaya:98px;
+    --fon:#0B0E13; --fon2:#11151C; --karta:#161B24; --karta-verh:#1D2430; --gran:#262E3B;
+    --tekst:#E8EDF5; --tihiy:#93A0B4; --slabyy:#5F6B7D;
+    --akcent:#35D0A5; --akcent2:#2BA6FF; --akcent-tem:#04140F;
+    --zhdem:#F5A524; --beda:#F2555A;
+    --shrift:"Montserrat", system-ui, sans-serif;
+    --mono:"Roboto Mono", ui-monospace, Consolas, monospace;
+    --shapka:56px; --nizhnyaya:70px;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
   body {
     margin:0; background:var(--fon); color:var(--tekst);
-    font:15px/1.45 "Segoe UI", system-ui, sans-serif;
+    font:15px/1.45 var(--shrift);
     -webkit-font-smoothing:antialiased; overflow:hidden;
     user-select:none;
   }
@@ -72,27 +84,34 @@
      просто часть потока и уезжает вместе с содержимым. */
   #karta-svyazi { padding-top:16px; }
 
-  .karta { background:var(--karta); border:1px solid var(--gran); border-radius:16px; padding:16px; }
+  /* Радиусы по системе мобильного эталона (KDim): крупный 26px нигде на
+     десктопе пока не нужен, карточка — 18px, мелкие элементы — 12px. */
+  .karta { background:var(--karta); border:1px solid var(--gran); border-radius:18px; padding:16px; }
   .karta + .karta, .karta + .polosa, .polosa + .karta { margin-top:12px; }
 
-  /* Две вкладки: «Сеть» и «Настройки» (спека 04.08) — больше вкладок нет.
-     sticky — переключатель не должен уезжать при прокрутке длинного списка
-     узлов или журнала, иначе на вторую вкладку не вернуться не прокрутив назад. */
-  .vkladki {
-    display:flex; gap:4px; position:sticky; top:0; z-index:2; padding-bottom:10px;
-    background:var(--fon);
-  }
+  /* Нижняя панель вкладок — KTabBar (Components.kt): высота 66px, фон Bg2,
+     верхняя граница цветом Border. «Сеть» и «Настройки» переехали сюда с
+     верха ленты (спека 22.08) — владелец: «*** там круг, если включается
+     впн не по кругу а по кнопке» — круг теперь и есть кнопка, а вкладки
+     заняли то место снизу, где раньше сидела главная кнопка. */
   .vkladka {
-    flex:1; padding:9px; text-align:center; font-size:13.5px; font-weight:600;
-    color:var(--tihiy); background:var(--karta); border:1px solid var(--gran); border-radius:11px;
+    flex:1; border:0; background:none; cursor:pointer;
+    font-family:var(--shrift); font-size:11px; color:var(--slabyy);
+    display:flex; align-items:center; justify-content:center; height:100%;
   }
-  .vkladka.aktivna { color:var(--tekst); border-color:#313a48; background:#191d24; }
+  .vkladka.aktivna { color:var(--akcent); }
 
-  /* Круг состояния — вариант C из спеки 04.08: тонкое кольцо со свечением,
-     спокойное и не вырвиглазное («какой нить переливающийся не вырвиглазный
-     круг»). Заменяет прежнюю прямоугольную карточку с щитом. */
-  .krug-blok { display:flex; flex-direction:column; align-items:center; padding:6px 0 4px; }
-  .krug-obertka { position:relative; width:144px; height:144px; }
+  /* Круг состояния — теперь и есть кнопка (спека 22.08, владелец: «я ожидал
+     что нажав на круг впн и включится, но нихуя»). Диаметр и толщина обводки —
+     из мобильного эталона (KDim.DialSize/DialStroke), тонкое кольцо со
+     свечением, не толстая рамка. */
+  .krug-blok { display:flex; flex-direction:column; align-items:center; padding:10px 0 4px; }
+  .krug-obertka {
+    position:relative; width:230px; height:230px; border-radius:50%;
+    border:0; padding:0; background:none; cursor:pointer;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .krug-obertka:focus-visible { outline:2px solid var(--akcent); outline-offset:4px; }
   .krug-obertka svg { width:100%; height:100%; overflow:visible; }
   .krug-fon { fill:none; stroke:var(--gran); }
   .krug-koltso {
@@ -101,20 +120,26 @@
   }
   .krug-serdtse {
     position:absolute; inset:0; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; text-align:center; padding:0 18px;
+    align-items:center; justify-content:center; text-align:center; padding:0 30px;
   }
-  .krug-slovo { font-size:17px; font-weight:650; letter-spacing:.2px; }
-  /* Слово длиннее девяти букв («подключаюсь») при 17px вылезает за окружность
+  .krug-slovo { font-family:var(--shrift); font-size:19px; font-weight:600; letter-spacing:-.2px; }
+  /* Слово длиннее девяти букв («включаюсь») при 19px вылезает за окружность
      буквами по обе стороны. Резать смысл ради вёрстки не хочу, поэтому длинному
-     слову даём кегль поменьше — «защищено» и «отключено» остаются крупными. */
-  .krug-slovo.dlinnoe { font-size:14.5px; }
+     слову даём кегль поменьше — «включено» и «выключено» остаются крупными. */
+  .krug-slovo.dlinnoe { font-size:16px; }
   /* Режим + узел (или, когда служба начнёт его отдавать, транспорт + мс)
-     редко влезает в одну строку на круге такой ширины — переносим на две,
-     а не режем полезное слово многоточием после первых 15 символов. */
+     редко влезает в одну строку — переносим на две, а не режем многоточием. */
   .krug-pod {
-    font-size:11.5px; line-height:1.3; color:var(--tihiy); margin-top:5px; max-width:112px;
+    font-family:var(--shrift); font-size:13px; line-height:1.35; color:var(--tihiy);
+    margin-top:7px; max-width:170px;
     display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
     overflow:hidden; text-overflow:ellipsis;
+  }
+  /* Подпись под кругом — KHint (Components.kt): что нажать, а не что сейчас
+     происходит (то уже сказано словом и подписью внутри круга). */
+  .krug-hint {
+    margin-top:14px; font-family:var(--mono); font-size:10px; letter-spacing:1.4px;
+    text-transform:uppercase; color:var(--slabyy); text-align:center;
   }
 
   /* Медленное, мягкое дыхание свечения — не мигание. Хватает 3-4 секунд на
@@ -125,25 +150,27 @@
   }
   @keyframes krug-vrashaetsya { to { transform:rotate(360deg); } }
 
+  /* Цвета обводки — ровно спека 22.08: включено/подключаюсь Accent, беда
+     Warn, выключено Dim2 с прозрачностью .55. */
   .krug-blok.rabotaet .krug-koltso { stroke:var(--akcent); color:var(--akcent);
     animation:krug-dyshit 3.6s ease-in-out infinite; }
   .krug-blok.rabotaet .krug-slovo { color:var(--akcent); }
-  .krug-blok.podnimaem .krug-koltso { stroke:var(--zhdem); color:var(--zhdem);
-    stroke-dasharray:34 220; animation:krug-vrashaetsya 2.6s linear infinite; }
-  .krug-blok.podnimaem .krug-slovo { color:var(--zhdem); }
-  .krug-blok.slomalos .krug-koltso { stroke:var(--beda); color:var(--beda);
+  .krug-blok.podnimaem .krug-koltso { stroke:var(--akcent); color:var(--akcent);
+    stroke-dasharray:60 380; animation:krug-vrashaetsya 2.6s linear infinite; }
+  .krug-blok.podnimaem .krug-slovo { color:var(--akcent); }
+  .krug-blok.slomalos .krug-koltso { stroke:var(--zhdem); color:var(--zhdem);
     animation:krug-dyshit 2.8s ease-in-out infinite; }
-  .krug-blok.slomalos .krug-slovo { color:var(--beda); }
-  .krug-blok.stoit .krug-koltso { stroke:var(--slabyy); }
+  .krug-blok.slomalos .krug-slovo { color:var(--zhdem); }
+  .krug-blok.stoit .krug-koltso { stroke:var(--slabyy); opacity:.55; }
 
   /* margin 13px, не 2px: слева от текста должен быть тот же отступ, что и у
      карточек/узлов ниже (их padding 13-16px от края .lenta) — раньше «ВЫБОР
      УЗЛА» торчал на 11px левее собственного списка, рваный левый край.
-     Цвет — tihiy, не slabyy: у slabyy контраст 3.46:1 на фоне (WCAG требует
-     4.5:1 для текста 11.5px), обмерено формулой относительной яркости. */
+     Метка — RobotoMono/10px/Dim2, как KGroupTitle в мобильном эталоне. */
   .zagolovok-bloka {
     display:flex; align-items:center; margin:18px 13px 8px;
-    font-size:11.5px; letter-spacing:.9px; text-transform:uppercase; color:var(--tihiy);
+    font-family:var(--mono); font-size:10px; letter-spacing:1.4px;
+    text-transform:uppercase; color:var(--slabyy);
   }
   /* Тот же капкан, что у .perekl-ryad: явный display:flex перебивает
      встроенное [hidden]{display:none}, и скрытый заголовок остался бы виден. */
@@ -168,15 +195,15 @@
   }
   .perekl {
     flex:none; width:40px; height:24px; padding:0; border-radius:999px;
-    background:#242a34; position:relative; transition:background .15s;
+    background:var(--karta-verh); position:relative; transition:background .15s;
   }
   .perekl .knob {
     position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
     background:var(--tihiy); transition:left .15s, background .15s;
   }
-  .perekl.vklyuchen { background:rgba(61,220,132,.32); }
+  .perekl.vklyuchen { background:rgba(53,208,165,.32); }
   .perekl.vklyuchen .knob { left:18px; background:var(--akcent); }
-  .perekl.ustarela { background:rgba(240,180,41,.32); }
+  .perekl.ustarela { background:rgba(245,165,36,.32); }
   .perekl.ustarela .knob { background:var(--zhdem); }
   .perekl:disabled { opacity:.55; cursor:default; }
 
@@ -186,8 +213,8 @@
     color:var(--tekst); font:inherit; font-size:14px; cursor:pointer; text-align:left;
     transition:border-color .15s, background .15s;
   }
-  .uzel:hover:not(:disabled) { background:#191d24; border-color:#313a48; }
-  .uzel.vybran { border-color:rgba(61,220,132,.45); background:rgba(61,220,132,.06); }
+  .uzel:hover:not(:disabled) { background:var(--karta-verh); border-color:var(--slabyy); }
+  .uzel.vybran { border-color:rgba(53,208,165,.45); background:rgba(53,208,165,.06); }
   .uzel.vybran .imya { color:var(--akcent); font-weight:600; }
   .uzel .signal { width:8px; height:8px; border-radius:50%; flex:none; background:var(--slabyy); }
   .uzel .signal.bystro { background:var(--akcent); }
@@ -195,7 +222,10 @@
   .uzel .signal.medlenno { background:#ef8354; }
   .uzel .signal.mertv { background:var(--beda); }
   .uzel .imya { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .uzel .ms { margin-left:auto; color:var(--tihiy); font-size:12px; font-variant-numeric:tabular-nums; }
+  .uzel .ms {
+    margin-left:auto; color:var(--tihiy); font-family:var(--mono); font-size:12px;
+    font-variant-numeric:tabular-nums;
+  }
   /* Узел с бедой (сигнал mertv, красная точка) раньше писал текст беды тем же
      серым, что и обычные мс — глазом не отличить «64 мс» от «нет ответа» без
      точки. Текст теперь того же цвета, что и точка рядом. */
@@ -203,37 +233,32 @@
   .uzel:disabled { cursor:default; opacity:.75; }
 
   button {
-    font:inherit; cursor:pointer; border:0; border-radius:12px;
+    font:15px/1.45 var(--shrift); cursor:pointer; border:0; border-radius:18px;
     -webkit-tap-highlight-color:transparent;
   }
   button:focus-visible, input:focus-visible { outline:2px solid var(--akcent); outline-offset:2px; }
   .glavnaya {
-    width:100%; padding:14px; font-size:15.5px; font-weight:650;
+    width:100%; padding:14px; font-size:15.5px; font-weight:600;
     background:var(--akcent); color:var(--akcent-tem); transition:.15s;
   }
   .glavnaya:hover:not(:disabled) { filter:brightness(1.07); }
   .glavnaya:active:not(:disabled) { transform:translateY(1px); }
-  /* Разрыв связи — не праздник: гасим кнопку, чтобы самой яркой в окне была
-     та, что защищает, а не та, что выключает. */
-  .glavnaya.opasnaya { background:#1e242e; color:var(--tekst); border:1px solid var(--gran); }
-  .glavnaya.opasnaya:hover:not(:disabled) { border-color:rgba(255,107,107,.5); color:var(--beda); filter:none; }
   .glavnaya:disabled { opacity:.55; cursor:default; }
   .tihaya {
     width:100%; padding:11px; font-size:13.5px; font-weight:500;
     background:transparent; color:var(--tihiy); border:1px solid var(--gran);
   }
-  /* Полная защита — единственное на экране предложение стать защищённее, и
-     карточка над ней прямо показывает пальцем: «нажмите ниже "Включить полную
-     защиту"». Обычная .tihaya красит её СЛАБЕЕ вкладок «Сеть»/«Настройки»:
-     зовущий текст и выключенный вид спорят друг с другом, глаз читает кнопку
-     как недоступную. Даём акцент — заметнее вкладок, но тише круга и главной
-     кнопки внизу, чтобы порядок важности остался прежним. */
+  /* «Включить VPN для всех программ» — единственное на экране предложение
+     расширить VPN на весь компьютер, и карточка над ней прямо показывает
+     пальцем на неё. Обычная .tihaya красит её СЛАБЕЕ вкладок внизу: зовущий
+     текст и выключенный вид спорят друг с другом, глаз читает кнопку как
+     недоступную. Даём акцент — заметнее вкладок, но тише круга. */
   .tihaya.zovyot {
     color:var(--akcent); font-weight:600;
-    background:rgba(61,220,132,.07); border-color:rgba(61,220,132,.42);
+    background:rgba(53,208,165,.07); border-color:rgba(53,208,165,.42);
   }
   .tihaya.zovyot:hover:not(:disabled) {
-    background:rgba(61,220,132,.13); border-color:var(--akcent);
+    background:rgba(53,208,165,.13); border-color:var(--akcent);
   }
   /* В настройках .tihaya — пункты списка, а не призыв к действию: ставим их
      по левому краю, чтобы он совпал со строкой тумблера, заголовками блоков и
@@ -249,7 +274,7 @@
   #tab-nastroyki .tihaya::after { content:"\203A"; color:var(--slabyy); font-size:18px; line-height:1; }
   /* Опять display:flex поверх [hidden] — «Скопировать журнал» скрыт по умолчанию. */
   #tab-nastroyki .tihaya[hidden] { display:none; }
-  .tihaya:hover { color:var(--tekst); border-color:#313a48; }
+  .tihaya:hover { color:var(--tekst); border-color:var(--slabyy); }
   .ssylka {
     background:none; border:0; padding:0; color:var(--tihiy); font-size:12px;
     text-decoration:underline; text-underline-offset:3px;
@@ -257,26 +282,42 @@
   .ssylka:hover { color:var(--tekst); }
   .ssylka:disabled { color:var(--slabyy); cursor:default; text-decoration:none; }
 
+  /* Нижняя панель — теперь вкладки «Сеть»/«Настройки» (KTabBar), а не главная
+     кнопка: круг сам стал кнопкой (спека 22.08), отдельная кнопка внизу
+     убрана совсем. */
   .niz {
-    position:fixed; left:0; right:0; bottom:0; z-index:3; padding:12px 18px 14px;
-    background:linear-gradient(to top, var(--fon) 62%, rgba(11,13,17,0));
+    position:fixed; left:0; right:0; bottom:0; z-index:3;
+    display:flex; height:66px;
+    background:var(--fon2); border-top:1px solid var(--gran);
   }
 
   input {
     width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--gran);
-    background:#0d1014; color:var(--tekst); font:inherit; font-size:16px; letter-spacing:2px;
+    background:var(--fon); color:var(--tekst); font:inherit; font-size:16px; letter-spacing:2px;
     user-select:text;
   }
   input::placeholder { letter-spacing:.5px; color:var(--slabyy); }
 
   .beda {
     display:none; margin-top:12px; padding:11px 13px; border-radius:12px;
-    background:rgba(255,107,107,.08); border:1px solid rgba(255,107,107,.28);
+    background:rgba(242,85,90,.08); border:1px solid rgba(242,85,90,.28);
     color:#ffb1b1; font-size:12.5px; line-height:1.45;
     white-space:pre-wrap; word-break:break-word; user-select:text;
   }
   .beda.vidno { display:block; }
-  .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
+  /* «Спокойная» заметка — режим VPN (заметка из konfig.go, переведённая на
+     клиенте) — получает вид карточки (KCard: Surface/Border/radius 18),
+     с меткой VPN сверху (п.7 спеки 22.08: «блок заметок» = карточка). */
+  .beda.spokoyno { background:rgba(147,160,180,.08); border-color:var(--gran); color:var(--tihiy); }
+  #zametka.spokoyno {
+    background:var(--karta); border-color:var(--gran); color:var(--tihiy);
+    border-radius:18px; padding:14px 16px;
+  }
+  #zametka.spokoyno.vidno::before {
+    content:"VPN"; display:block; margin-bottom:6px;
+    font-family:var(--mono); font-size:10px; letter-spacing:1.4px;
+    text-transform:uppercase; color:var(--slabyy);
+  }
   .beda.vnimanie { background:rgba(240,180,41,.09); border-color:rgba(240,180,41,.3); color:#f3cf86; }
   .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:5px; }
   .beda-sovet { color:#e8b9b9; }
