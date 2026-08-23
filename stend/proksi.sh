@@ -20,10 +20,8 @@ export WINEPREFIX=${WINEPREFIX:-$KORFN/.wine}
 export WINEDEBUG=${WINEDEBUG:--all}
 export HOME=${HOME:-/root}
 export LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8}
-# wine падает («double free or corruption (out)»), если TMPDIR унаследован с
-# диска (замерено 23.08, воспроизведено с TMPDIR на ZFS-каталоге): ему нужен
-# настоящий /tmp. GOTMPDIR/GOCACHE у go приоритетнее TMPDIR, сборке не мешает.
-export TMPDIR=/tmp
+# Настоящая причина падений wine (TMPDIR не должен быть экспортирован в его
+# окружение вообще) и unset для неё — в stend/obshchee.sh, до первого вызова wine.
 STEND=$KORFN/.stend_win
 mkdir -p "$STEND" "$WINEPREFIX"
 . "$KORFN/stend/obshchee.sh"
