@@ -49,6 +49,7 @@ export LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8}
 export TMPDIR=/tmp
 STEND=$KORFN/.stend_trey
 mkdir -p "$STEND" "$WINEPREFIX"
+. "$KORFN/stend/obshchee.sh"
 
 command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
 
@@ -84,20 +85,16 @@ sobrat() {
 # тут ни при чём (--sluzhba обновление не проверяет вовсе, см. main.go), но
 # держим переменные окружения теми же, что у соседних стендов ради единого
 # рецепта.
-zapustitISnyatZhurnal() {
+zapustitISnyatZhurnal() { # возврат 77 (через $?) — прибор мёртв, см. stend/obshchee.sh
   pkill -f "Kelevra.exe" 2>/dev/null; sleep 1
-  rm -f "$ZHURNAL"
-  timeout 15 "$WINE" "$STEND/Kelevra.exe" --sluzhba >"$STEND/sluzhba_$1.log" 2>&1 &
-  local pid=$!
-  for _ in $(seq 1 25); do
-    grep -q "трей:\|служба слушает" "$ZHURNAL" 2>/dev/null && break
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.5
-  done
+  wine_zapusti "$STEND/sluzhba_$1.log" "$ZHURNAL" "трей:\|служба слушает" 13 -- \
+    timeout 15 "$WINE" "$STEND/Kelevra.exe" --sluzhba
+  local rc=$? pid=$WINE_ZAPUSTI_PID
   sleep 1
   cat "$ZHURNAL" 2>/dev/null
   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
   pkill -f "Kelevra.exe" 2>/dev/null
+  return "$rc"
 }
 
 echo "── РАЗДЕЛ 1: живой значок (настоящий znachok.ico) ──"
@@ -107,6 +104,10 @@ if ! sobrat 2>&1; then
 fi
 
 zhurnal1=$(zapustitISnyatZhurnal "zhivoy")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
 echo "$zhurnal1" | sed 's/^/  /' | tail -12
 
 stroka_okno=$(printf '%s\n' "$zhurnal1" | grep -c "трей: поток встал, окно трея создано")
@@ -147,6 +148,10 @@ if ! sobrat 2>&1; then
   echo "  НЕ СОБРАЛСЯ на пустом значке — это отдельная беда, не то, что проверяем"; bed=1
 else
   zhurnal2=$(zapustitISnyatZhurnal "lomanyy")
+  if [ "$?" -eq 77 ]; then
+    echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+    exit 7
+  fi
   echo "$zhurnal2" | sed 's/^/  /' | tail -12
   otkaz=$(printf '%s\n' "$zhurnal2" | grep -c "трей: не удалось собрать значок из znachok\.ico.*беру системный значок")
   uspeh_na_lomanom=$(printf '%s\n' "$zhurnal2" | grep -c "трей: значок собран из znachok\.ico")
