@@ -28,6 +28,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
+	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
@@ -165,7 +166,44 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
 	m.HandleFunc(pref+"/api/zhurnal", s.zhurnal)
+	m.HandleFunc(pref+"/api/obnovlenie", s.obnovlenieRuchka)
 	return m
+}
+
+// srokProverkiObnovleniya — сколько ждём ответа GitHub на нажатие «Проверить
+// обновление» в окне. Короче обычного (obnovlenie идёт в фоне при старте) —
+// тут человек стоит и смотрит на подпись «Проверяем…».
+const srokProverkiObnovleniya = 6 * time.Second
+
+type otvetObnovleniya struct {
+	Tekushchaya string `json:"tekushchaya"`
+	Novaya      string `json:"novaya,omitempty"`
+	Beda        string `json:"beda,omitempty"`
+}
+
+// obnovlenieRuchka — «Проверить обновление» в настройках. Обновление и так
+// ставится само и молча при каждом запуске (cmd/kelevra/obnovlenie.go), но
+// человеку негде спросить прямо сейчас, свежая ли у него версия (эталон
+// телефона: SimpleSettingsScreen.kt, пункт «Проверить обновление»).
+// Ошибка сети — обычное дело для приложения, которое чинит сеть: отдаём её
+// строкой, а не роняем ручку, чтобы окно не повисло (стенд гоняется без
+// сети нарочно, см. stend/oblik_snimok.py).
+func (s *Sluzhba) obnovlenieRuchka(w http.ResponseWriter, r *http.Request) {
+	adres := obnovlenie.SpisokReliza
+	if svoy := os.Getenv("KELEVRA_RELIZY"); svoy != "" {
+		adres = svoy // стенд
+	}
+	ctx, otmena := context.WithTimeout(r.Context(), srokProverkiObnovleniya)
+	defer otmena()
+	o := otvetObnovleniya{Tekushchaya: podpiska.Versiya}
+	n, err := obnovlenie.Proverit(ctx, &http.Client{Timeout: srokProverkiObnovleniya}, adres, podpiska.Versiya)
+	if err != nil {
+		log.Printf("проверка обновления по нажатию: %v", err)
+		o.Beda = "не удалось проверить"
+	} else if n != nil {
+		o.Novaya = n.Versiya
+	}
+	otdat(w, o, nil)
 }
 
 // zhurnal отдаёт хвост журнала прямо в окно.
@@ -307,8 +345,10 @@ func (s *Sluzhba) zamerit(w http.ResponseWriter, r *http.Request) {
 }
 
 type otvetSostoyaniya struct {
-	// Versiya — окно печатает её в шапке: обновляется приложение само, и по
-	// версии в окне видно, что обновление доехало (хозяин, 20.08).
+	// Versiya — обновляется приложение само, и версия обязана быть видна
+	// человеку (хозяин, 20.08). До 23.08 её печатала шапка; на телефоне
+	// значка версии в шапке нет вовсе (эталон SimpleSettingsScreen.kt),
+	// поэтому версия переехала в подвал вкладки «Настройки» (index.html).
 	Versiya    string `json:"versiya"`
 	Sost       string `json:"sost"`
 	KodEst     bool   `json:"kod_est"`
