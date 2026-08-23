@@ -22,6 +22,12 @@
 //	               несёт internal/konfig/testdata/profil_stend_bez_seti.json)
 //	               http-сервер, отвечающий 200 на /version, и висеть, пока
 //	               стенд его не убьёт.
+//
+// Второй маркер, tiho.marker (сценарий 8), играет ТИХИЙ отказ: ядро стартует
+// с первого раза и без единой ошибки, но системный прокси в реестр не пишет —
+// ни строки в лог, ни ненулевого кода выхода. Так выглядит любой отказ
+// set_system_proxy, о котором ядро решило не кричать; приложению не на что
+// опереться, кроме самого реестра.
 package main
 
 import (
@@ -31,9 +37,15 @@ import (
 )
 
 const marker = "popytka.marker"
+const markerTiho = "tiho.marker"
 const clashAdres = "127.0.0.1:9090"
 
 func main() {
+	if _, err := os.Stat(markerTiho); err == nil {
+		fmt.Fprintln(os.Stderr, "лже-ядро: тихий успех — стартую с первой попытки, реестра не касаюсь")
+		sluzhit()
+		return
+	}
 	if _, err := os.Stat(marker); err != nil {
 		if err := os.WriteFile(marker, []byte("1"), 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "лже-ядро: не записал маркер:", err)
@@ -44,6 +56,12 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, "лже-ядро: попытка 2, поднимаю Clash API на "+clashAdres)
+	sluzhit()
+}
+
+// sluzhit поднимает то единственное, по чему приложение считает ядро живым, —
+// Clash API на том же адресе, что несёт профиль стенда.
+func sluzhit() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
