@@ -24,15 +24,22 @@
 // Что сознательно НЕ перенесено в этот срез (см. TODO на местах):
 //   - NetworkModeDetector / подсказка «белый список», которая в телефонном
 //     клиенте отдельно запрещает признавать дом при определённых сетях;
-//   - привязка DNS-запроса к конкретному сетевому адаптеру (на Android для
-//     этого есть Network-объект, на Windows без экзотических зависимостей
-//     такого нет — спрашивается системный резолвер по умолчанию);
 //   - собственно переключение туннеля (internal/proksi, internal/sluzhba) —
 //     задача прямо требует не трогать это в этом заходе, здесь только
 //     распознавание обстановки и его тесты.
+//
+// Привязка DNS-запроса к конкретному сетевому адаптеру (на Android для
+// этого есть Network-объект) на Windows тоже есть: [SetevoyAdapter] узнаёт
+// у ОС (GetAdaptersAddresses) DNS-сервер и локальный IP физического
+// адаптера, а [DnsZond] с заполненными AdresResolvera/LokalnyAdres спрашивает
+// именно его, минуя системный путь. Это и снимает слепоту зондов в
+// TUN-режиме — см. Nablyudeniye.ZondSlep и Avtorezhim.Zahod ниже.
 package avtorezhim
 
-import "context"
+import (
+	"context"
+	"net"
+)
 
 // Sostoyanie — в какой сети сейчас ноутбук с точки зрения авторежима.
 type Sostoyanie int
@@ -74,14 +81,21 @@ type Nablyudeniye struct {
 	// (dns.servers[fakeip].inet4_range = 198.18.0.0/15), и youtube.com с
 	// discord.com — два из трёх контрольных доменов при Nuzhno=2 — входят в
 	// списки, которые ядро в fakeip и заворачивает (rule_set youtube,
-	// discord). Значит при поднятом туннеле DNS-зонд видит подмену не
-	// роутера, а нашу собственную, а прямой зонд ходит наружу ЧЕРЕЗ туннель
-	// и, понятно, проходит. Без этого флага итог такой: вне дома авторежим
-	// решает «дома» и САМ ОПУСКАЕТ защиту, потом зонд (уже честный) говорит
-	// «вне дома», защита поднимается — и так по кругу.
-	// Чем именно кончится, решает даже не наш код, а чужой список правил с
-	// сервера подписки (попал ли туда контрольный домен gosuslugi.ru), — то
-	// есть поведение фичи зависит от файла, который мы не контролируем.
+	// discord). Значит при поднятом туннеле DNS-зонд, спрошенный системным
+	// путём, видит подмену не роутера, а нашу собственную, а прямой зонд
+	// ходит наружу ЧЕРЕЗ туннель и, понятно, проходит. Без лечения итог
+	// такой: вне дома авторежим решает «дома» и САМ ОПУСКАЕТ защиту, потом
+	// зонд (уже честный) говорит «вне дома», защита поднимается — и так по
+	// кругу.
+	//
+	// Лечение — [SetevoyAdapter] плюс DnsZond.AdresResolvera: если у
+	// физического адаптера получилось узнать приватный DNS-сервер, зонд
+	// спрашивает ЕГО напрямую (в обход туннеля, см. dns_zond.go), и
+	// ZondSlep не ставится — заход честный, см. Avtorezhim.Zahod. Слепота
+	// остаётся только на случай, когда адрес адаптера узнать не вышло
+	// (или он не приватный — подозрительно похоже на подмену) — тогда
+	// решает даже не наш код, а чужой список правил с сервера подписки, и
+	// довериться зонду нельзя.
 	ZondSlep bool
 
 	// DnsPriznakDoma — DNS-зонд насчитал подмену на ≥2 из 3 контрольных доменов.
@@ -141,22 +155,83 @@ type Avtorezhim struct {
 	// TunnelPodnyat — стоит ли сейчас наш туннель на пути зондов. nil значит
 	// «не стоит» (так собран Novyy: сам по себе пакет про ядро ничего не
 	// знает, признак приносит служба — internal/sluzhba).
-	// Когда возвращает true, зонды в этот заход НЕ спрашиваются вовсе: они
-	// мерили бы наш же туннель (см. Nablyudeniye.ZondSlep), а платить двумя
-	// сетевыми запросами за заведомо негодный ответ незачем.
+	// Когда возвращает true, заход пробует узнать DNS-адрес физического
+	// адаптера (см. SetevoyAdres) и спросить его напрямую — обычный Dns
+	// (системный резолвер) в этот заход НЕ спрашивается вовсе, он видел бы
+	// наш же туннель. Если адрес узнать не вышло или он не приватный, заход
+	// целиком слепой (см. Nablyudeniye.ZondSlep) — платить сетевым запросом
+	// за заведомо негодный ответ незачем.
 	// Важно: в прокси-режиме признак должен быть false — системный прокси
 	// зонды не уважают (net.Dialer и net.Resolver идут мимо него), так что
 	// там они честны.
 	TunnelPodnyat func() bool
+
+	// SetevoyAdres — DNS-сервер и локальный IP физического адаптера (см.
+	// [SetevoyAdapter]). nil — берётся SetevoyAdapter. Поле — ради теста:
+	// на этой машине настоящих Windows-адаптеров нет, а слепой сценарий
+	// (адрес неизвестен) должен проверяться и без него.
+	SetevoyAdres func() (dnsAdres string, lokalnyIP string, err error)
+
+	// DnsPryamoy — фабрика DNS-зонда, привязанного к конкретному резолверу
+	// (см. DnsZond.AdresResolvera/LokalnyAdres). nil — NovyyDnsZond с
+	// проставленными адресами. Поле — ради теста: настоящий сетевой запрос
+	// на резолвер физического адаптера тесту не нужен.
+	DnsPryamoy func(adresResolvera, lokalnyAdres string) DnsProver
 }
 
 // Novyy собирает авторежим с рабочими зондами по умолчанию.
 func Novyy() *Avtorezhim {
 	return &Avtorezhim{
-		Dns:       NovyyDnsZond(),
-		Trafik:    NovyyPryamoyZond(),
-		Zadvizhka: NovayaZadvizhka(Neizvestno),
+		Dns:          NovyyDnsZond(),
+		Trafik:       NovyyPryamoyZond(),
+		Zadvizhka:    NovayaZadvizhka(Neizvestno),
+		SetevoyAdres: SetevoyAdapter,
+		DnsPryamoy:   novyyDnsZondPryamoy,
 	}
+}
+
+// novyyDnsZondPryamoy — DnsZond с параметрами по умолчанию, привязанный к
+// конкретному резолверу (см. DnsZond.AdresResolvera/LokalnyAdres).
+func novyyDnsZondPryamoy(adresResolvera, lokalnyAdres string) DnsProver {
+	z := NovyyDnsZond()
+	z.AdresResolvera = adresResolvera
+	z.LokalnyAdres = lokalnyAdres
+	return z
+}
+
+// privatnyeSeti — 10/8, 172.16/12, 192.168/16 (RFC 1918): диапазон, в
+// котором обязан лежать DNS-сервер физического адаптера дома. Публичный
+// адрес на этом месте подозрителен (например, сама подмена перехватчика) —
+// тот же осторожный выбор, что и «адрес неизвестен».
+var privatnyeSeti = func() []*net.IPNet {
+	var seti []*net.IPNet
+	for _, s := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		_, n, err := net.ParseCIDR(s)
+		if err != nil {
+			panic(err) // константы, ошибиться тут можно только опечаткой
+		}
+		seti = append(seti, n)
+	}
+	return seti
+}()
+
+// privatnyyAdres — host из "host:port" (или голый host) лежит в одной из
+// privatnyeSeti.
+func privatnyyAdres(dnsAdres string) bool {
+	host, _, err := net.SplitHostPort(dnsAdres)
+	if err != nil {
+		host = dnsAdres // на случай голого IP без порта
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, set := range privatnyeSeti {
+		if set.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // Zahod — один заход: спрашивает зонды и предлагает наблюдение задвижке.
@@ -174,23 +249,44 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool) (nablyudeniye Nably
 		return n, izm, a.Zadvizhka.Tekushcheye()
 	}
 
+	dns := a.Dns
 	if a.TunnelPodnyat != nil && a.TunnelPodnyat() {
-		// Задвижке не предлагаем НИЧЕГО, даже Neizvestno: слепой заход — это
-		// отсутствие наблюдения, а не наблюдение «не знаю». Предложи мы
-		// Neizvestno — три слепых захода подряд (шесть минут по страховочному
-		// тикеру) сдвинули бы обстановку, окно показало бы человеку
-		// «неизвестно» вместо честного «вне дома», а из этой ямы авторежим
-		// уже не выбрался бы: туннель-то поднят, следующий заход тоже слепой.
-		return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
+		dnsAdres, lokalnyIP, uznali := a.adresFizicheskogoAdaptera()
+		if !uznali {
+			// Задвижке не предлагаем НИЧЕГО, даже Neizvestno: слепой заход —
+			// это отсутствие наблюдения, а не наблюдение «не знаю». Предложи
+			// мы Neizvestno — три слепых захода подряд (шесть минут по
+			// страховочному тикеру) сдвинули бы обстановку, окно показало бы
+			// человеку «неизвестно» вместо честного «вне дома», а из этой
+			// ямы авторежим уже не выбрался бы: туннель-то поднят, следующий
+			// заход тоже слепой.
+			return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
+		}
+		// Адрес физического адаптера известен и приватен — DnsZond
+		// спрашивает ЕГО напрямую (DnsZond.AdresResolvera), в обход
+		// туннеля: заход больше не слепой, ZondSlep не ставится.
+		tvorec := a.DnsPryamoy
+		if tvorec == nil {
+			tvorec = novyyDnsZondPryamoy
+		}
+		dns = tvorec(dnsAdres, lokalnyIP)
 	}
 
-	dnsDoma, err := a.Dns.DomaPoDns(ctx)
+	dnsDoma, err := dns.DomaPoDns(ctx)
 	if err != nil {
 		dnsDoma = false // резолвер не ответил вовсе — не дома, безопасный дефолт
 	}
 
 	var trafik *bool
 	if dnsDoma {
+		// PryamoyZond в TUN-режиме всё равно ходит наружу ЧЕРЕЗ туннель и
+		// потому почти всегда «проходит» — это ложноположительный ВТОРОЙ
+		// признак, а не первый. Опасности в этом нет: dnsDoma здесь уже
+		// посчитан ПРЯМЫМ запросом к резолверу физического адаптера (или
+		// системным вне туннеля, тоже честным), а Reshit при
+		// !DnsPriznakDoma в любом случае вернёт VneDoma независимо от
+		// TrafikPryamoy — трафик только подтверждает уже доказанное DNS,
+		// самостоятельно защиту не снимет.
 		if izmereno, proshel := a.Trafik.Proshel(ctx); izmereno {
 			trafik = &proshel
 		}
@@ -199,4 +295,19 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool) (nablyudeniye Nably
 	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: dnsDoma, TrafikPryamoy: trafik}
 	izm := a.Zadvizhka.Predlozhit(Reshit(n))
 	return n, izm, a.Zadvizhka.Tekushcheye()
+}
+
+// adresFizicheskogoAdaptera — DNS-адрес и локальный IP физического
+// адаптера, если удалось узнать (SetevoyAdres) и адрес лежит в приватном
+// диапазоне (privatnyyAdres). SetevoyAdres == nil (не собран через Novyy) —
+// тоже «не узнали», тот же безопасный слепой путь.
+func (a *Avtorezhim) adresFizicheskogoAdaptera() (dnsAdres string, lokalnyIP string, uznali bool) {
+	if a.SetevoyAdres == nil {
+		return "", "", false
+	}
+	dnsAdres, lokalnyIP, err := a.SetevoyAdres()
+	if err != nil || dnsAdres == "" || !privatnyyAdres(dnsAdres) {
+		return "", "", false
+	}
+	return dnsAdres, lokalnyIP, true
 }
