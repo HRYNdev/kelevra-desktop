@@ -21,6 +21,7 @@ export TMPDIR=/tmp
 S=$KORFN/.stend_obn
 PORT=${PORT:-8712}
 rm -rf "$S"; mkdir -p "$S/dom" "$S/novaya"
+. "$KORFN/stend/obshchee.sh"
 
 if ! xdpyinfo -display :97 >/dev/null 2>&1; then Xvfb :97 -screen 0 1280x800x24 >/dev/null 2>&1 & sleep 2; fi
 export DISPLAY=${DISPLAY:-:97}
@@ -47,13 +48,18 @@ rm -f "$ZH"
 # обновления нет по замыслу: служба его не проверяет никогда, её поднимает
 # уже проверенная копия. --tiho — тот же путь, которым приложение стартует
 # из автозапуска Windows: обновление проверяется, окна не открывается.
-KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" timeout 90 "$WINE" "$S/dom/Kelevra.exe" --tiho >"$S/run.log" 2>&1 &
-sleep 25
+wine_zapusti "$S/run.log" "$ZH" - 25 -- \
+  env KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" timeout 90 "$WINE" "$S/dom/Kelevra.exe" --tiho
+mertv=$?
 pkill -f "$S/dom/Kelevra.exe" 2>/dev/null
 # Боевой путь порождает ОТДЕЛЬНЫЙ процесс службы: он переживёт родителя и
 # займёт метку копии, из-за чего следующий прогон не поднимется вовсе.
 pkill -f "Kelevra.exe --sluzhba" 2>/dev/null
 pkill -f "http.server $PORT" 2>/dev/null
+if [ "$mertv" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
 
 bed=0
 proverit() { # проверит <что должно быть в журнале> <что это значит>

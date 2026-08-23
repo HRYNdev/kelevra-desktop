@@ -38,6 +38,7 @@ export TMPDIR=/tmp
 command -v go >/dev/null 2>&1 || { echo "СТЕНД НЕ ЗАПУЩЕН: go нет в PATH (обычно /usr/local/go/bin; зови через bash -lc)"; exit 2; }
 STEND=$KORFN/.stend_win
 mkdir -p "$STEND" "$WINEPREFIX"
+. "$KORFN/stend/obshchee.sh"
 
 if [ ! -x "$WINE" ]; then
   echo "нет wine ($WINE): apt-get install -y --no-install-recommends wine64" >&2
@@ -61,7 +62,15 @@ fi
 if [ ! -f "$STEND/sing-box.exe" ]; then
   echo "  ядро не добыть: $YADRO_URL"; bed=1
 else
-  v=$(timeout 60 "$WINE" "$STEND/sing-box.exe" version 2>&1 | head -1)
+  # Первый настоящий вызов wine в этом стенде — дешёвый и самый ранний, им же
+  # ловим смерть прибора (см. stend/obshchee.sh), пока не потрачено время на
+  # тесты пакетов и старт Kelevra.exe ниже.
+  wine_zapusti "$STEND/sing_version.log" - - 60 -- timeout 60 "$WINE" "$STEND/sing-box.exe" version
+  if [ "$?" -eq 77 ]; then
+    echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+    exit 7
+  fi
+  v=$(head -1 "$STEND/sing_version.log")
   echo "  $v"
   printf '%s' "$v" | grep -q "sing-box version" || bed=1
 fi
@@ -96,9 +105,13 @@ done
 
 echo "── старт Kelevra.exe (служебный режим) ──"
 GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui" -o "$STEND/Kelevra.exe" "$KORFN/cmd/kelevra" || bed=1
-KELEVRA_BEZ_OKNA=1 timeout 25 "$WINE" "$STEND/Kelevra.exe" >"$STEND/zapusk.log" 2>&1 &
-sleep 12
 zhurnal="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/kelevra.log"
+wine_zapusti "$STEND/zapusk.log" "$zhurnal" "служба слушает" 12 -- \
+  env KELEVRA_BEZ_OKNA=1 timeout 25 "$WINE" "$STEND/Kelevra.exe"
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
 if grep -q "служба слушает" "$zhurnal" 2>/dev/null; then
   echo "  служба поднялась: $(grep -o 'http://[^ ]*' "$zhurnal" | tail -1)"
 else

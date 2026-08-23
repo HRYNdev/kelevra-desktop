@@ -26,6 +26,7 @@ export LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8}
 export TMPDIR=/tmp
 STEND=$KORFN/.stend_win
 mkdir -p "$STEND" "$WINEPREFIX"
+. "$KORFN/stend/obshchee.sh"
 
 command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
 
@@ -54,19 +55,18 @@ reg_get() { # $1 имя значения -> печатает значение (�
   "$WINE" reg query "$NASTR" /v "$1" 2>/dev/null | tr -d '\r' | awk -v v="$1" '$1==v {print $3}'
 }
 
-# запускает Kelevra.exe в служебном режиме, возвращает URL службы через echo
+# запускает Kelevra.exe в служебном режиме, возвращает URL службы через echo.
+# Возврат функции 77 (через $?) значит «прибор мёртв» — см. stend/obshchee.sh.
 zapustit_i_vzyat_url() { # $1 = файл для журнала запуска
-  rm -f "$ZHURNAL"
   # KELEVRA_BEZ_OBNOVLENIYA=1 — иначе версия по умолчанию (0.1.0-rabota) видит
   # на GitHub релиз новее, тихо подменяет себя настоящим релизом и
   # перезапускается ИМ: стенд честно проверял бы чужой бинарь без нашей правки
   # (поймано 20.08: журнал показал "обновление: вышла версия 0.5.1, ставлю").
-  KELEVRA_BEZ_OKNA=1 KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe" >"$1" 2>&1 &
-  for _ in $(seq 1 20); do
-    [ -f "$ZHURNAL" ] && grep -q "служба слушает" "$ZHURNAL" 2>/dev/null && break
-    sleep 1
-  done
+  wine_zapusti "$1" "$ZHURNAL" "служба слушает" 20 -- \
+    env KELEVRA_BEZ_OKNA=1 KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe"
+  local rc=$?
   grep -o 'http://[^ ]*' "$ZHURNAL" 2>/dev/null | tail -1
+  return "$rc"
 }
 
 ostanovit() { # гасит процесс стенда по короткому имени: /proc/PID/cmdline у
@@ -92,6 +92,10 @@ reg_set 1 127.0.0.1:2412
 do_before=$(reg_get ProxyEnable); server_before=$(reg_get ProxyServer)
 echo "  до: ProxyEnable=$do_before ProxyServer=$server_before"
 url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk1.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
 if [ -z "$url" ]; then
   echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
 else
@@ -116,6 +120,10 @@ reg_set 0 10.0.0.9:9999
 do_before=$(reg_get ProxyEnable); server_before=$(reg_get ProxyServer)
 echo "  до: ProxyEnable=$do_before ProxyServer=$server_before"
 url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk2.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
 if [ -z "$url" ]; then
   echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
 else
@@ -150,6 +158,10 @@ reg_set 1 127.0.0.1:2412
 do_before=$(reg_get ProxyEnable); server_before=$(reg_get ProxyServer)
 echo "  до: ProxyEnable=$do_before ProxyServer=$server_before (профиль и битое ядро подложены руками)"
 url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk3.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
 if [ -z "$url" ]; then
   echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
 else
