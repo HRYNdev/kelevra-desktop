@@ -44,15 +44,18 @@ func Nayti(papka string) (string, bool) {
 	if err := json.Unmarshal(b, &z); err != nil || z.URL == "" {
 		return "", false
 	}
-	if !otvechaet(z.URL) {
+	if !Otvechaet(z.URL) {
 		return "", false
 	}
 	return z.URL, true
 }
 
-// otvechaet — жив ли адрес. Любая ошибка и любой код, кроме 2xx, считаются
+// Otvechaet — жив ли адрес. Любая ошибка и любой код, кроме 2xx, считаются
 // «копии нет»: лучше поднять свою, чем открыть окно в никуда.
-func otvechaet(url string) bool {
+//
+// Экспортирована ради сторожа окна (cmd/kelevra/storozh_okna.go): окно судит
+// о жизни своей службы ровно тем же способом, что и проверка второй копии.
+func Otvechaet(url string) bool {
 	klient := &http.Client{Timeout: Skolko}
 	otvet, err := klient.Get(url)
 	if err != nil {

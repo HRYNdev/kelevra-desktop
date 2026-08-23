@@ -37,6 +37,11 @@ func pokazatOkno(url string) {
 		os.Exit(1)
 	}
 	defer w.Destroy()
+	// Окно живёт ровно столько, сколько живёт его служба: без неё показывать
+	// нечего, а осиротевшее окно человек принимает за вторую копию приложения
+	// (см. storozh_okna.go). Terminate по документации go-webview2 можно звать
+	// из чужого потока, поэтому сторож работает своей горутиной.
+	go storozhitSluzhbu(url, shagStorozha, molchaniyDoZakrytiya, w.Terminate)
 	w.Navigate(url)
 	w.Run()
 }
