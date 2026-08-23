@@ -96,17 +96,21 @@ func Novaya() (*Sluzhba, error) {
 // PerestroitKonfig готовит рабочий конфиг ядра из профиля, который прислал
 // сервер: убирает поля, работающие только на телефоне, и выбирает режим по
 // правам. Без этого ядро на компьютере не стартует вообще.
-func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(false) }
+func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(konfig.Vybor{}) }
 
-func (s *Sluzhba) perestroit(bezSistemnogoProksi bool) error {
+// perestroit принимает отступления от обычной сборки конфига (dop.Prava
+// подставляется тут же, по факту прав на машине — вызывающему коду задавать
+// его незачем). BezSistemnogoProksi и BezSetevyhPravil в dop складываются, а
+// не заменяют друг друга: PodnyatZashchitu может взвести оба по очереди на
+// одном и том же подключении, и второй отказ не должен откатывать первую
+// подстраховку.
+func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
 		return err
 	}
-	gotovyy, k, err := konfig.Prigotovit(syroy, konfig.Vybor{
-		Prava:               prava.Est(),
-		BezSistemnogoProksi: bezSistemnogoProksi,
-	})
+	dop.Prava = prava.Est()
+	gotovyy, k, err := konfig.Prigotovit(syroy, dop)
 	if err != nil {
 		return err
 	}
@@ -634,7 +638,8 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	}
 	// Права могли появиться (человек перезапустил приложение администратором) —
 	// пересобираем конфиг перед стартом, иначе режим останется вчерашним.
-	if err := s.PerestroitKonfig(); err != nil {
+	vybor := konfig.Vybor{}
+	if err := s.perestroit(vybor); err != nil {
 		log.Printf("не подготовил конфиг: %v", err)
 		return fmt.Errorf("не подготовил конфиг: %w", err)
 	}
@@ -655,10 +660,32 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// старте» и связь никакую. Сверяем по общей части — «system proxy».
 	if err != nil && strings.Contains(err.Error(), "system proxy") {
 		log.Printf("система не дала настроить прокси, поднимаю ядро без этой просьбы")
-		if e := s.perestroit(true); e == nil {
+		vybor.BezSistemnogoProksi = true
+		if e := s.perestroit(vybor); e == nil {
 			zctx2, otmena2 := context.WithTimeout(ctx, 70*time.Second)
 			defer otmena2()
 			err = s.Yadro.Zapustit(zctx2)
+		}
+	}
+	// Второй такой же отказ, найден 23.08 замером настоящего ядра
+	// (.stend/sing-box-linux) на боевом профиле (22 route.rule_set, качаются
+	// с subkv.chickenkiller.com detour:"direct" — мимо туннеля). Источник
+	// правил жив, кеш пуст → 3.3с и порт открыт. Источник мёртв (connection
+	// refused) или молчит (i/o timeout), кеш пуст → ядро НЕ открывает порт
+	// вовсе, а падает целиком за 0.4с и за 5.2с соответственно строкой
+	// «initialize rule-set[N]: initial rule-set: ...». Наполненный кеш беду
+	// прячет (0.04с) — значит бьёт она по первому запуску и по слабой сети,
+	// проваленному DNS или провайдеру, который режет домен правил. Тот же
+	// приём, что и с system proxy выше: пересобираем конфиг без сетевых
+	// правил (весь трафик через туннель — konfig.Vybor.BezSetevyhPravil) и
+	// поднимаем ядро снова, вместо того чтобы оставить человека вовсе без связи.
+	if err != nil && strings.Contains(err.Error(), "initialize rule-set") {
+		log.Printf("источник правил маршрутизации недоступен, поднимаю ядро без них (весь трафик через VPN)")
+		vybor.BezSetevyhPravil = true
+		if e := s.perestroit(vybor); e == nil {
+			zctx3, otmena3 := context.WithTimeout(ctx, 70*time.Second)
+			defer otmena3()
+			err = s.Yadro.Zapustit(zctx3)
 		}
 	}
 	if err != nil {
