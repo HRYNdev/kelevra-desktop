@@ -29,6 +29,10 @@ export HOME=${HOME:-/root}
 # (замерено 20.08: mkdir «кириллица_проба» → File not found), и тесты с русскими
 # именами подтестов краснеют на ровном месте. Это про стенд, а не про продукт.
 export LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8}
+# wine падает («double free or corruption (out)»), если TMPDIR унаследован с
+# диска (замерено 23.08, воспроизведено с TMPDIR на ZFS-каталоге): ему нужен
+# настоящий /tmp. GOTMPDIR/GOCACHE у go приоритетнее TMPDIR, сборке не мешает.
+export TMPDIR=/tmp
 # Без go стенд не стенд, а имитация: собрать нечего, и весь смысл теряется.
 # Говорим это ОДИН раз и громко, а не десять раз «command not found» внутри цикла.
 command -v go >/dev/null 2>&1 || { echo "СТЕНД НЕ ЗАПУЩЕН: go нет в PATH (обычно /usr/local/go/bin; зови через bash -lc)"; exit 2; }
