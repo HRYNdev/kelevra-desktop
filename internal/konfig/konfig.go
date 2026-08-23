@@ -72,6 +72,9 @@ const (
 	// %s — адрес, который человеку придётся вписать руками.
 	ZametkaRuchnoyProksi = "Windows не дал включить защиту сам. Откройте Параметры → " +
 		"Сеть и Интернет → Прокси и впишите там адрес %s"
+	// ZametkaBezSetevyhPravil — Vybor.BezSetevyhPravil: список правил не
+	// скачался, включён упрощённый режим (весь трафик через VPN, без разбора).
+	ZametkaBezSetevyhPravil = "Список правил не скачался — весь трафик идёт через VPN."
 )
 
 // Поля профиля, которые ядро принимает только на Android. На компьютере они
@@ -89,6 +92,20 @@ type Vybor struct {
 	// не жалуется, а ПАДАЕТ («initialize system proxy: unsupported desktop
 	// environment»), и человек остаётся вообще без связи вместо половинной защиты.
 	BezSistemnogoProksi bool
+	// BezSetevyhPravil — не тянуть правила маршрутизации с сервера правил, а
+	// пустить вообще весь трафик через туннель. Взводится, когда сервер правил
+	// недоступен: боевой профиль несёт 22 route.rule_set (тип remote, качаются
+	// с subkv.chickenkiller.com detour:"direct" — мимо VPN). Проверено настоящим
+	// ядром на этом профиле: если источник недостижим (connection refused) или
+	// молчит (i/o timeout) и локальный кеш пуст, ядро не открывает порт вовсе,
+	// а ПАДАЕТ целиком за 0.4–5.2 секунды («initialize rule-set[N]: initial
+	// rule-set: ...: connect: connection refused»). Наполненный кеш эту беду
+	// прячет (старт за 0.04 с) — значит бьёт она именно по первому запуску и по
+	// человеку, у которого сеть слабая или провайдер режет домен правил.
+	// В профиле route.final == "direct": голое удаление rule_set пустило бы
+	// трафик мимо VPN молча, поэтому вместе с правилами final переставляется
+	// на туннельный выход (см. Prigotovit).
+	BezSetevyhPravil bool
 }
 
 // Prigotovit готовит профиль под эту машину.
@@ -167,6 +184,12 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	d["inbounds"] = ostavshiesya
 	if len(udalennyeTegi) > 0 {
 		pochistitPravila(d, udalennyeTegi)
+	}
+	if v.BezSetevyhPravil {
+		if err := ubratSetevyePravila(d); err != nil {
+			return nil, k, err
+		}
+		k.Zametka = ZametkaBezSetevyhPravil
 	}
 	k.ClashAdres, k.ClashSekret = clash(d)
 	zapomnitVybor(d)
@@ -258,6 +281,103 @@ func pochistitPravila(d map[string]any, tegi []string) {
 		ostatok = append(ostatok, pr)
 	}
 	r["rules"] = ostatok
+}
+
+// ubratSetevyePravila — тело Vybor.BezSetevyhPravil (см. комментарий поля):
+// выбрасывает route.rule_set целиком, выбрасывает из route.rules и dns.rules
+// каждое правило со ссылкой на rule_set (включая условия внутри logical-
+// правил) и переставляет route.final на туннельный выход, чтобы трафик, для
+// которого теперь некому сказать «этот домен — через VPN», не потёк вместо
+// этого напрямую.
+func ubratSetevyePravila(d map[string]any) error {
+	r, ok := d["route"].(map[string]any)
+	if !ok {
+		r = map[string]any{}
+		d["route"] = r
+	}
+	delete(r, "rule_set")
+	if pravila, ok := r["rules"].([]any); ok {
+		r["rules"] = bezRuleSet(pravila)
+	}
+	if dn, ok := d["dns"].(map[string]any); ok {
+		if pravila, ok := dn["rules"].([]any); ok {
+			dn["rules"] = bezRuleSet(pravila)
+		}
+	}
+	teg := tunnelnyyVyhod(d)
+	if teg == "" {
+		return fmt.Errorf("в профиле нет ни одного выхода в туннель — упрощённый режим (без правил) включить нечем")
+	}
+	r["final"] = teg
+	return nil
+}
+
+// bezRuleSet рекурсивно выбрасывает из списка правил каждое, у которого есть
+// ключ "rule_set" — в том числе внутри вложенного списка logical-правила
+// ("type":"logical","rules":[...]). Если у logical-правила после чистки не
+// осталось ни одного вложенного условия, выбрасываем и его — правило без
+// единого условия ядру не нужно.
+func bezRuleSet(pravila []any) []any {
+	var ostatok []any
+	for _, p := range pravila {
+		pr, ok := p.(map[string]any)
+		if !ok {
+			ostatok = append(ostatok, p)
+			continue
+		}
+		if _, est := pr["rule_set"]; est {
+			continue
+		}
+		if vlozh, ok := pr["rules"].([]any); ok {
+			ochishchennye := bezRuleSet(vlozh)
+			if len(ochishchennye) == 0 {
+				continue
+			}
+			pr["rules"] = ochishchennye
+		}
+		ostatok = append(ostatok, pr)
+	}
+	return ostatok
+}
+
+// tunnelnyyVyhod ищет тег выхода, на который стоит пустить ВЕСЬ трафик, если
+// правил маршрутизации больше нет: сперва селектор (человек сам выбирает
+// узел из него — эталон профиля хозяина), иначе первый urltest (авто-выбор по
+// скорости), иначе первый выход, который не direct/block/dns.
+func tunnelnyyVyhod(d map[string]any) string {
+	vyhody, _ := d["outbounds"].([]any)
+	var selector, urltest, drugoy string
+	for _, v := range vyhody {
+		vh, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		tip, _ := vh["type"].(string)
+		teg, _ := vh["tag"].(string)
+		switch tip {
+		case "selector":
+			if selector == "" {
+				selector = teg
+			}
+		case "urltest":
+			if urltest == "" {
+				urltest = teg
+			}
+		case "direct", "block", "dns":
+			// не туннель — пропускаем
+		default:
+			if drugoy == "" {
+				drugoy = teg
+			}
+		}
+	}
+	if selector != "" {
+		return selector
+	}
+	if urltest != "" {
+		return urltest
+	}
+	return drugoy
 }
 
 func clash(d map[string]any) (adres, sekret string) {
