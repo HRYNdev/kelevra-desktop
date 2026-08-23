@@ -336,5 +336,121 @@ else
 fi
 ostanovit
 
+echo "── сценарий 6: жёсткая смерть службы (kill -9, без сигнала выхода) — прокси обязан снять СЛЕДУЮЩИЙ запуск окна ──"
+# Диагноз 23.08 (третий заход): все мягкие пути (штатный выход, паника,
+# «Отключить», неудачный старт ядра) снимают прокси сами. Не накрыт ЖЁСТКИЙ
+# путь — Диспетчер задач, выключение/перезагрузка Windows, пропадание питания:
+# оконная сборка без консоли не получает SIGTERM, proksi.Snyat() в конце
+# zapustitSluzhbu просто не успевает отработать. Ровно жалоба хозяина 20.08 10:23,
+# только не для закрытия приложения (уже вылечено), а для смерти без выхода.
+#
+# Этот сценарий убивает службу SIGKILL (никакого SIGTERM, никакого ожидания —
+# так умирает процесс от Диспетчера задач), проверяет, что реестр остался
+# висеть, а потом запускает .exe ещё раз в РЕЖИМЕ ОКНА (не --sluzhba) — именно
+# там, в cmd/kelevra/main.go, живёт починка. WebView2 под wine не поднимается
+# (см. шапку windows.sh), поэтому зовём с --tiho: окно не рисуем, а починка
+# снятия прокси срабатывает до него, в самом начале main().
+METKA="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/proksi.json"
+if [ ! -s "$YADRO_ISTOCHNIK" ]; then
+  echo "⚫ ПРИБОР МЁРТВ: нет настоящего ядра ($YADRO_ISTOCHNIK) — сценарий нечем ставить"
+  exit 7
+fi
+cp "$KORFN/internal/konfig/testdata/profil_stend_bez_seti.json" "$PROFIL"
+cp "$YADRO_ISTOCHNIK" "$YADRO_PAPKA/sing-box.exe"
+rm -f "$METKA"
+reg_set 0 10.0.0.9:9999
+echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой выключенный прокси, метки нет)"
+url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk6.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
+if [ -z "$url" ]; then
+  echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
+else
+  echo "  служба: $url"
+  otvet=$(curl -s -m 120 "${url}api/podklyuchit")
+  echo "  POST podklyuchit -> $otvet"
+  sleep 2
+  posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+  echo "  после «Подключить»: ProxyEnable=$posle ProxyServer=$server_posle, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+  if printf '%s' "$otvet" | grep -q '"beda"'; then
+    echo "  КРАСНЫЙ: подключение не удалось — сценарий нечем ставить"; bed=1
+  elif [ "$posle" != "0x1" ] || ! printf '%s' "$server_posle" | grep -qF "$ADRES_OZHIDAEMYY"; then
+    echo "  КРАСНЫЙ: прокси не встал как надо ($posle/$server_posle) — сценарий нечем ставить"; bed=1
+  elif [ ! -s "$METKA" ]; then
+    echo "  КРАСНЫЙ: прокси встал, а метка на диске не записана (проверить нечем п.2 диагноза)"; bed=1
+  else
+    # Убиваем ТОЛЬКО Kelevra.exe, жёстко и сразу — никакого SIGTERM и ожидания
+    # (ostanovit() ниже так умеет, но это мягкая смерть, которую служба уже
+    # ловит; здесь нужна именно жёсткая). sing-box.exe специально не трогаем:
+    # Диспетчер задач в реальности снимает процесс, который ему указали, а
+    # осиротевшее ядро продолжает жить точно так же, как настоящее.
+    echo "  убиваю Kelevra.exe жёстко (kill -9, без выхода)"
+    pkill -KILL -f '[K]elevra\.exe' 2>/dev/null
+    sleep 1
+    posle_kill=$(reg_get ProxyEnable); server_posle_kill=$(reg_get ProxyServer)
+    echo "  после жёсткой смерти: ProxyEnable=$posle_kill ProxyServer=$server_posle_kill, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+    if [ "$posle_kill" != "0x1" ]; then
+      echo "  КРАСНЫЙ: реестр сам расчистился без нашей починки — сценарий не воспроизвёл беду"; bed=1
+    elif [ ! -s "$METKA" ]; then
+      echo "  КРАСНЫЙ: метка пропала сама по себе — сценарий не воспроизвёл беду"; bed=1
+    else
+      echo "  подтверждено: ProxyEnable=0x1 висит без службы за ним — беда 20.08 без закрытия окна воспроизведена"
+      echo "  запускаю Kelevra.exe СНОВА, в режиме окна (--tiho, без --sluzhba)"
+      wine_zapusti "$STEND/proksi_zapusk6_okno.log" "$ZHURNAL" "прошлый запуск умер жёстко" 25 -- \
+        env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
+      rc=$?
+      if [ "$rc" -eq 77 ]; then
+        echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+        exit 7
+      fi
+      sleep 2
+      itog=$(reg_get ProxyEnable); server_itog=$(reg_get ProxyServer)
+      echo "  журнал (хвост):"; tail -6 "$ZHURNAL" 2>/dev/null
+      echo "  после повторного запуска окна: ProxyEnable=$itog ProxyServer=$server_itog, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+      if ! grep -q "прошлый запуск умер жёстко" "$ZHURNAL" 2>/dev/null; then
+        echo "  КРАСНЫЙ: окно не заметило осиротевший прокси — строки починки в журнале нет"; bed=1
+      elif [ "$itog" != "0x0" ]; then
+        echo "  КРАСНЫЙ: ProxyEnable не снят повторным запуском окна (осталось $itog)"; bed=1
+      elif [ -s "$METKA" ]; then
+        echo "  КРАСНЫЙ: прокси сняли, а метка на диске осталась — следующий запуск снова полезет её проверять зря"; bed=1
+      else
+        echo "  зелёный: осиротевший прокси снят повторным запуском окна, метка убрана"
+      fi
+    fi
+  fi
+fi
+ostanovit
+
+echo "── сценарий 7 (страховка): чужой прокси без нашей метки повторный запуск окна не трогает ──"
+# Симметричная проверка сценарию 6: если метки на диске нет вовсе (мы прокси
+# не ставили — это прокси человека, прописанный им самим руками или другой
+# программой), окно не имеет права его снимать, даже если живой копии службы
+# тоже нет. Без этой проверки починка сценария 6 была бы неотличима от «окно
+# снимает любой чужой прокси, раз службы не видно» — а это ровно то, чего
+# делать нельзя.
+rm -f "$METKA"
+reg_set 1 10.0.0.9:9999
+echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой ВКЛЮЧЁННЫЙ прокси, метки точно нет)"
+wine_zapusti "$STEND/proksi_zapusk7_okno.log" "$ZHURNAL" "--- запуск Kelevra" 15 -- \
+  env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
+rc=$?
+if [ "$rc" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
+sleep 2
+posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+echo "  после запуска окна: ProxyEnable=$posle ProxyServer=$server_posle, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+if [ "$posle" != "0x1" ]; then
+  echo "  КРАСНЫЙ: чужой ProxyEnable тронут без метки (стало $posle)"; bed=1
+elif [ "$server_posle" != "10.0.0.9:9999" ]; then
+  echo "  КРАСНЫЙ: чужой ProxyServer тронут без метки (стало $server_posle)"; bed=1
+else
+  echo "  зелёный: чужой включённый прокси без нашей метки не тронут"
+fi
+ostanovit
+
 echo "── итог: $([ $bed -eq 0 ] && echo ЗЕЛЁНЫЙ || echo КРАСНЫЙ) ──"
 exit $bed

@@ -723,6 +723,23 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		// применяем прямо сейчас: раньше выбор до подключения был декорацией —
 		// список стоял пустым, а нажать было нечего.
 		s.primenitSohranennyeUzly()
+
+		// Метка на диске: успешный подъём защиты означает, что системный
+		// прокси на s.kartina.ProksiAdres реально стоит в реестре — его
+		// поставило либо само ядро (обычный путь), либо мы сами чуть выше
+		// (проверка Stoit/Postavit). Жёсткая смерть процесса (Диспетчер
+		// задач, выключение питания) не даёт службе снять его штатно —
+		// метка переживает эту смерть и даёт следующему запуску окна
+		// (cmd/kelevra/main.go) снять чужой для него, но доказанно наш
+		// прокси самому. RuchnoyProksi=true — противоположный случай: адрес
+		// в реестре не стоит, человеку показана записка «впишите руками»,
+		// снимать нечего.
+		s.zamok.Lock()
+		adres, pishemMetku := s.kartina.ProksiAdres, s.kartina.Rezhim == konfig.Proksi && !s.kartina.RuchnoyProksi && s.kartina.ProksiAdres != ""
+		s.zamok.Unlock()
+		if pishemMetku {
+			proksi.Otmetit(adres)
+		}
 	}
 	return err
 }
