@@ -452,5 +452,78 @@ else
 fi
 ostanovit
 
+echo "── сценарий 8: ядро стартовало БЕЗ ошибки, но прокси в реестр не прописало — приложение обязано поймать это само ──"
+# Дыра, найденная 23.08 вечером. Сценарии 4 и 5 оба входят через ГРОМКИЙ отказ
+# ядра: строку «system proxy» в ошибке старта. Проверка реестра
+# (proksi.Stoit/Postavit) висела ровно внутри этой ветки — то есть работала
+# только тогда, когда ядро само призналось. Тихий отказ (ядро поднялось, порт
+# слушает, ошибки нет, а системного прокси в реестре нет) не ловил никто:
+# служба отвечала «готово», окно красило защиту зелёным, метка «прокси
+# поставили мы» писалась по предположению — а трафик человека шёл мимо туннеля
+# и он видел ровно то же, что 20.08: «интернет как будто без VPN».
+# Лже-ядро с маркером tiho.marker играет этот случай: успех с первой попытки,
+# реестра не касается.
+rm -f "$YADRO_PAPKA/popytka.marker" "$METKA"
+: > "$YADRO_PAPKA/tiho.marker"
+cp "$KORFN/internal/konfig/testdata/profil_stend_bez_seti.json" "$PROFIL"
+cp "$STEND/lzhe_yadro.exe" "$YADRO_PAPKA/sing-box.exe"
+# Уборка площадки. Сценарии 6-7 намеренно оставляют осиротевшее НАСТОЯЩЕЕ ядро
+# в живых, а оно, умирая от SIGTERM, ещё успевает тронуть реестр — и его хвост
+# приезжал в этот сценарий (замер 23.08: после сценария 8 в реестре стоял
+# «http://127.0.0.1:2412» со схемой, а так пишет только настоящее ядро, наш
+# Postavit пишет адрес без схемы). Здесь площадка чистится ЖЁСТКО и сверяется:
+# лже-ядру никто не должен мешать, иначе сценарий судит не продукт, а соседа.
+pkill -KILL -f '[K]elevra\.exe' 2>/dev/null
+pkill -KILL -f '[s]ing-box\.exe' 2>/dev/null
+sleep 2
+if pgrep -f '[K]elevra\.exe|[s]ing-box\.exe' >/dev/null 2>&1; then
+  echo "⚫ ПРИБОР МЁРТВ: на площадке сценария 8 остались чужие процессы:"
+  pgrep -a -f '[K]elevra\.exe|[s]ing-box\.exe' | head -5
+  exit 7
+fi
+reg_set 0 10.0.0.9:9999
+proverka_do=$(reg_get ProxyServer)
+if [ "$proverka_do" != "10.0.0.9:9999" ] || [ "$(reg_get ProxyEnable)" != "0x0" ]; then
+  echo "⚫ ПРИБОР МЁРТВ: площадку не удалось выставить (ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$proverka_do)"
+  exit 7
+fi
+echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$proverka_do (чужой выключенный прокси, метки нет, площадка чиста)"
+url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk8.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
+if [ -z "$url" ]; then
+  echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
+else
+  echo "  служба: $url"
+  echo "  перед подключением: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer)"
+  otvet=$(curl -s -m 120 "${url}api/podklyuchit")
+  echo "  POST podklyuchit -> $otvet"
+  sost=$(curl -s -m 10 "${url}api/sostoyanie")
+  ruchnoy=$(printf '%s' "$sost" | ruchnoy_proksi_iz_sostoyaniya)
+  sleep 2
+  posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+  echo "  после: ProxyEnable=$posle ProxyServer=$server_posle ruchnoy_proksi=$ruchnoy, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+  if printf '%s' "$otvet" | grep -q '"beda"'; then
+    echo "  КРАСНЫЙ: подключение не удалось — тихий отказ проверить не на чем"
+    tail -12 "$YADRO_PAPKA/yadro.log" 2>/dev/null; bed=1
+  elif grep -q "system proxy" "$YADRO_PAPKA/yadro.log" 2>/dev/null; then
+    echo "  КРАСНЫЙ: ядро всё-таки кричало про system proxy — сценарий свалился в старую громкую ветку, тихий отказ не воспроизведён"; bed=1
+  elif [ "$posle" != "0x1" ]; then
+    echo "  КРАСНЫЙ: ядро молча не поставило прокси, приложение это проглотило — ProxyEnable=$posle, а защита показана поднятой"; bed=1
+  elif ! printf '%s' "$server_posle" | grep -qF "$ADRES_OZHIDAEMYY"; then
+    echo "  КРАСНЫЙ: ProxyServer=$server_posle не содержит ожидаемый адрес $ADRES_OZHIDAEMYY — прописал не то"; bed=1
+  elif [ "$ruchnoy" = "True" ]; then
+    echo "  КРАСНЫЙ: реестр приложение прописало само правильно ($server_posle), а записка про ручную правку всё равно висит"; bed=1
+  elif [ ! -s "$METKA" ]; then
+    echo "  КРАСНЫЙ: прокси поставили мы, а метки нет — после жёсткой смерти снять его будет некому"; bed=1
+  else
+    echo "  зелёный: тихий отказ ядра пойман по реестру, прокси поставлен приложением ($server_posle), метка на месте"
+  fi
+fi
+rm -f "$YADRO_PAPKA/tiho.marker"
+ostanovit
+
 echo "── итог: $([ $bed -eq 0 ] && echo ЗЕЛЁНЫЙ || echo КРАСНЫЙ) ──"
 exit $bed

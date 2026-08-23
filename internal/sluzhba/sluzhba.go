@@ -665,29 +665,6 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			zctx2, otmena2 := context.WithTimeout(ctx, 70*time.Second)
 			defer otmena2()
 			err = s.Yadro.Zapustit(zctx2)
-			if err == nil {
-				// Ядро отказалось прописать себя системным прокси само — но это
-				// не значит, что прокси в системе не стоит и не может встать:
-				// рабочие VPN-клиенты в такой же ситуации (нет прав на
-				// InternetSetOption от лица ядра) прописывают тот же ключ
-				// реестра напрямую от лица своего процесса, и это получается.
-				// Замер 23.08 (stend/proksi.sh, сценарий 4): после этой самой
-				// страховки в реестре реально стоял ProxyEnable=0x1 и наш
-				// адрес — а окно всё равно показывало «впишите вручную».
-				// Проверяем правду в реестре и, если её там ещё нет, ставим
-				// сами; заметка «впишите руками» остаётся только если и это
-				// не вышло.
-				s.zamok.Lock()
-				adres := s.kartina.ProksiAdres
-				s.zamok.Unlock()
-				if proksi.Stoit(adres) || proksi.Postavit(adres) {
-					s.zamok.Lock()
-					s.kartina.RuchnoyProksi = false
-					s.kartina.Zametka = konfig.ZametkaProksiRezhima(s.kartina.EstTunnel)
-					s.zamok.Unlock()
-					log.Printf("системный прокси стоит (сам поставился или поставили за него): %s", adres)
-				}
-			}
 		}
 	}
 	// Второй такой же отказ, найден 23.08 замером настоящего ядра
@@ -709,6 +686,39 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			zctx3, otmena3 := context.WithTimeout(ctx, 70*time.Second)
 			defer otmena3()
 			err = s.Yadro.Zapustit(zctx3)
+		}
+	}
+	// Зелёный поверх пустоты. До 23.08 «ядро поднялось без ошибки» само по
+	// себе считалось доказательством, что системный прокси в реестре стоит:
+	// проверка Stoit/Postavit висела ТОЛЬКО внутри ветки-подстраховки, то
+	// есть срабатывала лишь когда ядро упало ГРОМКО, строкой «system proxy».
+	// Молчаливый отказ — ядро стартовало, порт слушает, а записи в реестре
+	// нет или она не наша — не ловил никто: окно показывало зелёную защиту,
+	// метка «прокси поставили мы» писалась по предположению, а трафик шёл
+	// мимо. Проверяем не молчание ядра, а сам реестр, и на любом успешном
+	// подъёме, а не только после известной поломки.
+	if err == nil {
+		s.zamok.Lock()
+		proksiRezhim := s.kartina.Rezhim == konfig.Proksi && s.kartina.ProksiAdres != ""
+		adres, estTunnel := s.kartina.ProksiAdres, s.kartina.EstTunnel
+		s.zamok.Unlock()
+		if proksiRezhim {
+			stoit := proksi.Stoit(adres)
+			if !stoit {
+				// Ядро либо не просили (BezSistemnogoProksi), либо оно
+				// промолчало. Тот же ключ реестра от лица своего процесса
+				// пишут рабочие VPN-клиенты — пробуем сами.
+				stoit = proksi.Postavit(adres)
+			}
+			s.zamok.Lock()
+			s.kartina.RuchnoyProksi = !stoit
+			if stoit {
+				s.kartina.Zametka = konfig.ZametkaProksiRezhima(estTunnel)
+			} else {
+				s.kartina.Zametka = fmt.Sprintf(konfig.ZametkaRuchnoyProksi, adres)
+			}
+			s.zamok.Unlock()
+			log.Printf("системный прокси в реестре: стоит=%v (адрес %s)", stoit, adres)
 		}
 	}
 	if err != nil {
