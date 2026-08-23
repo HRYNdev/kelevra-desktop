@@ -177,5 +177,68 @@ else
 fi
 ostanovit
 
+echo "── сценарий 4: удачное «Подключить» обязано ПОСТАВИТЬ системный прокси ──"
+# Дыра, найденная 23.08 по жалобе хозяина (22.08 22:08): «включил впн твой, ииии
+# нихуя, пошел подумал включил САМ прокси на ПК, и *** заработало». Сценарии
+# 1-3 проверяют только СНЯТИЕ прокси. Постановку не проверял никто: её делает
+# чужой код (ядро, по set_system_proxy в конфиге), а PodnyatZashchitu после
+# успешного Zapustit() не смотрит в реестр вовсе — окно зеленеет, трафик идёт
+# мимо. Здесь гоняем настоящее ядро и требуем, чтобы после «Подключить»
+# ProxyEnable=1, а ProxyServer совпадал с адресом из картины приложения.
+YADRO_ISTOCHNIK=$KORFN/.stend_win/sing-box.exe
+if [ ! -s "$YADRO_ISTOCHNIK" ]; then
+  echo "⚫ ПРИБОР МЁРТВ: нет настоящего ядра ($YADRO_ISTOCHNIK) — постановку прокси проверить нечем"
+  exit 7
+fi
+# Профиль тут НЕ боевой телефонный, и это осознанно: в боевом 22 удалённых
+# rule_set, ядро тянет их с subkv.chickenkiller.com ПЕРЕД стартом и без сети
+# падает FATAL — стенд мерил бы связь LXC, а не постановку прокси. Здесь
+# профиль-близнец без сетевых rule_set (сгенерирован из боевого), всё
+# остальное — настоящее: то же ядро sing-box.exe, тот же путь приложения.
+cp "$KORFN/internal/konfig/testdata/profil_stend_bez_seti.json" "$PROFIL"
+cp "$YADRO_ISTOCHNIK" "$YADRO_PAPKA/sing-box.exe"
+reg_set 0 10.0.0.9:9999
+echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой выключенный прокси)"
+url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk4.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
+if [ -z "$url" ]; then
+  echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
+else
+  echo "  служба: $url"
+  otvet=$(curl -s -m 120 "${url}api/podklyuchit")
+  echo "  POST podklyuchit -> $otvet"
+  sost=$(curl -s -m 10 "${url}api/sostoyanie")
+  adres=$(printf '%s' "$sost" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print(""); raise SystemExit
+k=d.get("kartina") or d
+print(k.get("proksi_adres") or "")')
+  ruchnoy=$(printf '%s' "$sost" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print(""); raise SystemExit
+k=d.get("kartina") or d
+print(k.get("ruchnoy_proksi"))')
+  echo "  картина: proksi_adres=$adres ruchnoy_proksi=$ruchnoy"
+  sleep 2
+  posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+  echo "  после: ProxyEnable=$posle ProxyServer=$server_posle"
+  if printf '%s' "$otvet" | grep -q '"beda"'; then
+    echo "  КРАСНЫЙ: подключение не удалось — постановку прокси проверить не на чем"
+    tail -12 "$YADRO_PAPKA/yadro.log" 2>/dev/null; bed=1
+  elif [ "$ruchnoy" = "True" ] || [ "$ruchnoy" = "true" ]; then
+    echo "  зелёный по договору: приложение САМО признало ручной прокси (ruchnoy_proksi=true) — человек предупреждён запиской"
+  elif [ "$posle" != "0x1" ]; then
+    echo "  КРАСНЫЙ: подключились, окно зелёное, а ProxyEnable=$posle — трафик идёт мимо защиты"; bed=1
+  elif [ -n "$adres" ] && [ "$server_posle" != "$adres" ]; then
+    echo "  КРАСНЫЙ: ProxyServer=$server_posle, а приложение обещает $adres"; bed=1
+  else
+    echo "  зелёный: прокси реально поставлен ($server_posle)"
+  fi
+fi
+ostanovit
+
 echo "── итог: $([ $bed -eq 0 ] && echo ЗЕЛЁНЫЙ || echo КРАСНЫЙ) ──"
 exit $bed
