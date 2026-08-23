@@ -28,6 +28,35 @@ NUZHEN_WINE=("windows.sh" "razdvoenie.sh" "trey.sh" "obnovlenie.sh" "proksi.sh")
 
 est_v() { local i n=$1; shift; for i in "$@"; do [ "$i" = "$n" ] && return 0; done; return 1; }
 
+# Стенды под wine поднимают НАСТОЯЩИЕ windows-процессы: своё приложение и ядро
+# sing-box.exe. Ядро — отдельный процесс, переживающий смерть приложения, и
+# гасит его каждый стенд сам, у себя в конце, по памяти автора.
+#
+# 23.08 это протекло второй раз. proksi.sh сценарий 3 подкладывает БИТОЕ ядро
+# (файл с мусором) и ждёт, что неудачное подключение снимет системный прокси.
+# Вместо этого в реестре оказался `http://127.0.0.1:2412` — формат sing-box,
+# которого мусорный файл написать не мог: писал переживший сосед по приёмке.
+# Стенд краснел ВНУТРИ vse.sh и был зелёным в одиночку — красный ПРИБОРА, а не
+# брак продукта, и он останавливал выпуск.
+#
+# Поэтому площадка чистится здесь, одним местом для всех стендов, и ВСЛУХ:
+# молчаливая уборка спрячет следующую утечку так же, как её прятала уборка
+# по памяти. Строка «живы чужие процессы» — имя того, кто за собой не убрал.
+CHUZHIE='[K]elevra\.exe|[s]ing-box\.exe'
+ubrat_ostatki() {  # ubrat_ostatki <перед|после> <имя стенда>
+  local ostalos
+  ostalos=$(pgrep -a -f "$CHUZHIE" 2>/dev/null)
+  [ -z "$ostalos" ] && return 0
+  printf '   ⚠ %s %s: живы чужие процессы, гашу —\n%s\n' "$1" "$2" "$ostalos"
+  pkill -TERM -f "$CHUZHIE" 2>/dev/null
+  for _ in $(seq 1 10); do
+    pgrep -f "$CHUZHIE" >/dev/null 2>&1 || return 0
+    sleep 1
+  done
+  pkill -KILL -f "$CHUZHIE" 2>/dev/null
+  sleep 1
+}
+
 ZELENYE=(); KRASNYE=(); PROPUSK=(); MERTVYE=()
 
 shag() {  # shag <имя> <команда...>
@@ -79,10 +108,12 @@ for put in "$KOREN"/stend/*.sh "$KOREN"/stend/*.py; do
     PROPUSK+=("$imya — нужен wine, а BEZ_WINE=1")
     continue
   fi
+  ubrat_ostatki перед "$imya"
   case "$imya" in
     *.py) shag "$imya" python3 "$put" ;;
     *)    shag "$imya" bash "$put" ;;
   esac
+  ubrat_ostatki после "$imya"
 done
 
 printf '\n════════ ИТОГ ПРИЁМКИ ════════\n'
