@@ -195,6 +195,48 @@ func TestPrigotovitVelitYadruPomnitVybor(t *testing.T) {
 	}
 }
 
+// BezSetevyhPravil — упрощённый режим, взводится, когда сервер правил
+// недоступен (см. Vybor.BezSetevyhPravil). Ожидаем: ни rule_set, ни ссылок на
+// него в правилах не осталось, а route.final указывает на туннельный выход,
+// а не на "direct" (иначе трафик молча пошёл бы мимо VPN — боевой профиль
+// живёт именно с route.final=="direct").
+func TestBezSetevyhPravilUbiraetRuleSetIStavitFinal(t *testing.T) {
+	gotovyy, k, err := Prigotovit(profil(t), Vybor{BezSetevyhPravil: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.Zametka != ZametkaBezSetevyhPravil {
+		t.Fatalf("заметка не про упрощённый режим: %q", k.Zametka)
+	}
+	d := razobrat(t, gotovyy)
+	r, _ := d["route"].(map[string]any)
+	if _, est := r["rule_set"]; est {
+		t.Fatal("route.rule_set остался — источник правил больше не спросят, ядро на это упадёт")
+	}
+	if strings.Contains(string(gotovyy), `"rule_set"`) {
+		t.Fatal(`ссылка "rule_set" осталась в правилах (route.rules или dns.rules)`)
+	}
+	final, _ := r["final"].(string)
+	if final == "" || final == "direct" {
+		t.Fatalf("route.final = %q — весь трафик пойдёт мимо туннеля", final)
+	}
+	if final != "Соединение" {
+		t.Fatalf("ожидал тег селектора «Соединение» (первый outbounds[].type==selector), получил %q", final)
+	}
+}
+
+// Профиль без единого туннельного выхода: молчаливое "final": "direct" хуже
+// падения (тихая утечка трафика), поэтому это должно быть ошибкой.
+func TestBezSetevyhPravilBezTunnelnogoVyhodaEtoOshibka(t *testing.T) {
+	syroy := []byte(`{"route":{"final":"direct","rule_set":[{"tag":"ads"}],
+		"rules":[{"outbound":"direct","rule_set":["ads"]}]},
+		"outbounds":[{"type":"direct","tag":"direct"},{"type":"block","tag":"block"}],
+		"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":2412}]}`)
+	if _, _, err := Prigotovit(syroy, Vybor{BezSetevyhPravil: true}); err == nil {
+		t.Fatal("без туннельного выхода упрощённый режим не должен молча оставлять final=direct")
+	}
+}
+
 // Профиль без cache_file: хранилище должно появиться само, иначе выбор узла
 // сбросится при первом же перезапуске ядра.
 func TestPrigotovitDobavlyaetHranilishcheEsliEgoNet(t *testing.T) {
