@@ -91,6 +91,44 @@ if ! GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui" -o "$STEND/Kele
   echo "  НЕ СОБРАЛСЯ"; exit 1
 fi
 
+echo "── сборка лже-ядра для сценария 5 (cmd/lzhe_yadro, windows/amd64) ──"
+if ! GOOS=windows GOARCH=amd64 go build -o "$STEND/lzhe_yadro.exe" "$KORFN/cmd/lzhe_yadro" 2>&1; then
+  echo "  НЕ СОБРАЛСЯ"; exit 1
+fi
+
+# ozhidaemyy_adres_proksi <profil.json> — печатает host:port первого входа
+# mixed/http/socks, ровно так же, как internal/konfig.adresVhoda его строит.
+# Приговор сценариев 4 и 5 сверяет реестр с этим адресом, а не с тем, что о
+# себе рассказывает само приложение через /api/sostoyanie: та ручка вообще
+# не отдаёт proksi_adres (otvetSostoyaniya в internal/sluzhba/sluzhba.go), и
+# полагаться на самоотчёт проверяемой стороны — не проверка, а эхо.
+ozhidaemyy_adres_proksi() {
+  python3 - "$1" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for v in d.get("inbounds", []):
+    if v.get("type") in ("mixed", "http", "socks"):
+        host = v.get("listen") or "127.0.0.1"
+        port = v.get("listen_port")
+        if port:
+            print(f"{host}:{port}")
+            break
+PY
+}
+
+# ruchnoy_proksi_iz_sostoyaniya <json ответ /api/sostoyanie> — печатает
+# True/False. RuchnoyProksi в otvetSostoyaniya несёт `json:",omitempty"`,
+# значит при false поле вообще ПРОПАДАЕТ из ответа — голый .get() без
+# значения по умолчанию печатал бы None и приговор бы не срабатывал.
+ruchnoy_proksi_iz_sostoyaniya() {
+  python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("False"); raise SystemExit
+print(bool(d.get("ruchnoy_proksi", False)))'
+}
+
 echo "── сценарий 1: прокси был включён нами, «Отключить» должен снять его ──"
 reg_set 1 127.0.0.1:2412
 do_before=$(reg_get ProxyEnable); server_before=$(reg_get ProxyServer)
@@ -183,14 +221,27 @@ else
 fi
 ostanovit
 
-echo "── сценарий 4: удачное «Подключить» обязано ПОСТАВИТЬ системный прокси ──"
+echo "── сценарий 4: удачное «Подключить» обязано ПОСТАВИТЬ системный прокси, а не соврать про ручную правку ──"
 # Дыра, найденная 23.08 по жалобе Вовы (22.08 22:08): «включил впн твой, ииии
 # нихуя, пошел подумал включил САМ прокси на ПК, и ебать заработало». Сценарии
 # 1-3 проверяют только СНЯТИЕ прокси. Постановку не проверял никто: её делает
 # чужой код (ядро, по set_system_proxy в конфиге), а PodnyatZashchitu после
-# успешного Zapustit() не смотрит в реестр вовсе — окно зеленеет, трафик идёт
-# мимо. Здесь гоняем настоящее ядро и требуем, чтобы после «Подключить»
-# ProxyEnable=1, а ProxyServer совпадал с адресом из картины приложения.
+# успешного Zapustit() не смотрел в реестр вовсе — окно зеленело, трафик мог
+# идти мимо.
+#
+# ПОЧЕМУ ПРЕЖНИЙ ПРИГОВОР ЭТОГО СЦЕНАРИЯ БЫЛ НЕПРАВ. Замер 23.08, дословно:
+#   до: ProxyEnable=0x0 ProxyServer=10.0.0.9:9999 (чужой выключенный прокси)
+#   после: ProxyEnable=0x1 ProxyServer=http://127.0.0.1:2412
+#   картина: proksi_adres= ruchnoy_proksi=True
+# Реестр реально встал (ProxyEnable=0x1, наш адрес) — ядро успело прописать
+# его само ДО того, как упасть на notify-вызове (winapi error #12009), и
+# приложение ушло в подстраховку BezSistemnogoProksi. А приложение при этом
+# говорило человеку в окне «Windows не дал включить защиту сам, впишите
+# адрес руками» — старый приговор ниже засчитывал именно это как
+# «зелёный по договору». Раз реестр уже правильный — врать об этом нельзя,
+# это и есть ровно та дыра, на которую Вова указал 23.08 15:36: «я видел
+# рабочие vpn клиенты, хули ты мне тут затираешь ваще что невозможно».
+# Приговор теперь судит правду в реестре И правдивость записки одновременно.
 YADRO_ISTOCHNIK=$KORFN/.stend_win/sing-box.exe
 if [ ! -s "$YADRO_ISTOCHNIK" ]; then
   echo "⚫ ПРИБОР МЁРТВ: нет настоящего ядра ($YADRO_ISTOCHNIK) — постановку прокси проверить нечем"
@@ -203,6 +254,8 @@ fi
 # остальное — настоящее: то же ядро sing-box.exe, тот же путь приложения.
 cp "$KORFN/internal/konfig/testdata/profil_stend_bez_seti.json" "$PROFIL"
 cp "$YADRO_ISTOCHNIK" "$YADRO_PAPKA/sing-box.exe"
+ADRES_OZHIDAEMYY=$(ozhidaemyy_adres_proksi "$PROFIL")
+echo "  ожидаемый адрес прокси из профиля: $ADRES_OZHIDAEMYY"
 reg_set 0 10.0.0.9:9999
 echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой выключенный прокси)"
 url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk4.log")
@@ -217,31 +270,68 @@ else
   otvet=$(curl -s -m 120 "${url}api/podklyuchit")
   echo "  POST podklyuchit -> $otvet"
   sost=$(curl -s -m 10 "${url}api/sostoyanie")
-  adres=$(printf '%s' "$sost" | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: print(""); raise SystemExit
-k=d.get("kartina") or d
-print(k.get("proksi_adres") or "")')
-  ruchnoy=$(printf '%s' "$sost" | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: print(""); raise SystemExit
-k=d.get("kartina") or d
-print(k.get("ruchnoy_proksi"))')
-  echo "  картина: proksi_adres=$adres ruchnoy_proksi=$ruchnoy"
+  ruchnoy=$(printf '%s' "$sost" | ruchnoy_proksi_iz_sostoyaniya)
   sleep 2
   posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
-  echo "  после: ProxyEnable=$posle ProxyServer=$server_posle"
+  echo "  после: ProxyEnable=$posle ProxyServer=$server_posle ruchnoy_proksi=$ruchnoy"
   if printf '%s' "$otvet" | grep -q '"beda"'; then
     echo "  КРАСНЫЙ: подключение не удалось — постановку прокси проверить не на чем"
     tail -12 "$YADRO_PAPKA/yadro.log" 2>/dev/null; bed=1
-  elif [ "$ruchnoy" = "True" ] || [ "$ruchnoy" = "true" ]; then
-    echo "  зелёный по договору: приложение САМО признало ручной прокси (ruchnoy_proksi=true) — человек предупреждён запиской"
   elif [ "$posle" != "0x1" ]; then
     echo "  КРАСНЫЙ: подключились, окно зелёное, а ProxyEnable=$posle — трафик идёт мимо защиты"; bed=1
-  elif [ -n "$adres" ] && [ "$server_posle" != "$adres" ]; then
-    echo "  КРАСНЫЙ: ProxyServer=$server_posle, а приложение обещает $adres"; bed=1
+  elif ! printf '%s' "$server_posle" | grep -qF "$ADRES_OZHIDAEMYY"; then
+    echo "  КРАСНЫЙ: ProxyServer=$server_posle не содержит ожидаемый адрес $ADRES_OZHIDAEMYY"; bed=1
+  elif [ "$ruchnoy" = "True" ]; then
+    echo "  КРАСНЫЙ: реестр стоит правильно ($server_posle), а приложение всё равно врёт запиской «впишите вручную» (ruchnoy_proksi=true)"; bed=1
   else
-    echo "  зелёный: прокси реально поставлен ($server_posle)"
+    echo "  зелёный: прокси реально поставлен ($server_posle), записки про ручную правку нет"
+  fi
+fi
+ostanovit
+
+echo "── сценарий 5: подстраховка ядра не смогла поставить прокси сама — приложение обязано прописать реестр вместо неё ──"
+# Сценарий 4 доказывает интеграцию целиком настоящим ядром, но под этим wine
+# оно на первой (неудачной) попытке успевает ЗАПИСАТЬ реестр ДО того, как
+# упасть на notify-вызове — значит internal/proksi.Stoit() там уже находит
+# правильную запись, и ветка proksi.Postavit() (реестр правит само
+# приложение, а не ядро) живьём не проверяется ни разу. Лже-ядро
+# (cmd/lzhe_yadro) разыгрывает противоположный, тоже возможный на живой
+# Windows случай: первая попытка падает строкой «system proxy», реестра не
+# коснувшись вовсе (mekhanizm cmd/lzhe_yadro/main.go). После восстановления
+# (BezSistemnogoProksi=true, вторая попытка отвечает как обычное ядро)
+# реестр обязано прописать САМО приложение — то есть до подключения он
+# ровно такой же, каким его оставил стенд (чужой прокси, выключен).
+rm -f "$YADRO_PAPKA/popytka.marker"
+cp "$STEND/lzhe_yadro.exe" "$YADRO_PAPKA/sing-box.exe"
+reg_set 0 10.0.0.9:9999
+echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой выключенный прокси)"
+url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk5.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
+if [ -z "$url" ]; then
+  echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
+else
+  echo "  служба: $url"
+  otvet=$(curl -s -m 120 "${url}api/podklyuchit")
+  echo "  POST podklyuchit -> $otvet"
+  sost=$(curl -s -m 10 "${url}api/sostoyanie")
+  ruchnoy=$(printf '%s' "$sost" | ruchnoy_proksi_iz_sostoyaniya)
+  sleep 2
+  posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+  echo "  после: ProxyEnable=$posle ProxyServer=$server_posle ruchnoy_proksi=$ruchnoy"
+  if printf '%s' "$otvet" | grep -q '"beda"'; then
+    echo "  КРАСНЫЙ: подключение не удалось — постановку прокси приложением проверить не на чем"
+    tail -12 "$YADRO_PAPKA/yadro.log" 2>/dev/null; bed=1
+  elif [ "$posle" != "0x1" ]; then
+    echo "  КРАСНЫЙ: лже-ядро реестр не трогало, приложение тоже не прописало — ProxyEnable=$posle"; bed=1
+  elif ! printf '%s' "$server_posle" | grep -qF "$ADRES_OZHIDAEMYY"; then
+    echo "  КРАСНЫЙ: ProxyServer=$server_posle не содержит ожидаемый адрес $ADRES_OZHIDAEMYY — прописал не то"; bed=1
+  elif [ "$ruchnoy" = "True" ]; then
+    echo "  КРАСНЫЙ: реестр приложение прописало само правильно ($server_posle), а записка про ручную правку всё равно висит"; bed=1
+  else
+    echo "  зелёный: ядро реестр не трогало (лже-ядро), приложение прописало его САМО ($server_posle)"
   fi
 fi
 ostanovit

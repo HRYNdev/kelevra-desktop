@@ -13,6 +13,7 @@ package proksi
 
 import (
 	"log"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -43,6 +44,55 @@ func Snyat() bool {
 	// вернёт его одной галочкой. Выключенная галочка сайты уже не ломает.
 	soobshchitSisteme()
 	log.Printf("системный прокси снят")
+	return true
+}
+
+// Stoit сообщает, стоит ли прямо сейчас в системе прокси на адрес adres.
+// Ядро пишет адрес со схемой («http://127.0.0.1:2412»), а adres приходит без
+// неё («127.0.0.1:2412») — поэтому сравниваем через strings.Contains, а не
+// на равенство.
+func Stoit(adres string) bool {
+	k, err := registry.OpenKey(registry.CURRENT_USER, putNastroek, registry.QUERY_VALUE)
+	if err != nil {
+		log.Printf("системный прокси: не открыть настройки: %v", err)
+		return false
+	}
+	defer k.Close()
+
+	vkl, _, err := k.GetIntegerValue("ProxyEnable")
+	if err != nil || vkl == 0 {
+		return false
+	}
+	server, _, err := k.GetStringValue("ProxyServer")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(server, adres)
+}
+
+// Postavit прописывает системный прокси на adres сам — то же самое, что
+// делают рабочие VPN-клиенты без прав администратора: ядро отказалось
+// поставить системный прокси собой (winapi error #12009 под ограниченными
+// правами), но запись в этот же ключ реестра ничего особенного не требует.
+// Возвращает true, если запись прошла успешно.
+func Postavit(adres string) bool {
+	k, err := registry.OpenKey(registry.CURRENT_USER, putNastroek, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		log.Printf("системный прокси: не открыть настройки: %v", err)
+		return false
+	}
+	defer k.Close()
+
+	if err := k.SetStringValue("ProxyServer", adres); err != nil {
+		log.Printf("системный прокси: не прописать адрес: %v", err)
+		return false
+	}
+	if err := k.SetDWordValue("ProxyEnable", 1); err != nil {
+		log.Printf("системный прокси: не включить: %v", err)
+		return false
+	}
+	soobshchitSisteme()
+	log.Printf("системный прокси поставлен сам: %s", adres)
 	return true
 }
 
