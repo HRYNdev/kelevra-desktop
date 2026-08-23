@@ -34,6 +34,7 @@ func Snyat() bool {
 
 	vkl, _, err := k.GetIntegerValue("ProxyEnable")
 	if err == nil && vkl == 0 {
+		UbratMetku() // уже снят (в т.ч. этим же Snyat() с прошлого раза) — метка стала лишней
 		return false // никто ничего не включал — не трогаем чужие настройки
 	}
 	if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
@@ -43,6 +44,7 @@ func Snyat() bool {
 	// Адрес не стираем: человек мог прописать свой прокси до нас, и тогда он
 	// вернёт его одной галочкой. Выключенная галочка сайты уже не ломает.
 	soobshchitSisteme()
+	UbratMetku()
 	log.Printf("системный прокси снят")
 	return true
 }
