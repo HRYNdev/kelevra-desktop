@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -51,12 +52,13 @@ type resolvat interface {
 // не меньше Nuzhno — одиночное совпадение может быть случайным (чужой
 // CDN тоже иногда сидит в приватном диапазоне), см. HOME_HITS в AutoMode.kt.
 //
-// В отличие от телефонного эталона, зонд не умеет спрашивать резолвер
-// конкретного сетевого адаптера (Android передаёт Network прямо в запрос) —
-// на Windows такой привязки без экзотических зависимостей нет, поэтому
-// спрашивается системный резолвер по умолчанию. Для ноутбука с одним
-// активным адаптером (обычный случай для этого приложения) разницы нет;
-// многосетевой случай — TODO на потом.
+// Теперь зонд умеет то же, что телефонный эталон (Android передаёт Network
+// прямо в запрос): спрашивать резолвер конкретного сетевого адаптера
+// напрямую, минуя системный. Для этого заданы AdresResolvera и
+// LokalnyAdres (см. SetevoyAdapter) — актуально в первую очередь для
+// TUN-режима, где системный резолвер перехвачен нашим же ядром (см.
+// avtorezhim.go, ZondSlep). Если AdresResolvera пуст, поведение прежнее —
+// спрашивается системный резолвер по умолчанию, это путь отката.
 //
 // KontrolnyyDomen (HOME_CONTROL в AutoMode.kt) должен резолвиться по
 // настоящему адресу — иначе это не «выборочный» домашний обход, а
@@ -64,11 +66,58 @@ type resolvat interface {
 // Остальная логика HomeSign (память признака, ранний выход по бюджету) в
 // этот срез не перенесена — TODO.
 type DnsZond struct {
-	Resolver        resolvat // nil — берётся net.DefaultResolver
+	Resolver resolvat // nil — берётся AdresResolvera, а если и он пуст — net.DefaultResolver
+
+	// AdresResolvera — "IP:port" конкретного резолвера (например, DNS
+	// физического адаптера, "192.168.1.192:53"), которого спрашиваем
+	// напрямую по UDP, минуя системный резолвер. Пусто — используется
+	// системный резолвер (net.DefaultResolver), как раньше.
+	AdresResolvera string
+
+	// LokalnyAdres — IP физического адаптера, с которого привязывается
+	// исходящий сокет к AdresResolvera (net.Dialer.LocalAddr). Пусто —
+	// сокет уходит с адреса, который выберет ОС сама.
+	LokalnyAdres string
+
 	Domeny          []string
 	Nuzhno          int
 	KontrolnyyDomen string // "" — берётся KontrolnyyDomenPoUmolchaniyu
 	Taimaut         time.Duration
+}
+
+// rezolverPryamoy собирает *net.Resolver, который спрашивает не системный
+// путь, а AdresResolvera напрямую: Dial игнорирует адрес, который ему даёт
+// сам резолвер (на unix это был бы путь из /etc/resolv.conf), и всегда
+// стучится в AdresResolvera. PreferGo обязателен — без него на Windows
+// LookupIP уходит через cgo/системный резолвер мимо этого Dial целиком.
+func rezolverPryamoy(adresResolvera, lokalnyAdres string) *net.Resolver {
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := &net.Dialer{}
+			if laddr := lokalnyAdresDlyaSeti(network, lokalnyAdres); laddr != nil {
+				d.LocalAddr = laddr
+			}
+			return d.DialContext(ctx, network, adresResolvera)
+		},
+	}
+}
+
+// lokalnyAdresDlyaSeti — net.Addr нужного типа (TCP/UDP) для net.Dialer.LocalAddr,
+// собранный из голого IP. Резолвер сам решает, UDP или TCP (truncated-ответ
+// пересылается по TCP), поэтому тип адреса подбирается по network из Dial.
+func lokalnyAdresDlyaSeti(network, ip string) net.Addr {
+	if ip == "" {
+		return nil
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return nil
+	}
+	if strings.HasPrefix(network, "tcp") {
+		return &net.TCPAddr{IP: parsed}
+	}
+	return &net.UDPAddr{IP: parsed}
 }
 
 // NovyyDnsZond — зонд с параметрами по умолчанию (те же 3 домена, нужно 2 из 3).
@@ -96,7 +145,11 @@ func NovyyDnsZond() *DnsZond {
 func (z *DnsZond) DomaPoDns(ctx context.Context) (bool, error) {
 	r := z.Resolver
 	if r == nil {
-		r = net.DefaultResolver
+		if z.AdresResolvera != "" {
+			r = rezolverPryamoy(z.AdresResolvera, z.LokalnyAdres)
+		} else {
+			r = net.DefaultResolver
+		}
 	}
 	taimaut := z.Taimaut
 	if taimaut <= 0 {

@@ -2,6 +2,7 @@ package avtorezhim
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -31,8 +32,16 @@ func TestReshitZondSlepSilneeLyubogoPriznaka(t *testing.T) {
 }
 
 // TestZahodVTunneleNeSnimaetZashchitu — боевой сценарий целиком: человек ВНЕ
-// дома, туннель поднят, зонды из-за этого врут «дома». Защита обязана
+// дома, туннель поднят, адрес физического адаптера узнать НЕ вышло (нет
+// SetevoyAdres — та же слепота, что была ДО SetevoyAdapter/DnsZond.AdresResolvera:
+// системный резолвер был бы виден только нашему же туннелю). Защита обязана
 // остаться поднятой, сколько заходов ни делай.
+//
+// Это НЕ единственный сценарий поднятого туннеля — см.
+// TestZahodVTunneleSPrivatnymAdapteromNeSlep ниже: когда адрес адаптера
+// известен и приватен, слепота снимается, и это тест на обратное — что
+// именно неизвестность адреса, а не сам факт поднятого туннеля, держит
+// ZondSlep.
 func TestZahodVTunneleNeSnimaetZashchitu(t *testing.T) {
 	trafik := &fakeTrafik{izmereno: true, proshel: true}
 	zvali := false
@@ -41,6 +50,12 @@ func TestZahodVTunneleNeSnimaetZashchitu(t *testing.T) {
 		Trafik:        trafik,
 		Zadvizhka:     NovayaZadvizhka(VneDoma),
 		TunnelPodnyat: func() bool { return true },
+		// Адрес адаптера неизвестен — ровно сценарий, который проверяет
+		// этот тест. Явно, а не по умолчанию nil-поля: чтобы намерение не
+		// потерялось при следующей правке структуры.
+		SetevoyAdres: func() (string, string, error) {
+			return "", "", errors.New("нет ни одного адаптера")
+		},
 	}
 	var posledneye Nablyudeniye
 	for i := 0; i < 5; i++ {
@@ -92,5 +107,77 @@ func TestZahodBezTunnelyaZondyRabotayut(t *testing.T) {
 	}
 	if tek != Doma {
 		t.Fatalf("без туннеля три подтверждения «дома» дали %v", tek)
+	}
+}
+
+// TestZahodVTunneleSPrivatnymAdapteromNeSlep — лечение слепоты: туннель
+// поднят, но адрес физического адаптера УДАЛОСЬ узнать и он приватный
+// (192.168.1.192) — заход обязан быть зрячим: ZondSlep=false, DnsPryamoy
+// позван с этим самым адресом (не системный резолвер), и наблюдение решает
+// обстановку как обычно, вплоть до Doma после подтверждений.
+func TestZahodVTunneleSPrivatnymAdapteromNeSlep(t *testing.T) {
+	trafik := &fakeTrafik{izmereno: true, proshel: true}
+	var polucheno struct{ adresResolvera, lokalnyAdres string }
+	zvali := 0
+	a := &Avtorezhim{
+		Trafik:        trafik,
+		Zadvizhka:     NovayaZadvizhka(VneDoma),
+		TunnelPodnyat: func() bool { return true },
+		SetevoyAdres: func() (string, string, error) {
+			return "192.168.1.192:53", "192.168.1.77", nil
+		},
+		DnsPryamoy: func(adresResolvera, lokalnyAdres string) DnsProver {
+			zvali++
+			polucheno.adresResolvera, polucheno.lokalnyAdres = adresResolvera, lokalnyAdres
+			return fakeDns{doma: true}
+		},
+	}
+
+	var posledneye Nablyudeniye
+	var tek Sostoyanie
+	for i := 0; i < Podtverzhdeniy; i++ {
+		posledneye, _, tek = a.Zahod(context.Background(), true)
+		if posledneye.ZondSlep {
+			t.Fatalf("заход %d: наблюдение помечено слепым, хотя адрес адаптера известен и приватен", i)
+		}
+	}
+	if zvali == 0 {
+		t.Fatal("DnsPryamoy ни разу не позван — заход не спрашивал прямой резолвер")
+	}
+	if polucheno.adresResolvera != "192.168.1.192:53" || polucheno.lokalnyAdres != "192.168.1.77" {
+		t.Fatalf("DnsPryamoy получил (%q, %q), хочу (192.168.1.192:53, 192.168.1.77)", polucheno.adresResolvera, polucheno.lokalnyAdres)
+	}
+	if !posledneye.DnsPriznakDoma {
+		t.Fatal("DNS-признак дома не выставлен, хотя fakeDns вернул doma=true")
+	}
+	if tek != Doma {
+		t.Fatalf("после %d подтверждений «дома» через прямой резолвер обстановка = %v, хочу Doma", Podtverzhdeniy, tek)
+	}
+}
+
+// TestZahodVTunneleSPublichnymAdresomOstayotsyaSlep — контроль на
+// подмену: адрес адаптера узнать УДАЛОСЬ, но он не приватный (публичный
+// DNS) — это подозрительно похоже на ту же беду, от которой лечим, поэтому
+// заход остаётся слепым, как и при полностью неизвестном адресе.
+func TestZahodVTunneleSPublichnymAdresomOstayotsyaSlep(t *testing.T) {
+	dnsZvali := 0
+	a := &Avtorezhim{
+		Trafik:        &fakeTrafik{},
+		Zadvizhka:     NovayaZadvizhka(VneDoma),
+		TunnelPodnyat: func() bool { return true },
+		SetevoyAdres: func() (string, string, error) {
+			return "1.1.1.1:53", "203.0.113.5", nil
+		},
+		DnsPryamoy: func(adresResolvera, lokalnyAdres string) DnsProver {
+			dnsZvali++
+			return fakeDns{doma: true}
+		},
+	}
+	n, _, _ := a.Zahod(context.Background(), true)
+	if !n.ZondSlep {
+		t.Fatal("публичный адрес резолвера принят как приватный — заход обязан остаться слепым")
+	}
+	if dnsZvali != 0 {
+		t.Fatal("DnsPryamoy позван с публичным адресом резолвера — не должен был")
 	}
 }
