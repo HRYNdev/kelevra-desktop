@@ -49,6 +49,19 @@ type Kartina struct {
 // ClashPoUmolchaniyu — адрес, если профиль про Clash API молчит.
 const ClashPoUmolchaniyu = "127.0.0.1:9090"
 
+// ZametkaProksiRezhima — обычная заметка прокси-режима, когда системный
+// прокси в системе реально стоит (его поставило само ядро, или, если ядро
+// отказалось, приложение прописало реестр за него — internal/proksi.Postavit).
+// Общая для Prigotovit (сборка конфига) и для страховки в sluzhba.go
+// (PodnyatZashchitu, ветка «system proxy»), чтобы текст не разъезжался
+// между двумя местами, которые решают один и тот же вопрос.
+func ZametkaProksiRezhima(estTunnel bool) string {
+	if estTunnel {
+		return ZametkaBezPrav
+	}
+	return ZametkaBezTunnelya
+}
+
 // Заметки — единственные строки этого пакета, которые ЧИТАЕТ ЧЕЛОВЕК: окно
 // показывает Zametka как есть. Поэтому здесь нет ни «ядра», ни «туннеля», ни
 // «прокси-режима»: открывает окно не программист, и он должен понять, что
@@ -174,10 +187,8 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		k.RuchnoyProksi = v.BezSistemnogoProksi
 		if v.BezSistemnogoProksi {
 			k.Zametka = fmt.Sprintf(ZametkaRuchnoyProksi, k.ProksiAdres)
-		} else if k.EstTunnel {
-			k.Zametka = ZametkaBezPrav
 		} else {
-			k.Zametka = ZametkaBezTunnelya
+			k.Zametka = ZametkaProksiRezhima(k.EstTunnel)
 		}
 	}
 
