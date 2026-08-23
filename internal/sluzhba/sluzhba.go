@@ -43,6 +43,18 @@ type Sluzhba struct {
 	Yadro     *yadro.Yadro
 	Podpiska  *podpiska.Klient
 
+	// Adres — свой же URL окна (с ключом). Нужен, чтобы вернуть метку копии
+	// на место, если человек откажет в правах администратора.
+	Adres string
+
+	// poprositPrava — точка подмены для стенда: настоящее окно UAC на linux
+	// не показать, а порядок «снять метку → спросить → вернуть при отказе»
+	// проверять надо именно тут (гонка 23.08, см. polnayaZashchita).
+	poprositPrava func() error
+	// vyhod — как эта копия уходит после согласия на права. По умолчанию
+	// os.Exit(0); на стенде подменяется, иначе тест убил бы сам себя.
+	vyhod func()
+
 	zamok      sync.Mutex
 	svedeniya  *podpiska.Svedeniya
 	klyuch     string
@@ -53,7 +65,7 @@ type Sluzhba struct {
 	// отдельным от zamok выше: запуск/остановка служителя не должны ждать
 	// того же замка, что держат при пересборке конфига или скачивании ядра.
 	avtorezhimZamok  sync.Mutex
-	avtorezhimOtmena context.CancelFunc // не nil, пока служитель крутится
+	avtorezhimOtmena context.CancelFunc     // не nil, пока служитель крутится
 	avtorezhimEkz    *avtorezhim.Avtorezhim // тот же экземпляр — источник обстановки для /api/sostoyanie
 }
 
@@ -131,6 +143,7 @@ func (s *Sluzhba) Slushat() (net.Listener, string, error) {
 		return nil, "", err
 	}
 	url := fmt.Sprintf("http://%s/%s/", l.Addr().String(), s.klyuch)
+	s.Adres = url
 	return l, url, nil
 }
 
@@ -673,18 +686,45 @@ func (s *Sluzhba) polnayaZashchita(w http.ResponseWriter, r *http.Request) {
 		otdat(w, map[string]any{"gotovo": true}, nil)
 		return
 	}
-	if err := prava.Poprosit(); err != nil {
+	// Метка копии снимается ДО окна UAC, а не после него. ShellExecuteW
+	// возвращается уже с запущенной копией, и та копия первым делом смотрит
+	// метку: увидев ещё живую службу, она решает «приложение уже работает» и
+	// открывает окно на адрес, который умрёт через мгновение. Раньше это
+	// кончалось вторым окном-трупом, теперь (со сторожем окна) кончилось бы
+	// тем, что приложение у человека просто исчезает с экрана.
+	papka := hranenie.Papka()
+	kopiya.Osvobodit(papka)
+	if err := s.sprositPrava(); err != nil {
+		// Человек нажал «Нет»: эта копия остаётся работать — значит и метка
+		// обязана вернуться. Без неё следующий двойной щелчок поднял бы
+		// второе ядро на уже занятые порты.
+		if s.Adres != "" {
+			if err := kopiya.Zanyat(papka, s.Adres, time.Now()); err != nil {
+				log.Printf("метка копии не вернулась после отказа в правах: %v", err)
+			}
+		}
 		otdat(w, nil, err)
 		return
 	}
 	otdat(w, map[string]any{"gotovo": true, "perezapusk": true}, nil)
 	log.Printf("человек согласился на права администратора, перезапускаюсь")
-	kopiya.Osvobodit(hranenie.Papka()) // выход через os.Exit минует defer в main
 	go func() {
 		time.Sleep(300 * time.Millisecond) // дать ответу уйти в окно
 		_ = s.Yadro.Ostanovit()            // ядро старой копии гасим сами
+		if s.vyhod != nil {
+			s.vyhod()
+			return
+		}
 		os.Exit(0)
 	}()
+}
+
+// sprositPrava — настоящее окно UAC либо подмена со стенда.
+func (s *Sluzhba) sprositPrava() error {
+	if s.poprositPrava != nil {
+		return s.poprositPrava()
+	}
+	return prava.Poprosit()
 }
 
 func otdat(w http.ResponseWriter, telo any, err error) {
