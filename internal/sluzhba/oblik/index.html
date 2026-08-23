@@ -5,21 +5,42 @@
 <meta name="color-scheme" content="dark">
 <title>Kelevra</title>
 <style>
+  /* Палитра, шрифты и размеры сняты один в один с телефона (эталон
+     дизайн-системы Kelevra): theme/Kelevra.kt — KDark + KDim, theme/Components.kt
+     — формы карточек/кнопок/круга. До этой правки тут была своя, отдельная от
+     приложения палитра (#3ddc84 на зелёном, Segoe UI) — окно на компьютере
+     выглядело другим продуктом (Вова, 0.6.8: «единый дизайн ты не знаешь что
+     такое»). */
   :root {
-    --fon:#0b0d11; --karta:#14171d; --karta-verh:#191d24; --gran:#242a34;
-    --tekst:#e9edf3; --tihiy:#8b94a4; --slabyy:#5f6877;
-    --akcent:#3ddc84; --akcent-tem:#0b1a11;
-    --zhdem:#f0b429; --beda:#ff6b6b;
-    --shapka:56px; --nizhnyaya:98px;
+    --fon:#0B0E13; --fon2:#11151C; --karta:#161B24; --karta-verh:#1D2430;
+    --gran:#262E3B; --gran2:#333E50;
+    --tekst:#E8EDF5; --tihiy:#93A0B4; --slabyy:#5F6B7D;
+    --akcent:#35D0A5; --akcent2:#2BA6FF; --akcent-tem:#04140F;
+    --zhdem:#F5A524; --beda:#F2555A;
+    --shapka:56px; --nizhnyaya:84px;
+    /* KDim: RadiusL 26dp, RadiusM 18dp, RadiusS 12dp, DialSize 210dp, DialStroke 2dp. */
+    --r-m:18px; --r-s:12px; --krug:210px;
+  }
+  /* Шрифты — те же файлы, что зашиты в телефон (app/src/main/res/font/), а не
+     системные: конвертированы в woff2 и лежат рядом (oblik/*, встраивается в
+     .exe целиком через go:embed), поэтому грузятся без интернета. */
+  @font-face {
+    font-family:"Montserrat"; src:url("montserrat.woff2") format("woff2");
+    font-weight:100 900; font-style:normal; font-display:swap;
+  }
+  @font-face {
+    font-family:"Roboto Mono"; src:url("roboto_mono.woff2") format("woff2");
+    font-weight:100 900; font-style:normal; font-display:swap;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
   body {
     margin:0; background:var(--fon); color:var(--tekst);
-    font:15px/1.45 "Segoe UI", system-ui, sans-serif;
+    font:15px/1.45 "Montserrat", system-ui, sans-serif;
     -webkit-font-smoothing:antialiased; overflow:hidden;
     user-select:none;
   }
+  .mono { font-family:"Roboto Mono", ui-monospace, Consolas, monospace; }
 
   /* Шапка приклеена сверху, кнопка действия — снизу, а всё, что между ними,
      прокручивается. Раньше страница просто росла вниз, и на окне 420x660
@@ -39,7 +60,7 @@
   }
   .tochka { width:7px; height:7px; border-radius:50%; background:var(--slabyy); }
   .chip.rabotaet .tochka { background:var(--akcent); box-shadow:0 0 8px var(--akcent); }
-  .chip.rabotaet { color:var(--akcent); border-color:rgba(61,220,132,.35); }
+  .chip.rabotaet { color:var(--akcent); border-color:rgba(53,208,165,.35); }
   .chip.podnimaem .tochka { background:var(--zhdem); animation:pulse 1.1s infinite; }
   .chip.podnimaem { color:var(--zhdem); }
   .chip.slomalos .tochka { background:var(--beda); }
@@ -61,8 +82,8 @@
     display:flex; flex-direction:column; justify-content:center;
   }
   .lenta::-webkit-scrollbar { width:8px; }
-  .lenta::-webkit-scrollbar-thumb { background:#242a34; border-radius:4px; }
-  .lenta::-webkit-scrollbar-thumb:hover { background:#313a48; }
+  .lenta::-webkit-scrollbar-thumb { background:var(--gran); border-radius:4px; }
+  .lenta::-webkit-scrollbar-thumb:hover { background:var(--gran2); }
 
   /* Верхний отступ переехал сюда с .lenta: круг состояния ниже — sticky,
      и её "top:0" считается от padding-края СКРОЛЛЯЩЕГОСЯ .lenta. Если отступ
@@ -72,27 +93,41 @@
      просто часть потока и уезжает вместе с содержимым. */
   #karta-svyazi { padding-top:16px; }
 
-  .karta { background:var(--karta); border:1px solid var(--gran); border-radius:16px; padding:16px; }
+  .karta { background:var(--karta); border:1px solid var(--gran); border-radius:var(--r-m); padding:16px; }
   .karta + .karta, .karta + .polosa, .polosa + .karta { margin-top:12px; }
 
-  /* Две вкладки: «Сеть» и «Настройки» (спека 04.08) — больше вкладок нет.
-     sticky — переключатель не должен уезжать при прокрутке длинного списка
-     узлов или журнала, иначе на вторую вкладку не вернуться не прокрутив назад. */
-  .vkladki {
-    display:flex; gap:4px; position:sticky; top:0; z-index:2; padding-bottom:10px;
-    background:var(--fon);
+  /* Вкладки «Сеть»/«Настройки» — нижняя панель, как в приложении на телефоне
+     (KTabBar, Components.kt): fixed-панель высотой 66dp вне прокрутки, а не
+     sticky-переключатель внутри ленты. Раньше вкладки стояли сверху и
+     занимали место в потоке (см. историю до 21.08) — теперь тот же корешок,
+     что и у круга-кнопки: панель не уезжает никуда, потому что не часть
+     скроллящегося содержимого вовсе. */
+  .taby {
+    position:fixed; left:0; right:0; bottom:0; z-index:3; height:66px;
+    display:flex; background:var(--fon2); border-top:1px solid var(--gran);
   }
-  .vkladka {
-    flex:1; padding:9px; text-align:center; font-size:13.5px; font-weight:600;
-    color:var(--tihiy); background:var(--karta); border:1px solid var(--gran); border-radius:11px;
+  /* Тот же капкан, что у .perekl-ryad и .zagolovok-bloka: явный display:flex
+     перебивает встроенное [hidden]{display:none} — без этого правила
+     скрытая (на экране кода) панель всё равно рисовалась бы. */
+  .taby[hidden] { display:none; }
+  .tab {
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:5px; font-size:11px; font-weight:500; color:var(--slabyy);
+    background:none; border:0; border-radius:0;
   }
-  .vkladka.aktivna { color:var(--tekst); border-color:#313a48; background:#191d24; }
+  .tab .tochka-tab { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .tab.aktivna { color:var(--akcent); font-weight:600; }
 
-  /* Круг состояния — вариант C из спеки 04.08: тонкое кольцо со свечением,
-     спокойное и не вырвиглазное («какой нить переливающийся не вырвиглазный
-     круг»). Заменяет прежнюю прямоугольную карточку с щитом. */
-  .krug-blok { display:flex; flex-direction:column; align-items:center; padding:6px 0 4px; }
-  .krug-obertka { position:relative; width:144px; height:144px; }
+  /* Круг состояния — та же вещь, что на телефоне (KDial, Kelevra.kt/
+     Components.kt): диаметр 210dp, обводка 2dp, и круг ЭТО КНОПКА — нажатие
+     включает и выключает защиту напрямую, без отдельной кнопки внизу (та
+     дублировала бы круг, спека Вовы 0.6.8). */
+  .krug-blok {
+    display:flex; flex-direction:column; align-items:center; padding:6px 0 4px;
+    background:none; border:0; font:inherit; cursor:pointer; -webkit-tap-highlight-color:transparent;
+  }
+  .krug-blok:disabled { cursor:default; }
+  .krug-obertka { position:relative; width:var(--krug); height:var(--krug); }
   .krug-obertka svg { width:100%; height:100%; overflow:visible; }
   .krug-fon { fill:none; stroke:var(--gran); }
   .krug-koltso {
@@ -101,20 +136,28 @@
   }
   .krug-serdtse {
     position:absolute; inset:0; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; text-align:center; padding:0 18px;
+    align-items:center; justify-content:center; text-align:center; padding:0 30px;
   }
-  .krug-slovo { font-size:17px; font-weight:650; letter-spacing:.2px; }
-  /* Слово длиннее девяти букв («подключаюсь») при 17px вылезает за окружность
-     буквами по обе стороны. Резать смысл ради вёрстки не хочу, поэтому длинному
-     слову даём кегль поменьше — «защищено» и «отключено» остаются крупными. */
-  .krug-slovo.dlinnoe { font-size:14.5px; }
+  .krug-slovo { font-size:20px; font-weight:650; letter-spacing:.2px; }
+  /* Слово длиннее девяти букв («подключаюсь») вылезает за окружность буквами
+     по обе стороны. Резать смысл ради вёрстки не хочу, поэтому длинному слову
+     даём кегль поменьше — «защищено» и «отключено» остаются крупными. */
+  .krug-slovo.dlinnoe { font-size:17px; }
   /* Режим + узел (или, когда служба начнёт его отдавать, транспорт + мс)
-     редко влезает в одну строку на круге такой ширины — переносим на две,
-     а не режем полезное слово многоточием после первых 15 символов. */
+     редко влезает в одну строку — переносим на две, а не режем полезное
+     слово многоточием после первых 15 символов. */
   .krug-pod {
-    font-size:11.5px; line-height:1.3; color:var(--tihiy); margin-top:5px; max-width:112px;
+    font-size:12.5px; line-height:1.3; color:var(--tihiy); margin-top:6px; max-width:150px;
     display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
     overflow:hidden; text-overflow:ellipsis;
+  }
+  /* Подпись под кругом — как KHint на телефоне: капслок, моно, тихий цвет.
+     Единственная строка на экране, которая прямо говорит, что нажатие
+     сделает («нажмите, чтобы включить»). */
+  .krug-podskazka {
+    margin-top:16px; font-family:"Roboto Mono", ui-monospace, monospace;
+    font-size:10px; font-weight:500; letter-spacing:1.4px; text-transform:uppercase;
+    color:var(--slabyy); text-align:center;
   }
 
   /* Медленное, мягкое дыхание свечения — не мигание. Хватает 3-4 секунд на
@@ -143,6 +186,7 @@
      4.5:1 для текста 11.5px), обмерено формулой относительной яркости. */
   .zagolovok-bloka {
     display:flex; align-items:center; margin:18px 13px 8px;
+    font-family:"Roboto Mono", ui-monospace, monospace;
     font-size:11.5px; letter-spacing:.9px; text-transform:uppercase; color:var(--tihiy);
   }
   /* Тот же капкан, что у .perekl-ryad: явный display:flex перебивает
@@ -154,7 +198,7 @@
      в общий тёмный стиль настроек. */
   .perekl-ryad {
     display:flex; align-items:center; gap:10px; margin-top:8px;
-    padding:11px 13px; border:1px solid var(--gran); border-radius:12px; background:var(--karta);
+    padding:11px 13px; border:1px solid var(--gran); border-radius:var(--r-m); background:var(--karta);
   }
   /* Явный display:flex у .perekl-ryad перебивает встроенное [hidden]{display:none} —
      без этого правила скрытый (не-Windows) тумблер всё равно рисовался бы. */
@@ -168,26 +212,26 @@
   }
   .perekl {
     flex:none; width:40px; height:24px; padding:0; border-radius:999px;
-    background:#242a34; position:relative; transition:background .15s;
+    background:var(--gran); position:relative; transition:background .15s;
   }
   .perekl .knob {
     position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
     background:var(--tihiy); transition:left .15s, background .15s;
   }
-  .perekl.vklyuchen { background:rgba(61,220,132,.32); }
+  .perekl.vklyuchen { background:rgba(53,208,165,.32); }
   .perekl.vklyuchen .knob { left:18px; background:var(--akcent); }
-  .perekl.ustarela { background:rgba(240,180,41,.32); }
+  .perekl.ustarela { background:rgba(245,165,36,.32); }
   .perekl.ustarela .knob { background:var(--zhdem); }
   .perekl:disabled { opacity:.55; cursor:default; }
 
   .uzel {
     display:flex; align-items:center; gap:11px; width:100%; padding:11px 13px;
-    margin-top:8px; border-radius:12px; border:1px solid var(--gran); background:var(--karta);
+    margin-top:8px; border-radius:var(--r-m); border:1px solid var(--gran); background:var(--karta);
     color:var(--tekst); font:inherit; font-size:14px; cursor:pointer; text-align:left;
     transition:border-color .15s, background .15s;
   }
-  .uzel:hover:not(:disabled) { background:#191d24; border-color:#313a48; }
-  .uzel.vybran { border-color:rgba(61,220,132,.45); background:rgba(61,220,132,.06); }
+  .uzel:hover:not(:disabled) { background:var(--karta-verh); border-color:var(--gran2); }
+  .uzel.vybran { border-color:rgba(53,208,165,.45); background:rgba(53,208,165,.06); }
   .uzel.vybran .imya { color:var(--akcent); font-weight:600; }
   .uzel .signal { width:8px; height:8px; border-radius:50%; flex:none; background:var(--slabyy); }
   .uzel .signal.bystro { background:var(--akcent); }
@@ -195,7 +239,10 @@
   .uzel .signal.medlenno { background:#ef8354; }
   .uzel .signal.mertv { background:var(--beda); }
   .uzel .imya { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .uzel .ms { margin-left:auto; color:var(--tihiy); font-size:12px; font-variant-numeric:tabular-nums; }
+  .uzel .ms {
+    margin-left:auto; color:var(--tihiy); font-size:12px; font-variant-numeric:tabular-nums;
+    font-family:"Roboto Mono", ui-monospace, monospace;
+  }
   /* Узел с бедой (сигнал mertv, красная точка) раньше писал текст беды тем же
      серым, что и обычные мс — глазом не отличить «64 мс» от «нет ответа» без
      точки. Текст теперь того же цвета, что и точка рядом. */
@@ -203,7 +250,7 @@
   .uzel:disabled { cursor:default; opacity:.75; }
 
   button {
-    font:inherit; cursor:pointer; border:0; border-radius:12px;
+    font:inherit; cursor:pointer; border:0; border-radius:var(--r-m);
     -webkit-tap-highlight-color:transparent;
   }
   button:focus-visible, input:focus-visible { outline:2px solid var(--akcent); outline-offset:2px; }
@@ -213,10 +260,6 @@
   }
   .glavnaya:hover:not(:disabled) { filter:brightness(1.07); }
   .glavnaya:active:not(:disabled) { transform:translateY(1px); }
-  /* Разрыв связи — не праздник: гасим кнопку, чтобы самой яркой в окне была
-     та, что защищает, а не та, что выключает. */
-  .glavnaya.opasnaya { background:#1e242e; color:var(--tekst); border:1px solid var(--gran); }
-  .glavnaya.opasnaya:hover:not(:disabled) { border-color:rgba(255,107,107,.5); color:var(--beda); filter:none; }
   .glavnaya:disabled { opacity:.55; cursor:default; }
   .tihaya {
     width:100%; padding:11px; font-size:13.5px; font-weight:500;
@@ -230,10 +273,10 @@
      кнопки внизу, чтобы порядок важности остался прежним. */
   .tihaya.zovyot {
     color:var(--akcent); font-weight:600;
-    background:rgba(61,220,132,.07); border-color:rgba(61,220,132,.42);
+    background:rgba(53,208,165,.07); border-color:rgba(53,208,165,.42);
   }
   .tihaya.zovyot:hover:not(:disabled) {
-    background:rgba(61,220,132,.13); border-color:var(--akcent);
+    background:rgba(53,208,165,.13); border-color:var(--akcent);
   }
   /* В настройках .tihaya — пункты списка, а не призыв к действию: ставим их
      по левому краю, чтобы он совпал со строкой тумблера, заголовками блоков и
@@ -249,7 +292,7 @@
   #tab-nastroyki .tihaya::after { content:"\203A"; color:var(--slabyy); font-size:18px; line-height:1; }
   /* Опять display:flex поверх [hidden] — «Скопировать журнал» скрыт по умолчанию. */
   #tab-nastroyki .tihaya[hidden] { display:none; }
-  .tihaya:hover { color:var(--tekst); border-color:#313a48; }
+  .tihaya:hover { color:var(--tekst); border-color:var(--gran2); }
   .ssylka {
     background:none; border:0; padding:0; color:var(--tihiy); font-size:12px;
     text-decoration:underline; text-underline-offset:3px;
@@ -257,27 +300,22 @@
   .ssylka:hover { color:var(--tekst); }
   .ssylka:disabled { color:var(--slabyy); cursor:default; text-decoration:none; }
 
-  .niz {
-    position:fixed; left:0; right:0; bottom:0; z-index:3; padding:12px 18px 14px;
-    background:linear-gradient(to top, var(--fon) 62%, rgba(11,13,17,0));
-  }
-
   input {
-    width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--gran);
-    background:#0d1014; color:var(--tekst); font:inherit; font-size:16px; letter-spacing:2px;
+    width:100%; padding:13px 14px; border-radius:var(--r-m); border:1px solid var(--gran);
+    background:#080A0E; color:var(--tekst); font:inherit; font-size:16px; letter-spacing:2px;
     user-select:text;
   }
   input::placeholder { letter-spacing:.5px; color:var(--slabyy); }
 
   .beda {
-    display:none; margin-top:12px; padding:11px 13px; border-radius:12px;
-    background:rgba(255,107,107,.08); border:1px solid rgba(255,107,107,.28);
+    display:none; margin-top:12px; padding:11px 13px; border-radius:var(--r-m);
+    background:rgba(242,85,90,.08); border:1px solid rgba(242,85,90,.28);
     color:#ffb1b1; font-size:12.5px; line-height:1.45;
     white-space:pre-wrap; word-break:break-word; user-select:text;
   }
   .beda.vidno { display:block; }
   .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
-  .beda.vnimanie { background:rgba(240,180,41,.09); border-color:rgba(240,180,41,.3); color:#f3cf86; }
+  .beda.vnimanie { background:rgba(245,165,36,.09); border-color:rgba(245,165,36,.3); color:#f3cf86; }
   .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:5px; }
   .beda-sovet { color:#e8b9b9; }
   .beda-podrobnosti {
@@ -286,7 +324,7 @@
     text-underline-offset:2px; cursor:pointer;
   }
   .beda-syroe {
-    margin-top:8px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+    margin-top:8px; font-family:"Roboto Mono", ui-monospace, monospace;
     font-size:11px; line-height:1.45; color:var(--tihiy); word-break:break-word;
   }
   /* Минимальные данные о подписке — спокойной строкой под кругом (спека
@@ -295,23 +333,23 @@
      только когда срок на исходе: там строка обязана ловить глаз. */
   .podpiska {
     display:flex; align-items:center; gap:8px; margin:2px 0 10px; padding:2px 13px;
-    border:1px solid transparent; border-radius:12px;
+    border:1px solid transparent; border-radius:var(--r-m);
     font-size:12.5px; color:var(--tihiy);
   }
   .podpiska .srok { margin-left:auto; color:var(--tihiy); }
   .podpiska.istekaet {
-    padding:11px 13px; border-color:rgba(240,180,41,.3); background:rgba(240,180,41,.07);
+    padding:11px 13px; border-color:rgba(245,165,36,.3); background:rgba(245,165,36,.07);
   }
   .podpiska.istekaet .srok { color:var(--zhdem); }
 
   #zhurnal {
     max-height:190px; overflow:auto; margin-top:10px; padding:10px 12px;
-    background:#0d1014; border:1px solid var(--gran); border-radius:12px;
-    font:11.5px/1.45 "Cascadia Mono", Consolas, monospace; color:var(--tihiy);
+    background:#080A0E; border:1px solid var(--gran); border-radius:var(--r-s);
+    font:11.5px/1.45 "Roboto Mono", ui-monospace, monospace; color:var(--tihiy);
     white-space:pre-wrap; word-break:break-word; text-align:left; user-select:text;
   }
   #zhurnal::-webkit-scrollbar { width:8px; }
-  #zhurnal::-webkit-scrollbar-thumb { background:#242a34; border-radius:4px; }
+  #zhurnal::-webkit-scrollbar-thumb { background:var(--gran); border-radius:4px; }
 
   /* Экран кода — единственный, у него нет нижней панели: центрируем по окну.
      52px + те же 16px, что раньше давал padding-top у .lenta (он переехал в
@@ -327,8 +365,8 @@
 <div class="shapka">
   <svg class="znachok" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
     <path d="M12 2.5 4.5 5.6v6.1c0 4.6 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.2 7.5-9.8V5.6L12 2.5Z"
-          stroke="#3ddc84" stroke-width="1.6" stroke-linejoin="round"/>
-    <path d="m8.6 12.1 2.4 2.4 4.4-4.6" stroke="#3ddc84" stroke-width="1.8"
+          stroke="#35D0A5" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="m8.6 12.1 2.4 2.4 4.4-4.6" stroke="#35D0A5" stroke-width="1.8"
           stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <span class="imya">Kelevra</span>
@@ -350,17 +388,15 @@
   </div>
 
   <div id="karta-svyazi" hidden>
-    <div class="vkladki" id="vkladki">
-      <button class="vkladka aktivna" id="vkladka-set" type="button">Сеть</button>
-      <button class="vkladka" id="vkladka-nastroyki" type="button">Настройки</button>
-    </div>
-
     <div id="tab-set">
-      <div class="krug-blok" id="krug-blok">
+      <!-- Круг ЭТО КНОПКА (как на телефоне, KDial в Components.kt): нажатие
+           само включает и выключает защиту, отдельная кнопка внизу не нужна —
+           она дублировала бы круг (спека Вовы 0.6.8). -->
+      <button class="krug-blok" id="krug-blok" type="button">
         <div class="krug-obertka">
-          <svg viewBox="0 0 144 144" aria-hidden="true">
-            <circle class="krug-fon" cx="72" cy="72" r="65" stroke-width="3"/>
-            <circle class="krug-koltso" id="krug-koltso" cx="72" cy="72" r="65" stroke-width="3.5"/>
+          <svg viewBox="0 0 210 210" aria-hidden="true">
+            <circle class="krug-fon" cx="105" cy="105" r="97" stroke-width="2"/>
+            <circle class="krug-koltso" id="krug-koltso" cx="105" cy="105" r="97" stroke-width="2.5"/>
           </svg>
           <div class="krug-serdtse">
             <div class="krug-slovo" id="zvanie">отключено</div>
@@ -371,7 +407,10 @@
             <div class="krug-pod" id="podzagolovok">трафик идёт напрямую</div>
           </div>
         </div>
-      </div>
+      </button>
+      <!-- Подпись под кругом — KHint на телефоне: говорит прямо, что сделает
+           нажатие. Текст зависит от того же состояния, что и сам круг. -->
+      <div class="krug-podskazka" id="podskazka">нажмите, чтобы включить</div>
 
       <!-- Минимальные данные о подписке — на главном экране, под кругом
            (спека 04.08). Срок «на исходе» получает рамку и остаётся заметным
@@ -421,8 +460,16 @@
 
 </div>
 
-<div class="niz" id="niz" hidden>
-  <button class="glavnaya" id="knopka-svyazi">Подключить</button>
+<!-- Нижняя панель вкладок — как на телефоне (KTabBar, Components.kt): вне
+     прокрутки .lenta, зафиксирована снизу, высота 66dp. Скрыта на экране
+     ввода кода — там переключать нечего. -->
+<div class="taby" id="vkladki" hidden>
+  <button class="tab aktivna" id="vkladka-set" type="button">
+    <span class="tochka-tab"></span>Сеть
+  </button>
+  <button class="tab" id="vkladka-nastroyki" type="button">
+    <span class="tochka-tab"></span>Настройки
+  </button>
 </div>
 
 <script>
@@ -570,9 +617,10 @@ function pokazatBedu(uzel, tekst, spokoyno) {
 }
 
 let poslednee = null;
-// Две вкладки — «Сеть» и «Настройки» (спека 04.08). Липкая кнопка действия
-// внизу принадлежит вкладке «Сеть» (там и круг, и список узлов); в
-// «Настройках» ей делать нечего.
+// Две вкладки — «Сеть» и «Настройки» (спека 04.08), нижней панелью, как на
+// телефоне (KTabBar). Панель — сама навигация, а не действие одной из
+// вкладок, поэтому видна на обеих; прячется только на экране ввода кода —
+// там переключать нечего (см. obnovit ниже).
 let vkladkaTek = "set";
 
 function primenitVkladku() {
@@ -581,7 +629,6 @@ function primenitVkladku() {
   $("vkladka-nastroyki").classList.toggle("aktivna", !naSeti);
   $("tab-set").hidden = !naSeti;
   $("tab-nastroyki").hidden = naSeti;
-  if (poslednee) $("niz").hidden = (!poslednee.kod_est || smenaKoda) || !naSeti;
 }
 
 $("vkladka-set").onclick = () => { vkladkaTek = "set"; primenitVkladku(); };
@@ -594,6 +641,7 @@ async function obnovit() {
   const nuzhenKod = !s.kod_est || smenaKoda;
   $("karta-koda").hidden = !nuzhenKod;
   $("karta-svyazi").hidden = nuzhenKod;
+  $("vkladki").hidden = nuzhenKod;
   $("lenta").classList.toggle("bez-nizhney", nuzhenKod);
   primenitVkladku();
 
@@ -605,10 +653,13 @@ async function obnovit() {
   $("chip").className = "chip " + s.sost;
   $("chip-tekst").textContent = s.versiya ? "v" + s.versiya : (podpisi[s.sost] || s.sost);
 
-  const knopka = $("knopka-svyazi");
-  knopka.textContent = s.sost === "rabotaet" ? "Отключить" : "Подключить";
-  knopka.classList.toggle("opasnaya", s.sost === "rabotaet");
+  // Круг сам кнопка (см. index: #krug-blok — <button>): подпись под ним
+  // говорит, что сделает нажатие, а не дублирует его текстом внутри круга.
+  const knopka = $("krug-blok");
   knopka.disabled = s.sost === "podnimaem";
+  $("podskazka").textContent = s.sost === "rabotaet" ? "нажмите, чтобы выключить"
+      : s.sost === "podnimaem" ? "подождите"
+      : "нажмите, чтобы включить";
 
   const zametka = $("zametka");
   const avtoZametka = zametkaAvtorezhima(s);
@@ -817,11 +868,15 @@ $("pole-koda").addEventListener("keydown", (e) => {
   if (e.key === "Enter") $("knopka-koda").click();
 });
 
-$("knopka-svyazi").onclick = async () => {
-  const knopka = $("knopka-svyazi");
-  const bylo = knopka.textContent;
-  knopka.disabled = true; knopka.textContent = "…"; pokazatBedu($("beda-svyazi"), "");
-  try { await api(bylo === "Отключить" ? "otklyuchit" : "podklyuchit"); }
+// Круг сам кнопка: клик решает по последнему известному состоянию (poslednee),
+// а не по подписи на себе — подпись внутри круга теперь всегда статус
+// ("защищено"/"отключено"), а не глагол действия, как было у прежней
+// отдельной кнопки внизу.
+$("krug-blok").onclick = async () => {
+  const knopka = $("krug-blok");
+  const otklyuchit = !!(poslednee && poslednee.sost === "rabotaet");
+  knopka.disabled = true; pokazatBedu($("beda-svyazi"), "");
+  try { await api(otklyuchit ? "otklyuchit" : "podklyuchit"); }
   catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
   knopka.disabled = false; obnovit();
 };

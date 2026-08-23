@@ -228,10 +228,11 @@ SHIRINA, VYSOTA = 420, 660
 #      человек. Не докрутилось (штука всё равно за краем окна) — беда настоящая:
 #      прокрутки нет или её не хватает;
 #   2. смотрим elementFromPoint в центре штуки: если сверху лежит кто-то чужой
-#      (зафиксированная снизу панель «.niz», модалка, наехавшая карточка) —
-#      кнопка не тыкается, сколько её ни крути. Именно так ловится перекос
-#      «padding-bottom у ленты — константа 98px, а высота панели зависит от
-#      сцены»: панель выше константы — и последний ряд списка навсегда под ней.
+#      (зафиксированная снизу панель вкладок «#vkladki», модалка, наехавшая
+#      карточка) — кнопка не тыкается, сколько её ни крути. Именно так ловится
+#      перекос «padding-bottom у ленты — константа 84px, а панель вкладок
+#      выросла больше неё»: панель выше константы — и последний ряд списка
+#      навсегда под ней.
 DOSTUP_JS = """() => {
   function skryt(el) {
     if (el.hidden) return true;
@@ -279,11 +280,13 @@ def proverit_geometriyu(str_, imya_sceny):
     return [f"{imya_sceny}: {b}" for b in str_.evaluate(DOSTUP_JS)]
 
 
-# Порча для контроля: делаем нижнюю панель заведомо выше, чем зазор, который
-# лента держит под неё (--nizhnyaya, константа). Это ровно та беда, ради
-# которой щуп и живёт: панель переросла зазор — и последний ряд списка
-# навсегда под ней, никакой прокруткой не достать.
-PORCHA_CSS = ".niz { padding-bottom: 140px !important; }"
+# Порча для контроля: делаем нижнюю панель вкладок заведомо выше, чем зазор,
+# который лента держит под неё (--nizhnyaya, константа). Это ровно та беда,
+# ради которой щуп и живёт: панель переросла зазор — и последний ряд списка
+# навсегда под ней, никакой прокруткой не достать. До 21.08 нижней панелью
+# была кнопка «.niz»; теперь на этом месте панель вкладок «#vkladki» (перенос
+# вкладок вниз, эталон — телефон), а инвариант тот же самый.
+PORCHA_CSS = "#vkladki { height: 140px !important; }"
 
 
 def kontrol_shchupa(br, port):
@@ -441,43 +444,20 @@ def proverit_pereliv(str_, imya_sceny):
     return [f"{imya_sceny}: {b}" for b in str_.evaluate(PERELIV_JS)]
 
 
-SOSTOYANIE_V_KADRE_JS = """() => {
-  const el = document.getElementById("vkladki");
-  if (!el.offsetParent) return null;   // скрыт (сцена ввода кода) — нечего мерить
-  const lenta = document.getElementById("lenta");
-  lenta.scrollTop = lenta.scrollHeight;   // докрутить до конца, как рукой
-  const r = el.getBoundingClientRect();
-  lenta.scrollTop = 0;
-  return {top: r.top, bottom: r.bottom};
-}"""
-
-
-def proverit_sostoyanie_v_kadre(str_, imya_sceny):
-    """Переключатель вкладок «Сеть»/«Настройки» не должен уезжать из кадра
-    при прокрутке — он sticky (см. .vkladki в index.html). До 21.08 тут же
-    стояла карточка состояния (id="sostoyanie", вырезана по спеке 04.08 —
-    круг вместо карточки), но смысл проверки тот же: без вкладок человек не
-    вернётся с длинного списка узлов или журнала обратно, не прокрутив назад.
-
-    Диагноз 20.08: на сцене «сломалось» с открытым журналом лента вырастает
-    выше окна, и заголовок статуса уезжал за верхний край — человек в момент
-    беды не видел, что с ним. Докручиваем ленту до конца, как это делает
-    человек мышью или колесом, и смотрим на getBoundingClientRect против
-    высоты окна — а не полагаемся на память о том, что тут когда-то чинили.
-    """
-    r = str_.evaluate(SOSTOYANIE_V_KADRE_JS)
-    if r is None:
-        return []
-    bedy = []
-    if r["top"] < 0:
-        bedy.append(f"{imya_sceny}: вкладки уезжают за верхний край "
-                    f"на {round(-r['top'])}px при прокрутке ленты до конца")
-    if r["bottom"] > VYSOTA:
-        bedy.append(f"{imya_sceny}: вкладки уезжают за нижний край "
-                    f"на {round(r['bottom'] - VYSOTA)}px")
-    return bedy
-
-
+# До этой правки тут была проверка «вкладки не уезжают из кадра при
+# прокрутке» (SOSTOYANIE_V_KADRE_JS/proverit_sostoyanie_v_kadre/
+# kontrol_sostoyaniya) — вкладки были sticky-переключателем ВНУТРИ
+# скроллящейся .lenta, и щуп ловил ровно тот класс беды: расклей sticky
+# (position:static) — переключатель уезжает вместе с содержимым.
+# Правка 23.08 перенесла вкладки вниз панелью, как на телефоне (KTabBar,
+# Components.kt): «#vkladki» теперь фиксирован на body, вне .lenta вообще —
+# сам класс беды (sticky-элемент внутри скролл-контейнера теряет позицию)
+# для него структурно не существует. Порча "position:static" на элементе,
+# который в разметке не является потомком .lenta, не воспроизводит прежнюю
+# беду и не должна была продолжать зеленеть молча — щуп честно покраснел на
+# контроле («ЩУП «STICKY» МЁРТВ»), проверка снята. Реальную «панель выросла
+# больше зазора и накрыла список» ловит kontrol_shchupa (PORCHA_CSS теперь
+# растягивает именно #vkladki, см. выше).
 OBREZKA_JS = """() => {
   const bedy = [];
   for (const el of document.querySelectorAll("*")) {
@@ -554,12 +534,21 @@ def proverit_slovo_v_kruge(str_, imya_sceny):
 
 
 def kontrol_slova_v_kruge(br, port):
-    """Щуп обязан покраснеть на той самой строке, из-за которой появился."""
+    """Щуп обязан покраснеть на той самой строке, из-за которой появился.
+
+    21.08 круг был 144px, и «не подключилось» торчало само, без порчи. Круг
+    вырос до 210dp (эталон телефона: Kelevra.kt, KDim.DialSize) — то же слово
+    теперь сворачивается на две строки и укладывается внутри без порчи. Порчу
+    делаем явной тем же приёмом, что и kontrol_pereliva: запрещаем перенос
+    (white-space:nowrap) — ровно от того, чем .krug-slovo защищается по
+    умолчанию (перенос + класс .dlinnoe уменьшает кегль).
+    """
     sostoyanie["tek"] = SCENY["5_slomalos"]
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
-    str_.evaluate("() => { document.getElementById('zvanie').textContent = 'не подключилось'; }")
+    str_.evaluate("() => { document.getElementById('zvanie').textContent = 'не подключилось совсем'; }")
+    str_.add_style_tag(content=".krug-slovo { white-space: nowrap; }")
     str_.wait_for_timeout(200)
     bedy = proverit_slovo_v_kruge(str_, "контроль-круг")
     str_.close()
@@ -594,15 +583,18 @@ def kontrol_obrezki(br, port):
     """Щуп обрезки обязан покраснеть на строке, которой ужали рамку.
 
     Порчу берём ту самую, из-за которой щуп и появился: возвращаем в круг
-    пару «режим · узел» длиной больше двух строк. Если после такой подмены
-    щуп молчит — молчание на чистых сценах ничего не стоит.
+    пару «режим · узел» длиной больше двух строк. Круг вырос до 210dp (эталон
+    телефона), а .krug-pod вместе с ним — до 150px, и прежняя фраза «трафик
+    браузеров · Нидерланды 2» стала укладываться в две строки без обрезки.
+    Берём фразу заведомо длиннее. Если после такой подмены щуп молчит —
+    молчание на чистых сценах ничего не стоит.
     """
     sostoyanie["tek"] = SCENY["4_rabotaet"]
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
     str_.evaluate("() => { document.getElementById('podzagolovok').textContent = "
-                  "'трафик браузеров · Нидерланды 2'; }")
+                  "'трафик браузеров · Нидерланды 2 · дополнительный резервный узел'; }")
     str_.wait_for_timeout(200)
     bedy = proverit_obrezku(str_, "контроль-обрезка")
     str_.close()
@@ -618,35 +610,6 @@ def kontrol_pereliva(br, port):
     str_.add_style_tag(content=".podpiska span { white-space: nowrap; }")
     str_.wait_for_timeout(200)
     bedy = proverit_pereliv(str_, "контроль-перелив")
-    str_.close()
-    return bedy
-
-
-def kontrol_sostoyaniya(br, port):
-    """Sticky-щуп обязан покраснеть, если вкладки расклеить.
-
-    Проверяем ровно на той сцене, где беда была живой 20.08: «сломалось» с
-    развёрнутым журналом — там лента вырастает выше окна. Журнал с 21.08
-    живёт на вкладке «Настройки» (спека 04.08), туда и переключаемся перед
-    кликом. На этой сцене вкладка «Настройки» короче окна (автозапуска нет —
-    сборка не Windows, журнал — 4 строки), поэтому сама по себе не
-    прокручивается — добавляем безобидный распорный блок, чтобы получить ту
-    же длинную ленту, что и на боевом Windows-журнале за день. Снимаем sticky
-    вручную (position:static) и смотрим, что проверка это заметит сама, без
-    моей памятливости.
-    """
-    sostoyanie["tek"] = SCENY["5_slomalos"]
-    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
-    str_.goto(f"http://127.0.0.1:{port}/index.html")
-    str_.wait_for_timeout(700)
-    str_.click("#vkladka-nastroyki")
-    str_.click("#knopka-zhurnal")
-    str_.wait_for_timeout(400)
-    str_.add_style_tag(content="#tab-nastroyki { min-height: 900px; }")
-    str_.wait_for_timeout(200)
-    str_.add_style_tag(content="#vkladki { position: static !important; }")
-    str_.wait_for_timeout(200)
-    bedy = proverit_sostoyanie_v_kadre(str_, "контроль-sticky")
     str_.close()
     return bedy
 
@@ -734,9 +697,9 @@ def snyat():
                 # Журнал переехал на вкладку «Настройки» (спека 04.08: круг
                 # и ошибка живут на «Сети», журнал — «всё остальное» на
                 # «Настройках») — сцена «сломалось» теперь снимает вкладку
-                # «Сеть» как есть, открытый журнал отдельно бьёт kontrol_sostoyaniya().
-                # Снимок ПЕРВЫМ: щуп крутит страницу, а глазам нужен первый
-                # кадр — то, что человек видит, ничего не тронув.
+                # «Сеть» как есть, открытый журнал ловят проверки геометрии/
+                # обрезки ниже. Снимок ПЕРВЫМ: щуп крутит страницу, а глазам
+                # нужен первый кадр — то, что человек видит, ничего не тронув.
                 put = VYHOD / f"{imya}.png"
                 str_.screenshot(path=str(put))
                 bedy = proverit_geometriyu(str_, imya)
@@ -744,7 +707,6 @@ def snyat():
                 bedy += proverit_pereliv(str_, imya)
                 bedy += proverit_obrezku(str_, imya)
                 bedy += proverit_slovo_v_kruge(str_, imya)
-                bedy += proverit_sostoyanie_v_kadre(str_, imya)
                 if imya in ZHDEM_V_OKNE:
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 if imya in ZHDEM_AVTOREZHIM:
@@ -777,8 +739,6 @@ def snyat():
                           "слово, торчащее за окружность, его не разбудило"),
                 "обрезки": (kontrol_obrezki(br, port),
                             "строка, которой ужали рамку, его не разбудила"),
-                "sticky": (kontrol_sostoyaniya(br, port),
-                           "расклеенная карточка состояния его не разбудила"),
                 "перелива": (kontrol_pereliva(br, port),
                              "строка, которой запретили перенос, его не разбудила"),
                 "жаргона": (kontrol_zhargona(br, port),
