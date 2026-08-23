@@ -38,7 +38,22 @@ if [ "${BEZ_PRIYOMKI:-0}" = "1" ]; then
   echo "⚠ приёмка ПРОПУЩЕНА по BEZ_PRIYOMKI=1 — это уедет на машину человека как есть"
 else
   echo "── приёмка перед выпуском"
-  bash stend/vse.sh
+  PRIYOMKA_LOG=$(mktemp)
+  set +e
+  bash stend/vse.sh 2>&1 | tee "$PRIYOMKA_LOG"
+  priyomka_rc=${PIPESTATUS[0]}
+  set -e
+  if [ "$priyomka_rc" -ne 0 ]; then
+    # rc=7 у стенда (⚫ ПРИБОР МЁРТВ, stend/obshchee.sh) значит: wine сегодня
+    # не смог запустить exe, продукт вообще не проверялся — это не брак
+    # продукта, и выпускать вслепую нельзя так же, как и при красном.
+    if grep -q "ПРИБОР МЁРТВ" "$PRIYOMKA_LOG"; then
+      echo "✗ выпуск остановлен: стенд не смог проверить (wine мёртв), это не брак продукта"
+    fi
+    rm -f "$PRIYOMKA_LOG"
+    exit 1
+  fi
+  rm -f "$PRIYOMKA_LOG"
 fi
 
 echo "── сборка $VERSIYA"

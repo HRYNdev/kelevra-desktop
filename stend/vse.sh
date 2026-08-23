@@ -22,13 +22,13 @@ TAYMAUT=${TAYMAUT:-900}
 # Не стенды, а подсобка: их запуск ничего не проверяет.
 # Список короткий и растёт медленно; главное — по умолчанию файл СЧИТАЕТСЯ
 # стендом, то есть новый щуп попадает в приёмку сам, а не забывается.
-NE_STEND=("vse.sh" "znachok.py")
+NE_STEND=("vse.sh" "znachok.py" "obshchee.sh")
 # Нужен wine: под ним гоняются настоящие windows-бинарники.
 NUZHEN_WINE=("windows.sh" "razdvoenie.sh" "trey.sh" "obnovlenie.sh" "proksi.sh")
 
 est_v() { local i n=$1; shift; for i in "$@"; do [ "$i" = "$n" ] && return 0; done; return 1; }
 
-ZELENYE=(); KRASNYE=(); PROPUSK=()
+ZELENYE=(); KRASNYE=(); PROPUSK=(); MERTVYE=()
 
 shag() {  # shag <имя> <команда...>
   local imya=$1; shift
@@ -38,7 +38,14 @@ shag() {  # shag <имя> <команда...>
   else
     local rc=$?
     printf '   ✗ %s: rc=%d\n' "$imya" "$rc"
-    KRASNYE+=("$imya (rc=$rc)")
+    # rc=7 — сигнал стенда «прибор мёртв» (wine упал раньше, чем продукт вообще
+    # начал проверяться, см. stend/obshchee.sh): это не брак продукта, класть
+    # в отдельную группу, а не путать с настоящим красным.
+    if [ "$rc" -eq 7 ]; then
+      MERTVYE+=("$imya")
+    else
+      KRASNYE+=("$imya (rc=$rc)")
+    fi
   fi
 }
 
@@ -81,7 +88,8 @@ done
 printf '\n════════ ИТОГ ПРИЁМКИ ════════\n'
 for i in "${ZELENYE[@]}"; do printf '  🟢 %s\n' "$i"; done
 for i in "${PROPUSK[@]}"; do printf '  ⚪ пропущен: %s\n' "$i"; done
+for i in "${MERTVYE[@]}"; do printf '  ⚫ %s — прибор мёртв, не проверено\n' "$i"; done
 for i in "${KRASNYE[@]}"; do printf '  🔴 %s\n' "$i"; done
-printf 'зелёных %d, пропущено %d, красных %d\n' \
-  "${#ZELENYE[@]}" "${#PROPUSK[@]}" "${#KRASNYE[@]}"
-[ "${#KRASNYE[@]}" -eq 0 ] || exit 1
+printf 'зелёных %d, пропущено %d, мёртвых %d, красных %d\n' \
+  "${#ZELENYE[@]}" "${#PROPUSK[@]}" "${#MERTVYE[@]}" "${#KRASNYE[@]}"
+{ [ "${#KRASNYE[@]}" -eq 0 ] && [ "${#MERTVYE[@]}" -eq 0 ]; } || exit 1
