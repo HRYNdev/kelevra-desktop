@@ -265,10 +265,19 @@ func zapustitTrey(vyhod chan<- struct{}) {
 // честно логирует и возвращает системный IDI_APPLICATION: отказ трея не
 // имеет права утащить за собой службу.
 func sobratZnachokTreya() syscall.Handle {
+	return sobratZnachokRazmera(zhelaemyyRazmerZnachka())
+}
+
+// sobratZnachokRazmera — то же самое, что sobratZnachokTreya, но под
+// произвольный желаемый размер образа. Вынесена отдельно, потому что тем же
+// znachok.ico и той же CreateIconFromResourceEx пользуется ещё окно
+// WebView2 (см. ustanovitZnachokOkna в okno_windows.go) — там нужны сразу
+// два размера (ICON_SMALL и ICON_BIG), а не один, как в трее.
+func sobratZnachokRazmera(zhelaemyy int) syscall.Handle {
 	data := znachokIco
-	obraz, err := vybratObrazIzIco(data, zhelaemyyRazmerZnachka())
+	obraz, err := vybratObrazIzIco(data, zhelaemyy)
 	if err != nil {
-		log.Printf("трей: не удалось собрать значок из znachok.ico (%v), беру системный значок", err)
+		log.Printf("значок: не удалось собрать значок из znachok.ico (%v), беру системный значок", err)
 		return sistemnyyZnachokTreya()
 	}
 	presbits := data[obraz.smeshchenie : obraz.smeshchenie+obraz.razmer]
@@ -282,11 +291,11 @@ func sobratZnachokTreya() syscall.Handle {
 		0, // LR_DEFAULTCOLOR
 	)
 	if r == 0 {
-		log.Printf("трей: CreateIconFromResourceEx вернул 0 для образа %dx%d (%v), беру системный значок", obraz.shirina, obraz.vysota, err)
+		log.Printf("значок: CreateIconFromResourceEx вернул 0 для образа %dx%d (%v), беру системный значок", obraz.shirina, obraz.vysota, err)
 		return sistemnyyZnachokTreya()
 	}
 	hIcon := syscall.Handle(r)
-	log.Printf("трей: значок собран из znachok.ico (%dx%d, %d байт образа), HICON=%#x", obraz.shirina, obraz.vysota, len(presbits), hIcon)
+	log.Printf("значок: собран из znachok.ico (%dx%d, %d байт образа) под желаемый размер %d, HICON=%#x", obraz.shirina, obraz.vysota, len(presbits), zhelaemyy, hIcon)
 	return hIcon
 }
 
