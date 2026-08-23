@@ -49,6 +49,7 @@ export LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8}
 export TMPDIR=/tmp
 STEND=$KORFN/.stend_win
 mkdir -p "$STEND" "$WINEPREFIX"
+. "$KORFN/stend/obshchee.sh"
 
 command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
 
@@ -83,19 +84,21 @@ echo "── запуск --tiho (родитель) ──"
 # него --tiho может уйти проверять обновление в реальный GitHub и подменить
 # себя чужим релизом ещё до того, как мы вообще увидим наш код (поймано
 # 20.08 в obnovlenie.sh).
-KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho >"$STEND/razdvoenie_tiho.log" 2>&1 &
-RODITEL=$!
+wine_zapusti "$STEND/razdvoenie_tiho.log" "$ZHURNAL" - 25 -- \
+  env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
+mertv=$?
+RODITEL=$WINE_ZAPUSTI_PID
 echo "  unix-pid родителя: $RODITEL"
+if [ "$mertv" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
 
 # (б) ждём, пока РОДИТЕЛЬ сам завершится — не убиваем, а именно ждём: если бы
 # он завис в ожидании ребёнка (старое поведение — один процесс на двоих), этот
-# цикл вычерпал бы весь лимit и ушёл бы в красный по таймауту.
-zhiv=1
-for _ in $(seq 1 25); do
-  kill -0 "$RODITEL" 2>/dev/null || { zhiv=0; break; }
-  sleep 1
-done
-if [ "$zhiv" -eq 1 ]; then
+# цикл вычерпал бы весь лимit и ушёл бы в красный по таймауту. wine_zapusti уже
+# отждал(а) до 25с или до выхода процесса — здесь только читаем итог.
+if kill -0 "$RODITEL" 2>/dev/null; then
   echo "  КРАСНЫЙ: родитель (--tiho) не вышел за 25с — застрял, как в старой схеме «один процесс»"
   bed=1
 else
