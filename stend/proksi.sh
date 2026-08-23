@@ -75,14 +75,14 @@ ostanovit() { # гасит процесс стенда по короткому �
   # процесс, переживающий смерть Kelevra.exe. 23.08 переживший ядро держал порт
   # 2412 и ронял соседние стенды в общей приёмке (proksi.sh зелёный в одиночку,
   # красный внутри vse.sh) — беда была не в продукте, а в этой уборке.
-  pkill -TERM -f Kelevra.exe 2>/dev/null
-  pkill -TERM -f sing-box.exe 2>/dev/null
+  pkill -TERM -f '[K]elevra\.exe' 2>/dev/null
+  pkill -TERM -f '[s]ing-box\.exe' 2>/dev/null
   for _ in $(seq 1 10); do
-    pgrep -f 'Kelevra.exe|sing-box.exe' >/dev/null 2>&1 || return 0
+    pgrep -f '[K]elevra\.exe|[s]ing-box\.exe' >/dev/null 2>&1 || return 0
     sleep 1
   done
-  pkill -KILL -f Kelevra.exe 2>/dev/null
-  pkill -KILL -f sing-box.exe 2>/dev/null
+  pkill -KILL -f '[K]elevra\.exe' 2>/dev/null
+  pkill -KILL -f '[s]ing-box\.exe' 2>/dev/null
   sleep 1
 }
 
