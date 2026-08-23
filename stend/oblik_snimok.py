@@ -201,6 +201,12 @@ class Ruchki(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith("/api/uzly"):
             return self._json(UZLY if sostoyanie["tek"]["sost"] == "rabotaet"
                               else UZLY_OTKLYUCHENO)
+        if self.path.startswith("/api/obnovlenie"):
+            # Сеть на стенде намеренно недоступна (это же честное поведение
+            # живой ручки без интернета, sluzhba.go: obnovlenieRuchka) —
+            # проверяем, что окно доводит это до понятной подписи, а не
+            # виснет на «Проверяем…» (хозяин 22.08, эталон — телефон).
+            return self._json({"tekushchaya": BAZA["versiya"], "beda": "не удалось проверить"})
         if self.path.startswith("/api/zhurnal"):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -579,6 +585,161 @@ def proverit_pokrytie():
     return bedy
 
 
+# --- 23.08: экран настроек был «по-свойски» (хозяин, 22.08: «настройки тоже
+# написаны по свойски и не то, что я хотел бы видеть», «почему надписи такие
+# будто ты по братски кому то пишешь») — три голые кнопки без единого
+# пояснения, чужие заголовки блоков, значок версии не на месте (сравнили с
+# эталоном продукта — экраном настроек телефона, SimpleSettingsScreen.kt).
+# Щупы ниже держат форму эталона так, чтобы регресс к «по-свойски» покраснел
+# сам, без моей памятливости.
+
+ZAGOLOVKI_BLOKOV_NASTROEK = {"Сеть", "Приложение", "Подписка"}
+
+
+def proverit_podpisi_nastroyek(str_, imya_sceny):
+    """Каждый пункт настроек обязан объяснять себя второй строкой-подписью.
+
+    До правки было три голые кнопки без единого пояснения — человек не
+    понимал, что делает пункт (та самая жалоба 22.08).
+    """
+    bez_podpisi = str_.evaluate("""() => {
+      const bez = [];
+      // .tihaya-tekst — только те пункты, что ПЕРЕСТРОЕНЫ в заголовок+подпись
+      // (обновление/журнал/код доступа). «Скопировать журнал» — не пункт
+      // настроек, а разовое подтверждение действия, эталон его не требует.
+      document.querySelectorAll('#tab-nastroyki .tihaya-tekst').forEach((t) => {
+        const p = t.querySelector('.tihaya-podpis');
+        const knopka = t.closest('button');
+        if (!p || !p.textContent.trim()) bez.push((knopka && knopka.id) || 'без id');
+      });
+      document.querySelectorAll('#tab-nastroyki .perekl-ryad').forEach((r) => {
+        const p = r.querySelector('.perekl-tekst .podpis');
+        if (!p || !p.textContent.trim()) bez.push(r.id || 'ряд без id');
+      });
+      return bez;
+    }""")
+    return [f"{imya_sceny}: пункт настроек «{b}» без подписи-объяснения" for b in bez_podpisi]
+
+
+def proverit_zagolovki_blokov(str_, imya_sceny):
+    """Заголовки блоков — ровно «Сеть»/«Приложение»/«Подписка», эталон телефона.
+
+    Было «Приложение»/«Доступ»/«Если что-то не так» — последний и есть та
+    самая «по-свойски» надпись (хозяин 22.08).
+    """
+    zagi = str_.evaluate("""() => [...document.querySelectorAll('#tab-nastroyki .zagolovok-bloka')]
+        .map((z) => z.textContent.trim())""")
+    if set(zagi) != ZAGOLOVKI_BLOKOV_NASTROEK:
+        return [f"{imya_sceny}: заголовки блоков настроек {zagi}, а ждали ровно "
+                f"{sorted(ZAGOLOVKI_BLOKOV_NASTROEK)}"]
+    return []
+
+
+def proverit_podval_versii(str_, imya_sceny, versiya):
+    """Подвал «KELEVRA <версия>» — эталон телефона (BuildConfig.VERSION_NAME)."""
+    tekst = str_.evaluate("() => document.getElementById('podval-versiya').textContent") or ""
+    if f"KELEVRA {versiya}" not in tekst:
+        return [f"{imya_sceny}: подвал настроек «{tekst}», а ждали версию «KELEVRA {versiya}»"]
+    return []
+
+
+def proverit_net_versii_v_shapke(str_, imya_sceny):
+    """Значка версии в шапке быть не должно — на телефоне его там нет вовсе."""
+    tekst = str_.evaluate("() => document.getElementById('chip-tekst').textContent") or ""
+    if re.match(r"^v\d", tekst.strip()):
+        return [f"{imya_sceny}: в шапке всё ещё значок версии «{tekst}» — эталон (телефон) его не показывает"]
+    return []
+
+
+def proverit_obnovlenie(str_, imya_sceny):
+    """«Проверить обновление» обязан довести подпись до понятного слова.
+
+    Сеть на стенде намеренно недоступна — эндпойнт (sluzhba.go:
+    obnovlenieRuchka) обязан ответить понятной подписью, а не повесить
+    строку на «Проверяем…» навсегда.
+    """
+    str_.click("#knopka-obnovlenie")
+    str_.wait_for_timeout(400)
+    tekst = (str_.evaluate("() => document.getElementById('podpis-obnovlenie').textContent") or "").strip()
+    if not tekst or tekst == "Проверяем…":
+        return [f"{imya_sceny}: «Проверить обновление» зависло на «{tekst}»"]
+    return []
+
+
+def kontrol_podpisi_nastroyek(br, port):
+    """Щуп подписей обязан покраснеть, если подпись у пункта стереть."""
+    sostoyanie["tek"] = SCENY["8_avtozapusk_vykl"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.click("#vkladka-nastroyki")
+    str_.wait_for_timeout(200)
+    str_.evaluate("""() => {
+      document.querySelectorAll('#tab-nastroyki .tihaya-podpis, #tab-nastroyki .perekl-tekst .podpis')
+        .forEach((p) => { p.textContent = ''; });
+    }""")
+    bedy = proverit_podpisi_nastroyek(str_, "контроль-подписи")
+    str_.close()
+    return bedy
+
+
+def kontrol_zagolovkov_blokov(br, port):
+    """Щуп заголовков обязан покраснеть на старой «по-свойски» надписи."""
+    sostoyanie["tek"] = SCENY["8_avtozapusk_vykl"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.click("#vkladka-nastroyki")
+    str_.wait_for_timeout(200)
+    str_.evaluate("""() => {
+      const z = document.querySelector('#tab-nastroyki .zagolovok-bloka');
+      z.textContent = 'Если что-то не так';
+    }""")
+    bedy = proverit_zagolovki_blokov(str_, "контроль-заголовки")
+    str_.close()
+    return bedy
+
+
+def kontrol_podvala_versii(br, port):
+    """Щуп подвала обязан покраснеть, если версия из него пропадёт."""
+    sostoyanie["tek"] = SCENY["8_avtozapusk_vykl"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.click("#vkladka-nastroyki")
+    str_.wait_for_timeout(200)
+    str_.evaluate("() => { document.getElementById('podval-versiya').textContent = ''; }")
+    bedy = proverit_podval_versii(str_, "контроль-подвал", BAZA["versiya"])
+    str_.close()
+    return bedy
+
+
+def kontrol_versii_v_shapke(br, port):
+    """Щуп шапки обязан покраснеть, если значок версии в неё вернуть."""
+    sostoyanie["tek"] = SCENY["2_otklyucheno"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.evaluate("() => { document.getElementById('chip-tekst').textContent = 'v0.5.3'; }")
+    bedy = proverit_net_versii_v_shapke(str_, "контроль-версия-в-шапке")
+    str_.close()
+    return bedy
+
+
+def kontrol_obnovleniya(br, port):
+    """Щуп обновления обязан покраснеть, если подпись зависнет на «Проверяем…»."""
+    sostoyanie["tek"] = SCENY["8_avtozapusk_vykl"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.click("#vkladka-nastroyki")
+    str_.wait_for_timeout(200)
+    str_.evaluate("() => { window.podpisObnovleniya = () => 'Проверяем…'; }")
+    bedy = proverit_obnovlenie(str_, "контроль-обновление")
+    str_.close()
+    return bedy
+
+
 def kontrol_obrezki(br, port):
     """Щуп обрезки обязан покраснеть на строке, которой ужали рамку.
 
@@ -707,12 +868,18 @@ def snyat():
                 bedy += proverit_pereliv(str_, imya)
                 bedy += proverit_obrezku(str_, imya)
                 bedy += proverit_slovo_v_kruge(str_, imya)
+                bedy += proverit_net_versii_v_shapke(str_, imya)
                 if imya in ZHDEM_V_OKNE:
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 if imya in ZHDEM_AVTOREZHIM:
                     bedy += proverit_avtorezhim(str_, imya, ZHDEM_AVTOREZHIM[imya])
                 if sost.get("sost") != "rabotaet":
                     bedy += proverit_net_zametki_obema(str_, imya)
+                if imya in NASTROYKI_SCENY:
+                    bedy += proverit_podpisi_nastroyek(str_, imya)
+                    bedy += proverit_zagolovki_blokov(str_, imya)
+                    bedy += proverit_podval_versii(str_, imya, sost["versiya"])
+                    bedy += proverit_obnovlenie(str_, imya)
                 vse_bedy.extend(bedy)
                 znak = "🔴" if bedy else "🟢"
                 print(f"  {znak} {put}")
@@ -749,6 +916,16 @@ def snyat():
                                "заметка авторежима его не разбудила"),
                 "заметки объёма": (kontrol_zametki_obema(br, port),
                                    "заметка объёма, пережившая выключение защиты, его не разбудила"),
+                "подписей настроек": (kontrol_podpisi_nastroyek(br, port),
+                                      "пункт настроек без подписи его не разбудил"),
+                "заголовков блоков": (kontrol_zagolovkov_blokov(br, port),
+                                      "старая «по-свойски» надпись блока его не разбудила"),
+                "подвала версии": (kontrol_podvala_versii(br, port),
+                                   "пропавшая версия в подвале его не разбудила"),
+                "версии в шапке": (kontrol_versii_v_shapke(br, port),
+                                   "вернувшийся значок версии в шапке его не разбудил"),
+                "обновления": (kontrol_obnovleniya(br, port),
+                               "подпись, зависшая на «Проверяем…», его не разбудила"),
             }
             br.close()
         srv.shutdown()

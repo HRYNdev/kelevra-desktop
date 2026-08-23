@@ -210,6 +210,14 @@
   .perekl-tekst .podpis-ustarela {
     display:block; margin-top:2px; font-size:11.5px; line-height:1.35; color:var(--zhdem);
   }
+  /* Подпись второй строкой под тумблером — тот же приём, что и у пунктов
+     .tihaya ниже (эталон телефона: KRowItem, Components.kt, поле subtitle).
+     Без неё человек видит голое «Переключать защиту автоматически» и не
+     понимает, что именно это делает (хозяин 22.08: «настройки написаны
+     по-свойски»). */
+  .perekl-tekst .podpis {
+    display:block; margin-top:2px; font-size:11.5px; line-height:1.35; color:var(--tihiy);
+  }
   .perekl {
     flex:none; width:40px; height:24px; padding:0; border-radius:999px;
     background:var(--gran); position:relative; transition:background .15s;
@@ -284,7 +292,7 @@
      экрана был рваным. Кнопка полной защиты на вкладке «Сеть» — призыв, она
      остаётся центрованной. */
   #tab-nastroyki .tihaya {
-    text-align:left; padding-left:14px;
+    text-align:left; padding-left:14px; padding-top:10px; padding-bottom:10px;
     display:flex; align-items:center; justify-content:space-between;
   }
   /* Рамка + текст слева читались как ПОЛЕ ВВОДА. Шеврон возвращает пункту
@@ -292,6 +300,27 @@
   #tab-nastroyki .tihaya::after { content:"\203A"; color:var(--slabyy); font-size:18px; line-height:1; }
   /* Опять display:flex поверх [hidden] — «Скопировать журнал» скрыт по умолчанию. */
   #tab-nastroyki .tihaya[hidden] { display:none; }
+  /* Заголовок + подпись второй строкой внутри пункта .tihaya — эталон
+     телефона (KRowItem: title Montserrat Medium 15sp colors.Text, subtitle
+     Montserrat 13sp colors.Dim = ровно var(--tihiy) на компьютере). Голая
+     кнопка без объяснения — то, из-за чего хозяин 22.08 не понял ни одного
+     пункта настроек. */
+  .tihaya-tekst { display:flex; flex-direction:column; gap:2px; text-align:left; min-width:0; }
+  .tihaya-zagolovok { color:var(--tekst); font-size:13.5px; font-weight:500; }
+  .tihaya-podpis { color:var(--tihiy); font-size:11.5px; line-height:1.35; }
+  /* Заголовок экрана «Настройки» — то же самое, что открывает экран на
+     телефоне (SimpleSettingsScreen.kt: Montserrat SemiBold 21sp, letter-
+     spacing -0.4). Без него список из трёх кнопок ничем не подписан. */
+  .zagolovok-ekrana {
+    font-weight:650; font-size:21px; letter-spacing:-.4px; color:var(--tekst);
+    margin:18px 13px 6px;
+  }
+  /* Подвал «KELEVRA <версия>» — тот же текст, что и на телефоне
+     (BuildConfig.VERSION_NAME), тем же моно-шрифтом и цветом Dim2
+     (0x5F6B7D — ровно var(--slabyy)). Значок версии переехал сюда из
+     шапки: на телефоне в шапке его нет вовсе (хозяин, 0.6.8: «единый дизайн
+     ты не знаешь что такое»). */
+  .podval-versiya { margin:22px 13px 4px; font-size:10px; letter-spacing:1.4px; color:var(--slabyy); }
   .tihaya:hover { color:var(--tekst); border-color:var(--gran2); }
   .ssylka {
     background:none; border:0; padding:0; color:var(--tihiy); font-size:12px;
@@ -428,9 +457,26 @@
     </div>
 
     <div id="tab-nastroyki" hidden>
+      <!-- Заголовок экрана — эталон телефона (SimpleSettingsScreen.kt): без
+           него список кнопок ничем не подписан (хозяин 22.08: «настройки
+           написаны по-свойски и не то, что я хотел бы видеть»). -->
+      <div class="zagolovok-ekrana">Настройки</div>
+
+      <div class="zagolovok-bloka">Сеть</div>
+      <div class="perekl-ryad" id="ryad-avtorezhim">
+        <span class="perekl-tekst">Переключать защиту автоматически
+          <span class="podpis">Дома защита выключается, в чужой сети включается сама</span>
+        </span>
+        <button class="perekl" id="perekl-avtorezhim" type="button" role="switch" aria-checked="false">
+          <span class="knob"></span>
+        </button>
+      </div>
+      <div class="beda" id="zametka-avtorezhim"></div>
+
       <div class="zagolovok-bloka" id="zag-avtozapusk">Приложение</div>
       <div class="perekl-ryad" id="ryad-avtozapusk" hidden>
         <span class="perekl-tekst">Запускать вместе с Windows
+          <span class="podpis">Защита восстанавливается при входе в систему</span>
           <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
         </span>
         <button class="perekl" id="perekl-avtozapusk" type="button" role="switch" aria-checked="false">
@@ -438,23 +484,40 @@
         </button>
       </div>
       <div class="beda" id="beda-avtozapusk"></div>
-      <div class="perekl-ryad" id="ryad-avtorezhim">
-        <span class="perekl-tekst">Переключать защиту автоматически</span>
-        <button class="perekl" id="perekl-avtorezhim" type="button" role="switch" aria-checked="false">
-          <span class="knob"></span>
-        </button>
-      </div>
-      <div class="beda" id="zametka-avtorezhim"></div>
-      <div class="zagolovok-bloka">Доступ</div>
-      <button class="tihaya" id="knopka-smenit">Сменить код доступа</button>
-
-      <div class="zagolovok-bloka">Если что-то не так</div>
+      <!-- Обновление приходит само и молча (internal/obnovlenie) — человеку
+           нужен способ спросить прямо сейчас, свежая у него версия или нет,
+           так же как на телефоне (SimpleSettingsScreen.kt: «Проверить
+           обновление»). -->
+      <button class="tihaya" id="knopka-obnovlenie">
+        <span class="tihaya-tekst">
+          <span class="tihaya-zagolovok">Проверить обновление</span>
+          <span class="tihaya-podpis" id="podpis-obnovlenie">Версия —</span>
+        </span>
+      </button>
       <div>
-        <button class="tihaya" id="knopka-zhurnal">Показать журнал</button>
+        <button class="tihaya" id="knopka-zhurnal">
+          <span class="tihaya-tekst">
+            <span class="tihaya-zagolovok" id="zagolovok-zhurnal">Журнал работы</span>
+            <span class="tihaya-podpis">Записи о запусках и ошибках</span>
+          </span>
+        </button>
         <pre id="zhurnal" hidden></pre>
         <div style="height:8px"></div>
         <button class="tihaya" id="knopka-kopirovat" hidden>Скопировать журнал</button>
       </div>
+
+      <div class="zagolovok-bloka">Подписка</div>
+      <button class="tihaya" id="knopka-smenit">
+        <span class="tihaya-tekst">
+          <span class="tihaya-zagolovok">Подключить по коду</span>
+          <span class="tihaya-podpis">Изменить код доступа</span>
+        </span>
+      </button>
+
+      <!-- Подвал — эталон телефона: RobotoMono, letter-spacing 1.4, тихий
+           цвет. Значок версии убран из шапки наверху (см. #chip-tekst в
+           obnovit ниже) — на телефоне его там нет, живёт он теперь тут. -->
+      <div class="podval-versiya mono" id="podval-versiya">KELEVRA —</div>
     </div>
   </div>
 
@@ -616,6 +679,21 @@ function pokazatBedu(uzel, tekst, spokoyno) {
   uzel.classList.toggle("spokoyno", !!spokoyno);
 }
 
+// Состояние пункта «Проверить обновление»: null — ещё не проверяли (подпись —
+// текущая версия), "idet" — запрос в полёте, иначе {beda:true} | {novaya}
+// | {svezhaya:true}. Опрос /api/sostoyanie идёт раз в 2 секунды (см.
+// setInterval внизу) — не держи это в самом s, иначе следующий тик обнулил
+// бы «Проверяем…» или уже показанный итог раньше, чем человек его прочитал.
+let obnovlenieItog = null;
+
+function podpisObnovleniya(s) {
+  if (obnovlenieItog === "idet") return "Проверяем…";
+  if (obnovlenieItog && obnovlenieItog.beda) return "Не удалось проверить";
+  if (obnovlenieItog && obnovlenieItog.novaya) return "Доступна версия " + obnovlenieItog.novaya;
+  if (obnovlenieItog && obnovlenieItog.svezhaya) return "Установлена свежая версия";
+  return "Версия " + (s.versiya || "—");
+}
+
 let poslednee = null;
 // Две вкладки — «Сеть» и «Настройки» (спека 04.08), нижней панелью, как на
 // телефоне (KTabBar). Панель — сама навигация, а не действие одной из
@@ -651,7 +729,13 @@ async function obnovit() {
   $("zvanie").classList.toggle("dlinnoe", zvanie.length > 9);
   $("podzagolovok").textContent = podzagolovok(s);
   $("chip").className = "chip " + s.sost;
-  $("chip-tekst").textContent = s.versiya ? "v" + s.versiya : (podpisi[s.sost] || s.sost);
+  // Раньше тут всегда стояла версия («v0.5.3 — значит обновление доехало»,
+  // хозяин 20.08) — на телефоне такого значка в шапке нет вовсе (эталон
+  // SimpleSettingsScreen.kt), а версию теперь видно в настройках (подвал
+  // «KELEVRA <версия>» ниже, и подпись пункта «Проверить обновление»).
+  $("chip-tekst").textContent = podpisi[s.sost] || s.sost;
+  $("podval-versiya").textContent = "KELEVRA " + (s.versiya || "");
+  $("podpis-obnovlenie").textContent = podpisObnovleniya(s);
 
   // Круг сам кнопка (см. index: #krug-blok — <button>): подпись под ним
   // говорит, что сделает нажатие, а не дублирует его текстом внутри круга.
@@ -703,10 +787,9 @@ async function obnovit() {
   // хуже, чем не показывать его вовсе.
   const ryadAvt = $("ryad-avtozapusk"), bedaAvt = $("beda-avtozapusk"), podpisAvt = $("podpis-ustarela");
   ryadAvt.hidden = !s.avtozapusk_podderzhivaetsya;
-  // Заголовок раздела теперь держит не только автозапуск, но и авторежим
-  // ниже — тот показывается всегда, так что и заголовок больше не прячется
-  // целиком на не-Windows сборке (как было, пока в разделе был только
-  // автозапуск, который целиком платформенный).
+  // Заголовок блока «Приложение» держит не только автозапуск (платформенный,
+  // может прятаться целиком), но и «Проверить обновление» с журналом ниже —
+  // те показываются всегда, поэтому заголовок не прячется на не-Windows сборке.
   $("zag-avtozapusk").hidden = false;
   if (s.avtozapusk_podderzhivaetsya) {
     const perekl = $("perekl-avtozapusk");
@@ -922,13 +1005,30 @@ $("perekl-avtorezhim").onclick = async () => {
 
 $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
 
+// «Проверить обновление» — обновление и так приходит само и молча
+// (cmd/kelevra/obnovlenie.go), но без этой кнопки человеку негде спросить
+// прямо сейчас, свежая у него версия или нет (эталон телефона:
+// SimpleSettingsScreen.kt). Сеть на стенде недоступна нарочно — эндпойнт
+// обязан ответить понятной подписью, а не повесить экран (stend/oblik_snimok.py).
+$("knopka-obnovlenie").onclick = async () => {
+  obnovlenieItog = "idet";
+  if (poslednee) $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
+  try {
+    const d = await api("obnovlenie");
+    obnovlenieItog = d.beda ? {beda: true} : d.novaya ? {novaya: d.novaya} : {svezhaya: true};
+  } catch (e) {
+    obnovlenieItog = {beda: true};
+  }
+  if (poslednee) $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
+};
+
 // Журнал прямо в окне: иначе прислать причину можно только через проводник
 // в %LOCALAPPDATA%, а человек, у которого «не работает», туда не пойдёт.
 $("knopka-zhurnal").onclick = async () => {
-  const pre = $("zhurnal"), knopka = $("knopka-zhurnal");
+  const pre = $("zhurnal"), zag = $("zagolovok-zhurnal");
   if (!pre.hidden) {
     pre.hidden = true; $("knopka-kopirovat").hidden = true;
-    knopka.textContent = "Что-то не так? Показать журнал";
+    zag.textContent = "Журнал работы";
     return;
   }
   try {
@@ -936,7 +1036,7 @@ $("knopka-zhurnal").onclick = async () => {
     pre.textContent = (await o.text()) || "журнал пуст";
   } catch (e) { pre.textContent = "журнал не прочитался: " + e.message; }
   pre.hidden = false; $("knopka-kopirovat").hidden = false;
-  knopka.textContent = "Скрыть журнал";
+  zag.textContent = "Скрыть журнал";
   pre.scrollTop = pre.scrollHeight;
 };
 
