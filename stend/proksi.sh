@@ -452,5 +452,58 @@ else
 fi
 ostanovit
 
+echo "── сценарий 8: ядро стартовало БЕЗ ошибки, но прокси в реестр не прописало — приложение обязано поймать это само ──"
+# Дыра, найденная 23.08 вечером. Сценарии 4 и 5 оба входят через ГРОМКИЙ отказ
+# ядра: строку «system proxy» в ошибке старта. Проверка реестра
+# (proksi.Stoit/Postavit) висела ровно внутри этой ветки — то есть работала
+# только тогда, когда ядро само призналось. Тихий отказ (ядро поднялось, порт
+# слушает, ошибки нет, а системного прокси в реестре нет) не ловил никто:
+# служба отвечала «готово», окно красило защиту зелёным, метка «прокси
+# поставили мы» писалась по предположению — а трафик человека шёл мимо туннеля
+# и он видел ровно то же, что 20.08: «интернет как будто без VPN».
+# Лже-ядро с маркером tiho.marker играет этот случай: успех с первой попытки,
+# реестра не касается.
+rm -f "$YADRO_PAPKA/popytka.marker" "$METKA"
+: > "$YADRO_PAPKA/tiho.marker"
+cp "$KORFN/internal/konfig/testdata/profil_stend_bez_seti.json" "$PROFIL"
+cp "$STEND/lzhe_yadro.exe" "$YADRO_PAPKA/sing-box.exe"
+reg_set 0 10.0.0.9:9999
+echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой выключенный прокси, метки нет)"
+url=$(zapustit_i_vzyat_url "$STEND/proksi_zapusk8.log")
+if [ "$?" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  exit 7
+fi
+if [ -z "$url" ]; then
+  echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
+else
+  echo "  служба: $url"
+  otvet=$(curl -s -m 120 "${url}api/podklyuchit")
+  echo "  POST podklyuchit -> $otvet"
+  sost=$(curl -s -m 10 "${url}api/sostoyanie")
+  ruchnoy=$(printf '%s' "$sost" | ruchnoy_proksi_iz_sostoyaniya)
+  sleep 2
+  posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+  echo "  после: ProxyEnable=$posle ProxyServer=$server_posle ruchnoy_proksi=$ruchnoy, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+  if printf '%s' "$otvet" | grep -q '"beda"'; then
+    echo "  КРАСНЫЙ: подключение не удалось — тихий отказ проверить не на чем"
+    tail -12 "$YADRO_PAPKA/yadro.log" 2>/dev/null; bed=1
+  elif grep -q "system proxy" "$YADRO_PAPKA/yadro.log" 2>/dev/null; then
+    echo "  КРАСНЫЙ: ядро всё-таки кричало про system proxy — сценарий свалился в старую громкую ветку, тихий отказ не воспроизведён"; bed=1
+  elif [ "$posle" != "0x1" ]; then
+    echo "  КРАСНЫЙ: ядро молча не поставило прокси, приложение это проглотило — ProxyEnable=$posle, а защита показана поднятой"; bed=1
+  elif ! printf '%s' "$server_posle" | grep -qF "$ADRES_OZHIDAEMYY"; then
+    echo "  КРАСНЫЙ: ProxyServer=$server_posle не содержит ожидаемый адрес $ADRES_OZHIDAEMYY — прописал не то"; bed=1
+  elif [ "$ruchnoy" = "True" ]; then
+    echo "  КРАСНЫЙ: реестр приложение прописало само правильно ($server_posle), а записка про ручную правку всё равно висит"; bed=1
+  elif [ ! -s "$METKA" ]; then
+    echo "  КРАСНЫЙ: прокси поставили мы, а метки нет — после жёсткой смерти снять его будет некому"; bed=1
+  else
+    echo "  зелёный: тихий отказ ядра пойман по реестру, прокси поставлен приложением ($server_posle), метка на месте"
+  fi
+fi
+rm -f "$YADRO_PAPKA/tiho.marker"
+ostanovit
+
 echo "── итог: $([ $bed -eq 0 ] && echo ЗЕЛЁНЫЙ || echo КРАСНЫЙ) ──"
 exit $bed
