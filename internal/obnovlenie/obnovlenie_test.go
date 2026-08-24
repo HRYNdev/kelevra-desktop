@@ -144,3 +144,27 @@ func TestOborvannayaZakachkaNeStavitsya(t *testing.T) {
 		t.Fatal("огрызок закачки остался на диске")
 	}
 }
+
+// Порядок релизов в ответе GitHub по версиям НЕ упорядочен — замерено живьём
+// 24.08.2026 на самом kelevra-desktop: app-v0.6.9 стоял в списке ВЫШЕ, чем
+// app-v0.6.15. Клиент 0.6.10 упирался в первый же app-релиз (0.6.9), слышал
+// «ты и так свежий» и застревал навсегда.
+func TestSpisokNeUporyadochenPoVersii(t *testing.T) {
+	telo := `[
+	  {"tag_name":"app-v0.6.9","draft":false,"prerelease":false,
+	   "assets":[{"name":"Kelevra.exe","size":10,"url":"u9"}]},
+	  {"tag_name":"app-v0.6.15","draft":false,"prerelease":false,
+	   "assets":[{"name":"Kelevra.exe","size":20,"url":"u15"}]}
+	]`
+	s := server(t, telo)
+	n, err := Proverit(context.Background(), s.Client(), s.URL, "0.6.10")
+	if err != nil {
+		t.Fatalf("ошибка: %v", err)
+	}
+	if n == nil {
+		t.Fatal("клиент 0.6.10 застрял: обновлятор упёрся в первый app-релиз списка (0.6.9)")
+	}
+	if n.Versiya != "0.6.15" {
+		t.Fatalf("ждал 0.6.15 (максимум по версии), получил %s", n.Versiya)
+	}
+}
