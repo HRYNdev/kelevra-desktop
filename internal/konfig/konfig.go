@@ -22,7 +22,21 @@ package konfig
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
+
+// dataPoChelovecheski — дата снимка комплекта хранится машинно («2026-08-23»:
+// так её удобно сравнивать и сортировать), а в окно её читает человек, который
+// не программист. В окне дата русская: «23.08.2026». Чужой формат не ломаем и
+// не глотаем — отдаём как есть: пустая заметка врала бы сильнее непривычной
+// даты.
+func dataPoChelovecheski(s string) string {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return s
+	}
+	return t.Format("02.01.2006")
+}
 
 // Rezhim — как именно защищён трафик.
 type Rezhim string
@@ -234,7 +248,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		if err := primenitPravilaIzKomplekta(d, v.PravilaIzKomplekta); err != nil {
 			return nil, k, err
 		}
-		k.Zametka = fmt.Sprintf(ZametkaPravilaIzKomplekta, v.PravilaKomplektData)
+		k.Zametka = fmt.Sprintf(ZametkaPravilaIzKomplekta, dataPoChelovecheski(v.PravilaKomplektData))
 	} else if v.BezSetevyhPravil {
 		if err := ubratSetevyePravila(d); err != nil {
 			return nil, k, err
