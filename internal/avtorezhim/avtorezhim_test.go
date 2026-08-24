@@ -83,7 +83,7 @@ func TestAvtorezhimZahodDomaPoslePodtverzhdeniy(t *testing.T) {
 	}
 
 	for i := 1; i < Podtverzhdeniy; i++ {
-		_, izmenilos, tek := a.Zahod(context.Background(), true)
+		_, izmenilos, tek := a.Zahod(context.Background(), true, false)
 		if izmenilos {
 			t.Fatalf("заход %d: обстановка сменилась раньше срока", i)
 		}
@@ -92,7 +92,7 @@ func TestAvtorezhimZahodDomaPoslePodtverzhdeniy(t *testing.T) {
 		}
 	}
 
-	_, izmenilos, tek := a.Zahod(context.Background(), true)
+	_, izmenilos, tek := a.Zahod(context.Background(), true, false)
 	if !izmenilos {
 		t.Fatalf("на %d-м подтверждении обстановка обязана смениться", Podtverzhdeniy)
 	}
@@ -113,7 +113,7 @@ func TestAvtorezhimZahodNeSprashivaetTrafikBezDns(t *testing.T) {
 		Trafik:    trafik,
 		Zadvizhka: NovayaZadvizhka(Neizvestno),
 	}
-	_, _, _ = a.Zahod(context.Background(), true)
+	_, _, _ = a.Zahod(context.Background(), true, false)
 	if trafik.zvonkov != 0 {
 		t.Fatalf("зонд трафика позван %d раз без признака DNS — не должен звониться вовсе", trafik.zvonkov)
 	}
@@ -127,7 +127,7 @@ func TestAvtorezhimZahodOshibkaDnsEtoNeDoma(t *testing.T) {
 		Trafik:    &fakeTrafik{},
 		Zadvizhka: NovayaZadvizhka(Neizvestno),
 	}
-	n, _, _ := a.Zahod(context.Background(), true)
+	n, _, _ := a.Zahod(context.Background(), true, false)
 	if n.DnsPriznakDoma {
 		t.Fatalf("наблюдение при ошибке DNS: %+v, ждал DnsPriznakDoma=false", n)
 	}
@@ -142,7 +142,7 @@ func TestAvtorezhimZahodBezSeti(t *testing.T) {
 		Trafik:    trafik,
 		Zadvizhka: NovayaZadvizhka(Doma), // стояли дома
 	}
-	_, izmenilos, tek := a.Zahod(context.Background(), false)
+	_, izmenilos, tek := a.Zahod(context.Background(), false, false)
 	if dnsZvali {
 		t.Fatal("сети нет, а DNS-зонд всё равно позвали")
 	}
