@@ -398,7 +398,7 @@ func dobavitZnachokTreya(hwnd syscall.Handle, hIcon syscall.Handle) {
 	d.uFlags = nifMessage | nifIcon | nifTip
 	d.uCallbackMessage = wmTreyIkonka
 	d.hIcon = hIcon
-	kopirovatStrokuUTF16(d.szTip[:], "Kelevra: защита включена")
+	kopirovatStrokuUTF16(d.szTip[:], "Kelevra: VPN включён")
 	r, _, _ := procShellNotifyIconW.Call(uintptr(nimAdd), uintptr(unsafe.Pointer(&d)))
 	log.Printf("трей: Shell_NotifyIconW(NIM_ADD) -> %v", r != 0)
 }
