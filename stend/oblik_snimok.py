@@ -114,6 +114,17 @@ SCENY = {
     "22_bez_setevyh_pravil": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                   vniz_bayt=88_080_384, vverh_bayt=6_291_456,
                                   zametka=ZAMETKI["ZametkaBezSetevyhPravil"]),
+    # 24.08: свежий список правил не скачался, но в .exe лежит встроенный
+    # комплект — защита поднимается СО РАЗБОРОМ трафика, в отличие от сцены
+    # выше. Разница для человека одна и её надо видеть: правила работают, но
+    # они старые, и дата в заметке говорит НАСКОЛЬКО. Дата тут вписана, а не
+    # взята из pravila.Data(): сцена судит вёрстку длинной строки с датой, и
+    # снимок не должен меняться от того, что комплект обновили. Формат даты —
+    # РУССКИЙ: в окно её кладёт konfig.dataPoChelovecheski, машинную «2026-08-23»
+    # человек читает как строку из лога (тест TestZametkaKomplektaDataPoRusski).
+    "23_pravila_iz_komplekta": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                                    vniz_bayt=134_217_728, vverh_bayt=9_437_184,
+                                    zametka=ZAMETKI["ZametkaPravilaIzKomplekta"] % "23.08.2026"),
     "7_ruchnoy_proksi": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
                              vniz_bayt=5_242_880, vverh_bayt=524_288, ruchnoy_proksi=True,
                              zametka=ZAMETKI["ZametkaRuchnoyProksi"] % "127.0.0.1:2412"),
