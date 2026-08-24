@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,4 +18,11 @@ func pokazatOkno(url string) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
+}
+
+// podnyatChuzheeOkno вне Windows не ищет ничего: там нет ни WebView2, ни
+// его окон. Вызывающий код (main.go) обязан откатиться на pokazatOkno.
+func podnyatChuzheeOkno() bool {
+	log.Printf("поднятие чужого окна не поддерживается вне Windows, открываю своё")
+	return false
 }
