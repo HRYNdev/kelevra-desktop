@@ -71,24 +71,35 @@ func Proverit(ctx context.Context, klient *http.Client, adres, tekushchaya strin
 	if err := json.NewDecoder(io.LimitReader(otvet.Body, 1<<20)).Decode(&relizy); err != nil {
 		return nil, fmt.Errorf("список релизов не разобрать: %w", err)
 	}
-	for _, r := range relizy {
+	// Берём МАКСИМУМ по версии, а не первый попавшийся в ответе.
+	// Порядок в ответе GitHub по версиям НЕ упорядочен: 24.08 в этом же
+	// репозитории app-v0.6.9 стоял в списке ВЫШЕ, чем app-v0.6.15. Прежний код
+	// выходил на первом же app-релизе, и клиент, у которого версия новее этого
+	// первого, слышал «обновлений нет» — навсегда, хотя ниже по списку лежали
+	// более свежие сборки.
+	var luchshiy *relizJSON
+	var luchshayaV string
+	for i := range relizy {
+		r := &relizy[i]
 		if r.Draft || r.Prerelease || !strings.HasPrefix(r.TagName, PrefiksPrilozheniya) {
 			continue
 		}
 		versiya := strings.TrimPrefix(r.TagName, PrefiksPrilozheniya)
-		if Sravnit(versiya, tekushchaya) <= 0 {
-			return nil, nil // самый свежий релиз не новее нас — дальше искать нечего
+		if luchshiy == nil || Sravnit(versiya, luchshayaV) > 0 {
+			luchshiy, luchshayaV = r, versiya
 		}
-		for _, a := range r.Assets {
-			if a.Name == ImyaFayla && a.Size > 0 {
-				return &Novaya{Versiya: versiya, Ssylka: a.URL, Razmer: a.Size}, nil
-			}
-		}
-		// Релиз есть, а файла в нём нет: это моя недосборка, а не повод
-		// откатываться на более старую версию.
-		return nil, fmt.Errorf("в релизе %s нет %s", r.TagName, ImyaFayla)
 	}
-	return nil, nil
+	if luchshiy == nil || Sravnit(luchshayaV, tekushchaya) <= 0 {
+		return nil, nil // самого свежего релиза нет или он не новее нас
+	}
+	for _, a := range luchshiy.Assets {
+		if a.Name == ImyaFayla && a.Size > 0 {
+			return &Novaya{Versiya: luchshayaV, Ssylka: a.URL, Razmer: a.Size}, nil
+		}
+	}
+	// Релиз есть, а файла в нём нет: это моя недосборка, а не повод
+	// откатываться на более старую версию.
+	return nil, fmt.Errorf("в релизе %s нет %s", luchshiy.TagName, ImyaFayla)
 }
 
 // Sravnit сравнивает версии вида 1.2.3 (хвост «-rabota» и подобный не мешает):
