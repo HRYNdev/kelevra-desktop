@@ -17,7 +17,7 @@
     --tekst:#E8EDF5; --tihiy:#93A0B4; --slabyy:#5F6B7D;
     --akcent:#35D0A5; --akcent2:#2BA6FF; --akcent-tem:#04140F;
     --zhdem:#F5A524; --beda:#F2555A;
-    --shapka:56px; --nizhnyaya:84px;
+    --shapka:56px; --nizhnyaya:84px; --taby-vysota:66px;
     /* KDim: RadiusL 26dp, RadiusM 18dp, RadiusS 12dp, DialSize 210dp, DialStroke 2dp. */
     --r-m:18px; --r-s:12px; --krug:210px;
   }
@@ -67,18 +67,29 @@
   .chip.slomalos { color:var(--beda); }
   @keyframes pulse { 50% { opacity:.25; } }
 
+  /* bottom:var(--taby-vysota), не 0: раньше .lenta заходила ПОД неподвижную
+     панель вкладок целиком (её box кончался у самого низа окна), и контент
+     мог отрисоваться в зоне 594-660px — за верхним краем панели, но выше низа
+     .lenta — без единого пикселя прокрутки. Ровно так последний узел списка
+     («Нидерланды 2») оказывался наполовину под панелью на первом же кадре, а
+     не после прокрутки (диагноз по снимку 4_rabotaet.png, 24.08): overflow
+     резал контент по границе .lenta, а эта граница стояла ЗА панелью, а не
+     ПЕРЕД ней. Подрезаем box ровно по верхнему краю панели — контенту физически
+     некуда попасть под неё без прокрутки, и прокрутка становится видимой
+     (последний узел упирается в реальный, а не невидимый, край). */
   .lenta {
-    position:absolute; top:var(--shapka); bottom:0; left:0; right:0;
+    position:absolute; top:var(--shapka); bottom:var(--taby-vysota); left:0; right:0;
     overflow-y:auto; overflow-x:hidden; padding:0 18px var(--nizhnyaya);
   }
-  /* Экран кода — единственный без нижней панели, и высота .lenta тут задана
-     жёстко (absolute top/bottom). Центрируем ПО-НАСТОЯЩЕМУ: раньше комментарий
-     ниже обещал «центрируем по окну», а делал margin-top:68px — карточка
-     висела в верхней трети, под ней зияло ~270px пустоты (снимок 1_kod).
-     Карточка кода ~270px при окне 604px — переполнения, при котором flex
-     обрезал бы верх, тут быть не может. */
+  /* Экран кода — единственный без нижней панели: вкладки скрыты, поэтому
+     .lenta тут возвращает себе полную высоту (bottom:0), а не режется по
+     воображаемой панели, которой нет. Центрируем ПО-НАСТОЯЩЕМУ: раньше
+     комментарий ниже обещал «центрируем по окну», а делал margin-top:68px —
+     карточка висела в верхней трети, под ней зияло ~270px пустоты (снимок
+     1_kod). Карточка кода ~270px при окне 604px — переполнения, при котором
+     flex обрезал бы верх, тут быть не может. */
   .lenta.bez-nizhney {
-    padding-bottom:18px;
+    bottom:0; padding-bottom:18px;
     display:flex; flex-direction:column; justify-content:center;
   }
   .lenta::-webkit-scrollbar { width:8px; }
@@ -103,7 +114,7 @@
      что и у круга-кнопки: панель не уезжает никуда, потому что не часть
      скроллящегося содержимого вовсе. */
   .taby {
-    position:fixed; left:0; right:0; bottom:0; z-index:3; height:66px;
+    position:fixed; left:0; right:0; bottom:0; z-index:3; height:var(--taby-vysota);
     display:flex; background:var(--fon2); border-top:1px solid var(--gran);
   }
   /* Тот же капкан, что у .perekl-ryad и .zagolovok-bloka: явный display:flex
@@ -153,9 +164,15 @@
   }
   /* Подпись под кругом — как KHint на телефоне: капслок, моно, тихий цвет.
      Единственная строка на экране, которая прямо говорит, что нажатие
-     сделает («нажмите, чтобы включить»). */
+     сделает («нажмите, чтобы включить»). margin-top уменьшен с 16 до 6px, а
+     у строки ключа доступа ниже, наоборот, увеличен (.podpiska) — раньше обе
+     дистанции получались почти равными (круг→подсказка 28px, подсказка→ключ
+     2px), и подсказка стояла вплотную к «Ключ доступа», читаясь как заголовок
+     к НЕЙ, а не к кругу (диагноз по снимку 4_rabotaet.png, 24.08). Держит
+     stend/oblik_geometriya.py — круг→подсказка обязан быть и ≤24px, и меньше
+     подсказка→ключ. */
   .krug-podskazka {
-    margin-top:16px; font-family:"Roboto Mono", ui-monospace, monospace;
+    margin-top:6px; font-family:"Roboto Mono", ui-monospace, monospace;
     font-size:10px; font-weight:500; letter-spacing:1.4px; text-transform:uppercase;
     color:var(--slabyy); text-align:center;
   }
@@ -380,11 +397,15 @@
      карточка — подпись, поэтому без рамки и фона. Рамку и фон возвращаем
      только когда срок на исходе: там строка обязана ловить глаз. */
   .podpiska {
-    display:flex; align-items:center; gap:8px; margin:2px 0 10px; padding:2px 13px;
+    display:flex; align-items:center; gap:8px; margin:22px 0 10px; padding:2px 13px;
     border:1px solid transparent; border-radius:var(--r-m);
     font-size:12.5px; color:var(--tihiy);
   }
-  .podpiska .srok { margin-left:auto; color:var(--tihiy); }
+  /* margin-left:auto разносило имя и срок по краям строки (space-between) —
+     дыра посередине читалась как две несвязанные вещи (диагноз 24.08). Срок
+     теперь просто следующий кусок той же строки, с тем же gap:8px, что и
+     остальные пары «имя · значение» в окне. */
+  .podpiska .srok { color:var(--tihiy); }
   .podpiska.istekaet {
     padding:11px 13px; border-color:rgba(245,165,36,.3); background:rgba(245,165,36,.07);
   }
@@ -788,9 +809,20 @@ async function obnovit() {
   // же про то, ЧТО защищено, а защиты в этот момент нет вовсе. «Вне дома»
   // её не отменяет: там s.sost === "rabotaet", защита правда поднята тем
   // видом, который s.zametka описывает, — туда только дописываем причину.
-  const zametkaTekst = !avtoZametka ? (s.zametka || "")
+  let zametkaTekst = !avtoZametka ? (s.zametka || "")
       : s.avtorezhim_obstanovka === "вне дома" ? (s.zametka ? s.zametka + " " : "") + avtoZametka
       : avtoZametka;
+  // «Чтобы пустить через VPN все программы, нажмите ниже.» (konfig.go:
+  // ZametkaBezPrav) стоит ровно тогда же, когда s.mozhno_tun показывает
+  // кнопку «Включить для всех программ» сразу под ней (sluzhba.go:
+  // MozhnoTun = EstTunnel && !Prava) — плашка и кнопка говорят одно и то же
+  // (диагноз по снимку 4_rabotaet.png, 24.08). Кнопка справляется сама, текст
+  // над ней убираем; другие причины заметки (ручной прокси, правила из
+  // комплекта), даже случившись вместе с mozhno_tun, трогать нельзя — они не
+  // про то же самое, что кнопка.
+  if (s.mozhno_tun && zametkaTekst === "Чтобы пустить через VPN все программы, нажмите ниже.") {
+    zametkaTekst = "";
+  }
   zametka.textContent = zametkaTekst;
   // Ручной прокси означает, что без вписанного адреса трафик вообще не пойдёт
   // через Kelevra: такое нельзя показывать серой сноской под цифрами.
