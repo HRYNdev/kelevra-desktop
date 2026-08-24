@@ -921,6 +921,7 @@ function risovatUzly(gruppy) {
   const podklyucheno = !!(poslednee && poslednee.sost === "rabotaet");
   const koren2 = $("uzly");
   koren2.innerHTML = "";
+  let vybranEl = null;
   for (const g of gruppy) {
     if (g.seychas && g.seychas !== tekushchiyUzel) {
       tekushchiyUzel = g.seychas;
@@ -942,7 +943,9 @@ function risovatUzly(gruppy) {
     koren2.appendChild(zag);
     for (const u of g.uzly) {
       const b = document.createElement("button");
-      b.className = "uzel" + (u.imya === g.seychas ? " vybran" : "");
+      const vybran = u.imya === g.seychas;
+      b.className = "uzel" + (vybran ? " vybran" : "");
+      if (vybran) vybranEl = b;
       const signal = document.createElement("span");
       signal.className = "signal " + signalKlass(u);
       const imya = document.createElement("span");
@@ -990,6 +993,14 @@ function risovatUzly(gruppy) {
       koren2.appendChild(ryad);
     }
   }
+  // Выбранный узел обязан быть виден ЦЕЛИКОМ, не только верхушкой букв: .lenta
+  // клипает контент своей границей (overflow-y:auto), и текущий выбор мог
+  // оказаться ниже видимой области — например когда над списком встаёт
+  // длинная беда (диагноз 24.08, снимки 11_beda_port.png/12_beda_seti.png:
+  // «Нидерланды 2» обрезана ровно посередине текста). block:"nearest" не
+  // дёргает список, если узел и так виден целиком — прокрутка случается
+  // только когда он правда обрезан.
+  if (vybranEl) vybranEl.scrollIntoView({block: "nearest"});
 }
 
 async function obnovitUzly() {
