@@ -360,7 +360,12 @@ ZHDEM_V_OKNE = {
 # не стирает старую заметку режима защиты («не ломай существующий текст»).
 ZHDEM_AVTOREZHIM = {
     "18_avtorezhim_doma": ["обход блокировок уже делает роутер", "защита не нужна"],
-    "19_avtorezhim_vne_doma": ["Защищён весь компьютер", "Защиту включил авторежим"],
+    # 24.08: заметка перестала начинаться с «Защищён весь компьютер»/«Защиту
+    # включил авторежим» — то же слово уже стоит в круге над ней (Вова:
+    # «слово "защита" второй раз режет», konfig.go: ZametkaVes). Проверяем ту
+    # же пару фактов (что защищено ЦЕЛИКОМ + что причина — авторежим) новыми
+    # словами, а не дословно старую строку — иначе щуп красил бы саму правку.
+    "19_avtorezhim_vne_doma": ["Любая программа идёт через Kelevra", "Включил авторежим"],
     "20_avtorezhim_neizvestno": ["ещё смотрит, что это за сеть"],
 }
 
@@ -658,6 +663,47 @@ def proverit_net_versii_v_shapke(str_, imya_sceny):
     return []
 
 
+def proverit_zhivaya_tochka(str_, imya_sceny, sost):
+    """Точка в шапке обязана нести состояние ЦВЕТОМ, раз слова там больше нет.
+
+    Слово «защищено» из шапки убрано (Вова, 24.08: «слово "защита" второй раз
+    режет»), и единственным, что шапка ещё говорит, осталась цветная точка:
+    .chip.rabotaet/.podnimaem/.slomalos (index.html). Если класс состояния
+    перестать вешать, точка навсегда останется серой (var(--slabyy)) — экран
+    выглядит целым, снимок зелёный, а индикатор мёртвый. Ровно это и случилось
+    вместе с уборкой слова: строку $("chip").className выкинули заодно с
+    текстом. Поэтому щуп смотрит не на разметку, а на СЧИТАННЫЙ цвет пикселя.
+    """
+    dano = str_.evaluate(
+        "() => { const t = document.querySelector('.chip .tochka');"
+        " return { klass: document.getElementById('chip').className,"
+        "          cvet: getComputedStyle(t).backgroundColor }; }")
+    slabyy = str_.evaluate(
+        "() => getComputedStyle(document.documentElement)"
+        ".getPropertyValue('--slabyy').trim()")
+    if sost not in dano["klass"].split():
+        return [f"{imya_sceny}: шапка не помечена состоянием «{sost}» "
+                f"(класс «{dano['klass']}») — точка не сменит цвет"]
+    # «stoit» — защита выключена, и серая точка это и есть её честный цвет:
+    # спрашиваем с цвета только там, где шапке ЕСТЬ что сказать.
+    if sost != "stoit" and not _cvet_otlichaetsya(dano["cvet"], slabyy):
+        return [f"{imya_sceny}: точка в шапке того же цвета, что «выключено» "
+                f"({dano['cvet']}) — шапка молчит о состоянии «{sost}»"]
+    return []
+
+
+def _cvet_otlichaetsya(rgb, obrazec):
+    """rgb вида «rgb(r, g, b)» против образца-#hex из переменной темы."""
+    chisla = [int(x) for x in re.findall(r"\d+", rgb)[:3]]
+    o = obrazec.lstrip("#")
+    if len(o) == 3:
+        o = "".join(c * 2 for c in o)
+    if len(o) != 6 or len(chisla) != 3:
+        return True
+    obr = [int(o[i:i + 2], 16) for i in (0, 2, 4)]
+    return sum(abs(a - b) for a, b in zip(chisla, obr)) > 24
+
+
 def proverit_obnovlenie(str_, imya_sceny):
     """«Проверить обновление» обязан довести подпись до понятного слова.
 
@@ -729,6 +775,31 @@ def kontrol_versii_v_shapke(br, port):
     str_.wait_for_timeout(700)
     str_.evaluate("() => { document.getElementById('chip-tekst').textContent = 'v0.5.3'; }")
     bedy = proverit_net_versii_v_shapke(str_, "контроль-версия-в-шапке")
+    str_.close()
+    return bedy
+
+
+def kontrol_mertvoy_tochki(br, port):
+    """Щуп шапки обязан покраснеть, если у точки отнять класс состояния.
+
+    Порча — та самая, что реально была в ветке «убрать повтор слова»: слово
+    убрали, а $("chip").className убрали заодно, и точка осталась серой.
+    """
+    sostoyanie["tek"] = SCENY["4_rabotaet"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.evaluate("() => { document.getElementById('chip').className = 'chip'; }")
+    bedy = proverit_zhivaya_tochka(str_, "контроль-мёртвая-точка-класс", "rabotaet")
+    # Вторая порча — на случай, если класс на месте, а цвет всё равно серый
+    # (перекрасили тему, поправили .chip.rabotaet). Без неё половина щупа
+    # никогда не работала бы и молчала бы навсегда.
+    str_.evaluate(
+        "() => { document.getElementById('chip').className = 'chip rabotaet';"
+        " document.querySelector('.chip .tochka').style.background ="
+        " getComputedStyle(document.documentElement)"
+        ".getPropertyValue('--slabyy').trim(); }")
+    bedy += proverit_zhivaya_tochka(str_, "контроль-мёртвая-точка-цвет", "rabotaet")
     str_.close()
     return bedy
 
@@ -876,6 +947,8 @@ def snyat():
                 bedy += proverit_obrezku(str_, imya)
                 bedy += proverit_slovo_v_kruge(str_, imya)
                 bedy += proverit_net_versii_v_shapke(str_, imya)
+                if sost.get("sost"):
+                    bedy += proverit_zhivaya_tochka(str_, imya, sost["sost"])
                 if imya in ZHDEM_V_OKNE:
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 if imya in ZHDEM_AVTOREZHIM:
@@ -931,6 +1004,8 @@ def snyat():
                                    "пропавшая версия в подвале его не разбудила"),
                 "версии в шапке": (kontrol_versii_v_shapke(br, port),
                                    "вернувшийся значок версии в шапке его не разбудил"),
+                "мёртвой точки в шапке": (kontrol_mertvoy_tochki(br, port),
+                                          "серая точка на «защищено» его не разбудила"),
                 "обновления": (kontrol_obnovleniya(br, port),
                                "подпись, зависшая на «Проверяем…», его не разбудила"),
             }
@@ -944,7 +1019,13 @@ if __name__ == "__main__":
     bedy, kontroli = snyat()
     for imya, (nashel, pochemu) in kontroli.items():
         if nashel:
-            print(f"\n  🧪 контроль {imya}: щуп видит порчу — {nashel[0]}")
+            # Печатаем ВСЕ находки контроля, а не первую: контроль может
+            # ставить несколько порч подряд (класс и цвет точки в шапке), и
+            # печать по nashel[0] молча прятала бы, сработала вторая или нет
+            # — щуп на половину мёртв, а вывод выглядит целым.
+            print(f"\n  🧪 контроль {imya}: щуп видит порчу ({len(nashel)}):")
+            for n in nashel:
+                print(f"      — {n}")
         else:
             print(f"\n🔴 ЩУП «{imya.upper()}» МЁРТВ: {pochemu}. "
                   "Зелень остальных сцен ничего не доказывает.")
