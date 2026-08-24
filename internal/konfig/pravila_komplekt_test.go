@@ -56,8 +56,52 @@ func TestPravilaIzKomplektaPerepisyvaetVseRemoteVLocal(t *testing.T) {
 	if final != "direct" {
 		t.Fatalf("route.final изменился на %q — комплект не должен трогать final (умная маршрутизация должна остаться)", final)
 	}
-	if !strings.Contains(k.Zametka, pravila.Data()) {
+	if !strings.Contains(k.Zametka, dataPoChelovecheski(pravila.Data())) {
 		t.Fatalf("заметка не называет дату снимка комплекта: %q", k.Zametka)
+	}
+}
+
+// Дата в окне — русская, а не машинная. Читает её человек, который не
+// программист: «2026-08-23» он видит как строку из лога, «23.08.2026» — как
+// дату. Тест краснеет и от потери формата, и от того, что машинная форма
+// протекла в окно вместе с человеческой.
+func TestZametkaKomplektaDataPoRusski(t *testing.T) {
+	komplekt, err := pravila.Razlozhit(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, k, err := Prigotovit(profil(t), Vybor{
+		PravilaIzKomplekta:  komplekt,
+		PravilaKomplektData: "2026-08-23",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(k.Zametka, "23.08.2026") {
+		t.Fatalf("в окне не русская дата: %q", k.Zametka)
+	}
+	if strings.Contains(k.Zametka, "2026-08-23") {
+		t.Fatalf("машинная дата протекла в окно: %q", k.Zametka)
+	}
+}
+
+// Чужой формат даты не глотаем: снимок комплекта может быть подписан иначе
+// («23 августа»). Пустая дата в окне врала бы сильнее непривычной, поэтому
+// строка отдаётся как есть.
+func TestZametkaKomplektaChuzhoyFormatDatyNeTeryaetsya(t *testing.T) {
+	komplekt, err := pravila.Razlozhit(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, k, err := Prigotovit(profil(t), Vybor{
+		PravilaIzKomplekta:  komplekt,
+		PravilaKomplektData: "23 августа",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(k.Zametka, "23 августа") {
+		t.Fatalf("чужая дата потерялась из заметки: %q", k.Zametka)
 	}
 }
 
