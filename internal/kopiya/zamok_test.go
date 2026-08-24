@@ -3,6 +3,7 @@ package kopiya
 import (
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,15 @@ import (
 // прочитать в чужом промежутке между «прочитал» и «записал». Много
 // горутин ломятся за ним одновременно; ни разу больше одной не должно
 // решить, что держит его прямо сейчас.
+//
+// Владение Windows-мьютексом привязано к ОС-потоку, а не к горутине: без
+// runtime.LockOSThread планировщик Go может пересадить горутину-владельца
+// на другой поток и отдать её поток другой горутине — та бесплатно
+// "наследует" чужое владение, и тест видит несуществующую гонку (или,
+// наоборот, не видит настоящую). LockOSThread прибивает каждого гонщика к
+// своему потоку на время удержания замка. Настоящую межпроцессную гонку
+// (два разных .exe) этот тест не судит вовсе — за это отвечает
+// stend/dvoynoy_zapusk.sh.
 func TestZamokVzaimoisklyuchayushchiy(t *testing.T) {
 	const gonshchikov = 40
 	var odnovremenno int32
@@ -25,6 +35,8 @@ func TestZamokVzaimoisklyuchayushchiy(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
 			z, oderzhal := Vzyat(2 * time.Second)
 			if !oderzhal {
 				return
@@ -96,6 +108,8 @@ func TestGonkaNaytiZanyatSZamkom(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
 			z, oderzhal := Vzyat(3 * time.Second)
 			if oderzhal {
 				defer z.Otdat()
