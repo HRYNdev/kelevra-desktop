@@ -196,8 +196,15 @@
 
   /* Переключатель автозапуска: строка-карточка вместо чекбокса, чтобы попасть
      в общий тёмный стиль настроек. */
+  /* align-items:flex-start, не center: подпись под заголовком (.podpis) может
+     занять вторую строку и вытянуть карточку выше — при center тумблер тогда
+     съезжал к центру ВСЕЙ карточки и уходил с линии заголовка, колонка
+     тумблеров справа шла вразнобой между карточками с одной и двумя строками
+     подписи (хозяин, 24.08: «круг и настройки криво»). flex-start ставит
+     тумблер по верхнему краю содержимого — тому же краю, где стоит первая
+     строка заголовка, — независимо от того, сколько строк ниже. */
   .perekl-ryad {
-    display:flex; align-items:center; gap:10px; margin-top:8px;
+    display:flex; align-items:flex-start; gap:10px; margin-top:8px;
     padding:11px 13px; border:1px solid var(--gran); border-radius:var(--r-m); background:var(--karta);
   }
   /* Явный display:flex у .perekl-ryad перебивает встроенное [hidden]{display:none} —
@@ -221,6 +228,10 @@
   .perekl {
     flex:none; width:40px; height:24px; padding:0; border-radius:999px;
     background:var(--gran); position:relative; transition:background .15s;
+    /* -2px: тумблер (24px) чуть выше строки заголовка (16px) — сдвигаем вверх
+       на половину разницы, чтобы его середина легла на середину ПЕРВОЙ
+       строки .perekl-ryad, а не на верхний край flex-start. */
+    margin-top:-2px;
   }
   .perekl .knob {
     position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
@@ -291,13 +302,21 @@
      узлами на соседней вкладке. Раньше надписи стояли по центру, и левый край
      экрана был рваным. Кнопка полной защиты на вкладке «Сеть» — призыв, она
      остаётся центрованной. */
+  /* align-items:flex-start, не center: у пунктов с подписью-объяснением
+     (.tihaya-podpis) вторая строка тянет карточку выше, и при center шеврон
+     съезжал к центру ВСЕЙ карточки, а не к строке заголовка — та же беда,
+     что и у тумблеров выше (хозяин, 24.08: «круг и настройки криво»). */
   #tab-nastroyki .tihaya {
     text-align:left; padding-left:14px; padding-top:10px; padding-bottom:10px;
-    display:flex; align-items:center; justify-content:space-between;
+    display:flex; align-items:flex-start; justify-content:space-between;
   }
   /* Рамка + текст слева читались как ПОЛЕ ВВОДА. Шеврон возвращает пункту
-     смысл действия — тот же приём, что в списках настроек телефона. */
-  #tab-nastroyki .tihaya::after { content:"\203A"; color:var(--slabyy); font-size:18px; line-height:1; }
+     смысл действия — тот же приём, что в списках настроек телефона.
+     margin-top: тот же приём, что у .perekl — сдвигает знак на середину
+     строки заголовка вместо верхнего края. */
+  #tab-nastroyki .tihaya::after {
+    content:"\203A"; color:var(--slabyy); font-size:18px; line-height:1; margin-top:1px;
+  }
   /* Опять display:flex поверх [hidden] — «Скопировать журнал» скрыт по умолчанию. */
   #tab-nastroyki .tihaya[hidden] { display:none; }
   /* Заголовок + подпись второй строкой внутри пункта .tihaya — эталон
@@ -399,7 +418,14 @@
           stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <span class="imya">Kelevra</span>
-  <span class="chip" id="chip"><span class="tochka"></span><span id="chip-tekst">—</span></span>
+  <!-- Раньше тут ещё стояло слово статуса («защищено»/«отключено») — то же
+       слово, что и в круге ниже (хозяин, 24.08: «слово "защита" второй раз
+       режет»). Круг — единственное место, где состояние названо словом;
+       здесь остаётся только цвет точки (см. .chip.rabotaet и соседей выше),
+       он и так несёт то же состояние и виден, даже когда круг проскроллен
+       вверх списком узлов. #chip-tekst остаётся в разметке пустым — его
+       щупает stend/oblik_snimok.py (проверка «версии в шапке»). -->
+  <span class="chip" id="chip"><span class="tochka"></span><span id="chip-tekst"></span></span>
 </div>
 
 <div class="lenta" id="lenta">
@@ -465,7 +491,7 @@
       <div class="zagolovok-bloka">Сеть</div>
       <div class="perekl-ryad" id="ryad-avtorezhim">
         <span class="perekl-tekst">Переключать защиту автоматически
-          <span class="podpis">Дома защита выключается, в чужой сети включается сама</span>
+          <span class="podpis">Дома выключается, в чужой сети включается сама.</span>
         </span>
         <button class="perekl" id="perekl-avtorezhim" type="button" role="switch" aria-checked="false">
           <span class="knob"></span>
@@ -476,7 +502,7 @@
       <div class="zagolovok-bloka" id="zag-avtozapusk">Приложение</div>
       <div class="perekl-ryad" id="ryad-avtozapusk" hidden>
         <span class="perekl-tekst">Запускать вместе с Windows
-          <span class="podpis">Защита восстанавливается при входе в систему</span>
+          <span class="podpis">Kelevra включится сам при входе в систему.</span>
           <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
         </span>
         <button class="perekl" id="perekl-avtozapusk" type="button" role="switch" aria-checked="false">
@@ -635,7 +661,9 @@ function zametkaAvtorezhima(s) {
            "Она включится сама, как только вы уйдёте из дома.";
   }
   if (s.avtorezhim_obstanovka === "вне дома" && s.sost === "rabotaet") {
-    return "Защиту включил авторежим: сеть не похожа на домашнюю.";
+    // Без «Защиту» в начале — s.zametka (ZametkaVes и соседи) уже сказала
+    // словом «защищено» через круг, а тут дописывается только причина.
+    return "Включил авторежим: сеть не похожа на домашнюю.";
   }
   return null; // переходные сочетания (например, «дома» с ещё не опущенной
                // защитой) заметку не трогают — ниже ничего не сказано зря.
@@ -728,12 +756,15 @@ async function obnovit() {
   $("zvanie").textContent = zvanie;
   $("zvanie").classList.toggle("dlinnoe", zvanie.length > 9);
   $("podzagolovok").textContent = podzagolovok(s);
-  $("chip").className = "chip " + s.sost;
-  // Раньше тут всегда стояла версия («v0.5.3 — значит обновление доехало»,
-  // хозяин 20.08) — на телефоне такого значка в шапке нет вовсе (эталон
-  // SimpleSettingsScreen.kt), а версию теперь видно в настройках (подвал
-  // «KELEVRA <версия>» ниже, и подпись пункта «Проверить обновление»).
-  $("chip-tekst").textContent = podpisi[s.sost] || s.sost;
+  // Цвет точки в шапке (.chip.rabotaet/.podnimaem/.slomalos) несёт то же
+  // состояние, что раньше повторялось тут же словом, — второй раз то же
+  // слово читалось человеком уже в круге ниже (хозяин, 24.08: «слово "защита"
+  // второй раз режет»). #chip-tekst теперь пустой нарочно — не заполняем.
+  //
+  // Раньше тут ещё всегда стояла версия («v0.5.3 — значит обновление
+  // доехало», хозяин 20.08) — на телефоне такого значка в шапке нет вовсе
+  // (эталон SimpleSettingsScreen.kt), а версию теперь видно в настройках
+  // (подвал «KELEVRA <версия>» ниже, и подпись пункта «Проверить обновление»).
   $("podval-versiya").textContent = "KELEVRA " + (s.versiya || "");
   $("podpis-obnovlenie").textContent = podpisObnovleniya(s);
 
