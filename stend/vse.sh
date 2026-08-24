@@ -22,7 +22,7 @@ TAYMAUT=${TAYMAUT:-900}
 # Не стенды, а подсобка: их запуск ничего не проверяет.
 # Список короткий и растёт медленно; главное — по умолчанию файл СЧИТАЕТСЯ
 # стендом, то есть новый щуп попадает в приёмку сам, а не забывается.
-NE_STEND=("vse.sh" "znachok.py" "obshchee.sh")
+NE_STEND=("vse.sh" "znachok.py" "obshchee.sh" "pe_resursy.py")
 # Нужен wine: под ним гоняются настоящие windows-бинарники.
 NUZHEN_WINE=("windows.sh" "razdvoenie.sh" "trey.sh" "obnovlenie.sh" "proksi.sh")
 
