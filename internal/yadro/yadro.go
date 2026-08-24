@@ -91,8 +91,14 @@ func (y *Yadro) EstBinar() bool {
 func (y *Yadro) Zapustit(ctx context.Context) error {
 	y.zamok.Lock()
 	if y.process != nil {
+		// Два окна опрашивают /api/sostoyanie независимо и оба могут решить
+		// «надо подключиться» одновременно (см. internal/sluzhba/oblik). Цель
+		// вызова — «ядро работает» — уже достигнута, это не повод на ошибку:
+		// симметрично с Ostanovit, для которого повторный вызов на уже
+		// остановленном ядре тоже не ошибка.
 		y.zamok.Unlock()
-		return fmt.Errorf("ядро уже запущено")
+		log.Printf("ядро уже запущено: повторный Zapustit — не ошибка")
+		return nil
 	}
 	if !y.EstBinar() {
 		y.zamok.Unlock()
