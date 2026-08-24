@@ -238,14 +238,18 @@ func privatnyyAdres(dnsAdres string) bool {
 //
 // @param estSet — сеть физически есть (обычно спрашивается у ОС уровнем
 // выше — в этом срезе такого спросчика ещё нет, поэтому параметр).
+// @param dovereno — наблюдение доверенное (см. [Zadvizhka.Predlozhit]):
+// заход случился по уже доказанному сигналу смены сети ([Sledchik]), а не
+// по страховочному тикеру или холостому опросу — решать это вызывающей
+// стороне ([Sluzhitel]).
 // Прямой трафик спрашивается, только если DNS уже дал признак дома: если
 // DNS сразу говорит «не дома», трафик всё равно ничего не изменит (Reshit
 // вернёт VneDoma при !DnsPriznakDoma независимо от TrafikPryamoy) — лишний
 // TCP-запрос платить незачем.
-func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool) (nablyudeniye Nablyudeniye, izmenilos bool, tekushcheye Sostoyanie) {
+func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nablyudeniye Nablyudeniye, izmenilos bool, tekushcheye Sostoyanie) {
 	if !estSet {
 		n := Nablyudeniye{EstSet: false}
-		izm := a.Zadvizhka.Predlozhit(Reshit(n))
+		izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 		return n, izm, a.Zadvizhka.Tekushcheye()
 	}
 
@@ -293,7 +297,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool) (nablyudeniye Nably
 	}
 
 	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: dnsDoma, TrafikPryamoy: trafik}
-	izm := a.Zadvizhka.Predlozhit(Reshit(n))
+	izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 	return n, izm, a.Zadvizhka.Tekushcheye()
 }
 

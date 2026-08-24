@@ -11,12 +11,15 @@ const Podtverzhdeniy = 3
 // [Zadvizhka.Tekushcheye], пока одно и то же наблюдение не пришло
 // [Podtverzhdeniy] раз подряд.
 //
-// Упрощение против телефонного эталона: там есть исключение «сеть точно
-// сменилась — верим первому наблюдению» (AutoModeGate.offer(trust=true)),
-// завязанное на событие смены сети. Здесь его нет — решать, насколько
-// доверять свежести наблюдения после события [Sledchik], имеет смысл
-// вместе с тем, как авторежим реально подключат к proksi/sluzhba, а не
-// раньше (см. TODO в пакете).
+// Перенесено из телефонного эталона исключение «сеть точно сменилась —
+// верим первому наблюдению» (kbox_push/.../bg/AutoModeGate.kt:53-72,
+// offer(trust=true) → needed=1): наблюдение, доверенное вызывающей
+// стороной ([Zadvizhka.Predlozhit] с dovereno=true), меняет обстановку
+// с одного раза, минуя [Podtverzhdeniy]. На телефоне доверенным считается
+// первое наблюдение сразу после события смены сети (AutoMode.kt:1035,
+// trustOnce = networkChanged); здесь то же самое решает вызывающая
+// сторона — [Sluzhitel] помечает так наблюдение, пришедшее по [Sledchik],
+// а страховочный тикер — нет.
 type Zadvizhka struct {
 	tekushcheye Sostoyanie
 	kandidat    Sostoyanie
@@ -33,8 +36,14 @@ func NovayaZadvizhka(nachalo Sostoyanie) *Zadvizhka {
 func (z *Zadvizhka) Tekushcheye() Sostoyanie { return z.tekushcheye }
 
 // Predlozhit — новое наблюдение этого захода.
+//
+// dovereno — наблюдение пришло по уже доказанному сигналу смены сети (см.
+// комментарий типа), а не от страховочного тикера: тогда обстановка меняется
+// сразу, без набора [Podtverzhdeniy] — та же логика, что needed=1 в
+// AutoModeGate.offer(trust=true) на телефоне (AutoModeGate.kt:68-72).
+//
 // Возвращает true, если обстановка сменилась именно этим вызовом.
-func (z *Zadvizhka) Predlozhit(nablyudeno Sostoyanie) bool {
+func (z *Zadvizhka) Predlozhit(nablyudeno Sostoyanie, dovereno bool) bool {
 	if nablyudeno == z.tekushcheye {
 		// Подтвердили то, на чём и так стоим — считаем кандидата тем же,
 		// чтобы одиночное отклонение в сторону не начинало набор с середины.
@@ -50,7 +59,11 @@ func (z *Zadvizhka) Predlozhit(nablyudeno Sostoyanie) bool {
 		z.hitov = 1
 	}
 
-	if z.hitov < Podtverzhdeniy {
+	nuzhno := Podtverzhdeniy
+	if dovereno {
+		nuzhno = 1
+	}
+	if z.hitov < nuzhno {
 		return false
 	}
 	z.tekushcheye = nablyudeno

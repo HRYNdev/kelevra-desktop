@@ -73,13 +73,21 @@ func (s *Sluzhitel) posle() func(time.Duration) <-chan time.Time {
 // обстановку), дальше — по событию из Sledchik.Sobytiya (с паузой схлопывания
 // дребезга) и по страховочному тикеру. Выходит по ctx.Done(), останавливая
 // Sledchik за собой.
+//
+// Заход на старте и заход по событию Sledchik помечаются доверенными (см.
+// Zadvizhka.Predlozhit): холодный старт не обязан сидеть в Neizvestno
+// IntervalTikeraPoUmolchaniyu, пока наберутся Podtverzhdeniy заходов, а
+// событие смены сети — уже сигнал от системы, ему верим с первого раза (тот
+// же перенос AutoModeGate.offer(trust=true), что и в Zadvizhka). Заход по
+// страховочному тикеру доверенным не помечается — тикер ничего не доказывает,
+// это просто периодический опрос на случай, если событие потерялось.
 func (s *Sluzhitel) Krutit(ctx context.Context) {
 	defer s.Sledchik.Stop()
 
 	t := time.NewTicker(s.interval())
 	defer t.Stop()
 
-	s.zahod(ctx)
+	s.zahod(ctx, true)
 
 	sobytiya := s.Sledchik.Sobytiya()
 	var ozhidaniye <-chan time.Time
@@ -99,21 +107,24 @@ func (s *Sluzhitel) Krutit(ctx context.Context) {
 			ozhidaniye = s.posle()(s.pauza())
 		case <-ozhidaniye:
 			ozhidaniye = nil
-			s.zahod(ctx)
+			s.zahod(ctx, true)
 		case <-t.C:
-			s.zahod(ctx)
+			s.zahod(ctx, false)
 		}
 	}
 }
 
-// zahod — один проход: спрашивает Avtorezhim и зовёт Kolbek при смене обстановки.
-func (s *Sluzhitel) zahod(ctx context.Context) {
+// zahod — один проход: спрашивает Avtorezhim и зовёт Kolbek при смене
+// обстановки. poSobytiyu — заход случился по доказанному сигналу (старт или
+// Sledchik), а не по страховочному тикеру — прокидывается в
+// Avtorezhim.Zahod как dovereno.
+func (s *Sluzhitel) zahod(ctx context.Context, poSobytiyu bool) {
 	// TODO(упрощение среза): спросчика физической сети ("адаптер вообще
 	// поднят") здесь нет — считаем сеть всегда физически присутствующей.
 	// Ложь только в сторону лишнего зонда, не в сторону молчания; сам
 	// спросчик — задача следующего захода (см. пакетный комментарий).
 	const estSet = true
-	_, izmenilos, tekushcheye := s.Avtorezhim.Zahod(ctx, estSet)
+	_, izmenilos, tekushcheye := s.Avtorezhim.Zahod(ctx, estSet, poSobytiyu)
 	if !izmenilos {
 		return
 	}

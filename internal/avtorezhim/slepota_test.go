@@ -59,7 +59,7 @@ func TestZahodVTunneleNeSnimaetZashchitu(t *testing.T) {
 	}
 	var posledneye Nablyudeniye
 	for i := 0; i < 5; i++ {
-		n, izmenilos, tek := a.Zahod(context.Background(), true)
+		n, izmenilos, tek := a.Zahod(context.Background(), true, false)
 		// Сперва беда, потом метка: красный обязан говорить «защита снята
 		// вне дома», а не «поле не проставлено».
 		if izmenilos {
@@ -97,7 +97,7 @@ func TestZahodBezTunnelyaZondyRabotayut(t *testing.T) {
 	var tek Sostoyanie
 	for i := 0; i < 3; i++ {
 		var n Nablyudeniye
-		n, _, tek = a.Zahod(context.Background(), true)
+		n, _, tek = a.Zahod(context.Background(), true, false)
 		if n.ZondSlep {
 			t.Fatalf("заход %d помечен слепым без туннеля", i)
 		}
@@ -136,7 +136,7 @@ func TestZahodVTunneleSPrivatnymAdapteromNeSlep(t *testing.T) {
 	var posledneye Nablyudeniye
 	var tek Sostoyanie
 	for i := 0; i < Podtverzhdeniy; i++ {
-		posledneye, _, tek = a.Zahod(context.Background(), true)
+		posledneye, _, tek = a.Zahod(context.Background(), true, false)
 		if posledneye.ZondSlep {
 			t.Fatalf("заход %d: наблюдение помечено слепым, хотя адрес адаптера известен и приватен", i)
 		}
@@ -173,7 +173,7 @@ func TestZahodVTunneleSPublichnymAdresomOstayotsyaSlep(t *testing.T) {
 			return fakeDns{doma: true}
 		},
 	}
-	n, _, _ := a.Zahod(context.Background(), true)
+	n, _, _ := a.Zahod(context.Background(), true, false)
 	if !n.ZondSlep {
 		t.Fatal("публичный адрес резолвера принят как приватный — заход обязан остаться слепым")
 	}
