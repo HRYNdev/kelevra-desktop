@@ -18,6 +18,7 @@ import (
 	"os"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
+	"github.com/HRYNdev/kelevra-desktop/internal/pravila"
 )
 
 func main() {
@@ -25,6 +26,7 @@ func main() {
 	prava := flag.Bool("prava", false, "как Vybor.Prava — есть ли права администратора")
 	bezProksi := flag.Bool("bez-proksi", false, "как Vybor.BezSistemnogoProksi")
 	bezPravil := flag.Bool("bez-pravil", false, "как Vybor.BezSetevyhPravil — источник правил недоступен")
+	komplektDir := flag.String("komplekt-dir", "", "как Vybor.PravilaIzKomplekta: разложить internal/pravila в эту папку и подставить пути (главнее -bez-pravil)")
 	flag.Parse()
 
 	if *profil == "" {
@@ -36,11 +38,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	gotovyy, k, err := konfig.Prigotovit(syroy, konfig.Vybor{
+	v := konfig.Vybor{
 		Prava:               *prava,
 		BezSistemnogoProksi: *bezProksi,
 		BezSetevyhPravil:    *bezPravil,
-	})
+	}
+	if *komplektDir != "" {
+		komplekt, err := pravila.Razlozhit(*komplektDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "pravila.Razlozhit:", err)
+			os.Exit(1)
+		}
+		v.PravilaIzKomplekta = komplekt
+		v.PravilaKomplektData = pravila.Data()
+	}
+	gotovyy, k, err := konfig.Prigotovit(syroy, v)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Prigotovit:", err)
 		os.Exit(1)

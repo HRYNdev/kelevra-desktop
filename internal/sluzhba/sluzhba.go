@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
+	"github.com/HRYNdev/kelevra-desktop/internal/pravila"
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
@@ -55,6 +57,11 @@ type Sluzhba struct {
 	// vyhod — как эта копия уходит после согласия на права. По умолчанию
 	// os.Exit(0); на стенде подменяется, иначе тест убил бы сам себя.
 	vyhod func()
+	// zapustitYadro — точка подмены для тестов лестницы подстраховок в
+	// PodnyatZashchitu (23-24.08): Yadro.Zapustit порождает настоящий
+	// процесс, а тест должен управлять числом попыток и их исходом без
+	// живого ядра. По умолчанию nil — PodnyatZashchitu зовёт s.Yadro.Zapustit.
+	zapustitYadro func(context.Context) error
 
 	zamok      sync.Mutex
 	svedeniya  *podpiska.Svedeniya
@@ -643,9 +650,13 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		log.Printf("не подготовил конфиг: %v", err)
 		return fmt.Errorf("не подготовил конфиг: %w", err)
 	}
+	zapustit := s.Yadro.Zapustit
+	if s.zapustitYadro != nil {
+		zapustit = s.zapustitYadro
+	}
 	zctx, otmena := context.WithTimeout(ctx, 70*time.Second)
 	defer otmena()
-	err := s.Yadro.Zapustit(zctx)
+	err := zapustit(zctx)
 	// Отказ системы настроить прокси ядро считает поводом упасть. Человеку от
 	// этого одна беда: связи нет вообще. Поднимаем ядро без просьбы к системе
 	// и говорим адрес прокси прямо в окне.
@@ -664,7 +675,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		if e := s.perestroit(vybor); e == nil {
 			zctx2, otmena2 := context.WithTimeout(ctx, 70*time.Second)
 			defer otmena2()
-			err = s.Yadro.Zapustit(zctx2)
+			err = zapustit(zctx2)
 		}
 	}
 	// Второй такой же отказ, найден 23.08 замером настоящего ядра
@@ -675,17 +686,54 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// вовсе, а падает целиком за 0.4с и за 5.2с соответственно строкой
 	// «initialize rule-set[N]: initial rule-set: ...». Наполненный кеш беду
 	// прячет (0.04с) — значит бьёт она по первому запуску и по слабой сети,
-	// проваленному DNS или провайдеру, который режет домен правил. Тот же
-	// приём, что и с system proxy выше: пересобираем конфиг без сетевых
-	// правил (весь трафик через туннель — konfig.Vybor.BezSetevyhPravil) и
-	// поднимаем ядро снова, вместо того чтобы оставить человека вовсе без связи.
+	// проваленному DNS или провайдеру, который режет домен правил.
+	//
+	// Лестница из двух ступеней вместо одной (23.08→24.08). Первая версия
+	// подстраховки (BezSetevyhPravil) чинит связь, но выбрасывает разбор
+	// трафика целиком — человек теряет умную маршрутизацию (что через VPN, а
+	// что напрямую) насовсем, пока источник правил не отдышится. Замер
+	// живьём: все 22 файла вместе весят 495 039 байт (0.47 МБ, из них
+	// ads.srs — 94.7%), 18 из 22 не менялись с 3 августа — комплект стареет
+	// медленно, его можно возить прямо в приложении (internal/pravila) и
+	// подставлять вместо remote, когда сеть подвела. Поэтому сперва пробуем
+	// встроенный комплект (konfig.Vybor.PravilaIzKomplekta) — умная
+	// маршрутизация выживает, — и только если он не поднял ядро (комплекта
+	// нет на диске не разложить, или сам профиль не совпадает с комплектом),
+	// откатываемся к прежнему BezSetevyhPravil.
 	if err != nil && strings.Contains(err.Error(), "initialize rule-set") {
-		log.Printf("источник правил маршрутизации недоступен, поднимаю ядро без них (весь трафик через VPN)")
-		vybor.BezSetevyhPravil = true
-		if e := s.perestroit(vybor); e == nil {
-			zctx3, otmena3 := context.WithTimeout(ctx, 70*time.Second)
-			defer otmena3()
-			err = s.Yadro.Zapustit(zctx3)
+		log.Printf("источник правил маршрутизации недоступен, пробую встроенный комплект правил (умная маршрутизация сохранится)")
+		podnyalsyaKomplektom := false
+		if komplekt, kErr := pravila.Razlozhit(filepath.Join(hranenie.PapkaYadra(), "pravila")); kErr != nil {
+			log.Printf("не разложил встроенный комплект правил: %v", kErr)
+		} else {
+			vyborKomplekt := vybor
+			vyborKomplekt.PravilaIzKomplekta = komplekt
+			vyborKomplekt.PravilaKomplektData = pravila.Data()
+			if e := s.perestroit(vyborKomplekt); e != nil {
+				log.Printf("встроенный комплект правил не применился к профилю: %v", e)
+			} else {
+				zctx3, otmena3 := context.WithTimeout(ctx, 70*time.Second)
+				defer otmena3()
+				errKomplekt := zapustit(zctx3)
+				if errKomplekt == nil {
+					err = nil
+					vybor = vyborKomplekt
+					podnyalsyaKomplektom = true
+					log.Printf("поднялся на встроенном комплекте правил (снимок от %s) — умная маршрутизация жива", pravila.Data())
+				} else {
+					log.Printf("встроенный комплект не поднял ядро: %v", errKomplekt)
+					err = errKomplekt
+				}
+			}
+		}
+		if !podnyalsyaKomplektom {
+			log.Printf("встроенный комплект не помог, поднимаю ядро совсем без правил (весь трафик через VPN)")
+			vybor.BezSetevyhPravil = true
+			if e := s.perestroit(vybor); e == nil {
+				zctx4, otmena4 := context.WithTimeout(ctx, 70*time.Second)
+				defer otmena4()
+				err = zapustit(zctx4)
+			}
 		}
 	}
 	// Зелёный поверх пустоты. До 23.08 «ядро поднялось без ошибки» само по

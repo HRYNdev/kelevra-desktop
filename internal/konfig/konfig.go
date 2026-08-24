@@ -22,7 +22,21 @@ package konfig
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
+
+// dataPoChelovecheski — дата снимка комплекта хранится машинно («2026-08-23»:
+// так её удобно сравнивать и сортировать), а в окно её читает человек, который
+// не программист. В окне дата русская: «23.08.2026». Чужой формат не ломаем и
+// не глотаем — отдаём как есть: пустая заметка врала бы сильнее непривычной
+// даты.
+func dataPoChelovecheski(s string) string {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return s
+	}
+	return t.Format("02.01.2006")
+}
 
 // Rezhim — как именно защищён трафик.
 type Rezhim string
@@ -95,6 +109,11 @@ const (
 	// ZametkaBezSetevyhPravil — Vybor.BezSetevyhPravil: список правил не
 	// скачался, включён упрощённый режим (весь трафик через VPN, без разбора).
 	ZametkaBezSetevyhPravil = "Список правил не скачался — весь трафик идёт через VPN."
+	// ZametkaPravilaIzKomplekta — Vybor.PravilaIzKomplekta: свежие правила не
+	// скачались, но вместо упрощённого режима включён встроенный в приложение
+	// комплект — умная маршрутизация (что через VPN, что напрямую) жива. %s —
+	// дата снимка комплекта (Vybor.PravilaKomplektData, обычно internal/pravila.Data()).
+	ZametkaPravilaIzKomplekta = "Свежие правила не скачались — работают встроенные (от %s)."
 )
 
 // Поля профиля, которые ядро принимает только на Android. На компьютере они
@@ -126,6 +145,26 @@ type Vybor struct {
 	// трафик мимо VPN молча, поэтому вместе с правилами final переставляется
 	// на туннельный выход (см. Prigotovit).
 	BezSetevyhPravil bool
+	// PravilaIzKomplekta — тег→путь до правила, разложенного из встроенного в
+	// бинарь комплекта (internal/pravila.Razlozhit). Непустая карта — сигнал:
+	// сервер правил недоступен, но умную маршрутизацию можно сохранить, а не
+	// приносить в жертву как BezSetevyhPravil. Каждый route.rule_set с
+	// type:"remote" переписывается в {type:"local", path:<из карты>} —
+	// route.final не трогается, потому что разбор по доменам/подсетям остаётся.
+	//
+	// Строгость: применяется ТОЛЬКО целиком. Если хотя бы для одного remote-
+	// тега профиля пути в карте нет, Prigotovit НЕ трогает профиль и
+	// возвращает ошибку — иначе ядро упадёт на первом же правиле, ссылающемся
+	// на исчезнувший rule_set. Вызывающий в этом случае уходит на прежнюю
+	// деградацию (BezSetevyhPravil).
+	//
+	// Вместе с BezSetevyhPravil взводиться не должны: если оба, комплект
+	// главнее (см. Prigotovit) — он не жертвует разбором трафика, а BezSetevyhPravil жертвует.
+	PravilaIzKomplekta map[string]string
+	// PravilaKomplektData — дата снимка встроенного комплекта, подставляется
+	// в ZametkaPravilaIzKomplekta, чтобы человек в окне видел, от какого числа
+	// работают встроенные правила.
+	PravilaKomplektData string
 }
 
 // Prigotovit готовит профиль под эту машину.
@@ -203,7 +242,14 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	if len(udalennyeTegi) > 0 {
 		pochistitPravila(d, udalennyeTegi)
 	}
-	if v.BezSetevyhPravil {
+	if len(v.PravilaIzKomplekta) > 0 {
+		// Комплект главнее BezSetevyhPravil (см. комментарий поля): он не
+		// жертвует разбором трафика, а BezSetevyhPravil жертвует.
+		if err := primenitPravilaIzKomplekta(d, v.PravilaIzKomplekta); err != nil {
+			return nil, k, err
+		}
+		k.Zametka = fmt.Sprintf(ZametkaPravilaIzKomplekta, dataPoChelovecheski(v.PravilaKomplektData))
+	} else if v.BezSetevyhPravil {
 		if err := ubratSetevyePravila(d); err != nil {
 			return nil, k, err
 		}
@@ -327,6 +373,55 @@ func ubratSetevyePravila(d map[string]any) error {
 		return fmt.Errorf("в профиле нет ни одного выхода в туннель — упрощённый режим (без правил) включить нечем")
 	}
 	r["final"] = teg
+	return nil
+}
+
+// primenitPravilaIzKomplekta — тело Vybor.PravilaIzKomplekta (см. комментарий
+// поля): переписывает каждый route.rule_set с type:"remote" на локальный
+// файл из встроенного комплекта, ничего больше не трогая — теги (а значит и
+// ссылки на них в route.rules/dns.rules, и route.final) остаются прежними.
+//
+// Применяется СТРОГО целиком: сперва проверяем, что путь в komplekt есть для
+// каждого remote-тега, и только потом переписываем — частичная подмена хуже
+// молчания, ядро упадёт на первом же правиле без rule_set.
+func primenitPravilaIzKomplekta(d map[string]any, komplekt map[string]string) error {
+	r, ok := d["route"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("в профиле нет route — вшитый комплект правил применять не к чему")
+	}
+	spisok, ok := r["rule_set"].([]any)
+	if !ok || len(spisok) == 0 {
+		return fmt.Errorf("в профиле нет route.rule_set — вшитый комплект правил применять не к чему")
+	}
+	for _, rs := range spisok {
+		m, ok := rs.(map[string]any)
+		if !ok {
+			continue
+		}
+		if tip, _ := m["type"].(string); tip != "remote" {
+			continue
+		}
+		teg, _ := m["tag"].(string)
+		if _, est := komplekt[teg]; !est {
+			return fmt.Errorf("во встроенном комплекте нет правила %q — применяю прежнюю деградацию", teg)
+		}
+	}
+	for i, rs := range spisok {
+		m, ok := rs.(map[string]any)
+		if !ok {
+			continue
+		}
+		if tip, _ := m["type"].(string); tip != "remote" {
+			continue
+		}
+		teg, _ := m["tag"].(string)
+		spisok[i] = map[string]any{
+			"tag":    teg,
+			"type":   "local",
+			"format": "binary",
+			"path":   komplekt[teg],
+		}
+	}
 	return nil
 }
 
