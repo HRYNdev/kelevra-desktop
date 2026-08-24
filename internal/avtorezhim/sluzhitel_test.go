@@ -301,3 +301,46 @@ func TestSluzhitelCtxDoneOstanavlivayetSledchik(t *testing.T) {
 		t.Fatal("Sledchik.Stop() не был позван при выходе из Krutit")
 	}
 }
+
+// TestSluzhitelHolodnyyStartMenyaetSrazu — вторая половина претензии «долго и
+// странно», та, что бьёт по КАЖДОМУ запуску: в бою задвижка заводится на
+// Neizvestno (avtorezhim.go:187), а на Neizvestno колбэк ничего не включает.
+// Значит до правки человек включал Kelevra и ждал Podtverzhdeniy заходов
+// страховочного тикера (~180-260 с), прежде чем защита вообще шевельнётся.
+// Заход на старте помечен доверенным — обстановка обязана определиться с
+// первого раза, без единого события Sledchik и без тикера.
+//
+// Остальные тесты служителя заводят задвижку на VneDoma (см.
+// novyySluzhitelDlyaTesta) — там старт совпадает с наблюдением и эту дыру
+// не видно, поэтому здесь стартовая обстановка ставится как в бою.
+func TestSluzhitelHolodnyyStartMenyaetSrazu(t *testing.T) {
+	dns := &schitayushchiyDns{zvonok: make(chan struct{}, 64)}
+	sl := novyyFakeSledchik()
+	posle := novyyFakePosle()
+
+	pozvali := make(chan Sostoyanie, 8)
+	kolbek := func(ctx context.Context, s Sostoyanie) { pozvali <- s }
+
+	sluzh := novyySluzhitelDlyaTesta(dns, sl, posle, kolbek)
+	sluzh.Avtorezhim.Zadvizhka = NovayaZadvizhka(Neizvestno) // как в бою
+	dns.ustanovit(true)                                      // сеть домашняя
+
+	ctx, otmena := context.WithCancel(context.Background())
+	defer otmena()
+	gotovo := make(chan struct{})
+	go func() { sluzh.Krutit(ctx); close(gotovo) }()
+
+	// Ни одного события Sledchik и ни одного тика (Interval=час) — только
+	// заход на старте.
+	select {
+	case s := <-pozvali:
+		if s != Doma {
+			t.Fatalf("колбэк на холодном старте позван с %v, хочу Doma", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("колбэк на холодном старте не позван: обстановка так и осталась Neizvestno")
+	}
+
+	otmena()
+	<-gotovo
+}
