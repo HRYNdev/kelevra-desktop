@@ -166,11 +166,56 @@ else
 fi
 pkill -f "Kelevra.exe" 2>/dev/null
 
+# ─────────────────────────────────────────────────────────────────────
+# Сценарий 3: второй процесс БЕЗ --tiho при живой копии не должен слепо
+# создавать своё окно поверх чужого (беда 23.08: два независимых окна,
+# второе шлёт podklyuchit на уже работающее ядро — см. adresKopii/
+# podnyatChuzheeOkno в main.go и okno_windows.go).
+#
+# ЧЕСТНО, чего этот сценарий НЕ СУДИТ: под wine компонента WebView2 нет
+# вовсе (замерено в windows.sh), поэтому ни одна копия не открывает
+# настоящее окно — положительную ветку «нашёл чужое окно и поднял его»
+# здесь показать нечем. Сценарий проверяет только то, что доказуемо
+# живьём: второй процесс ПЫТАЕТСЯ найти чужое окно (зовёт FindWindowW по
+# классу/заголовку) вместо того, чтобы сразу пойти в pokazatOkno, как было
+# до правки.
+echo "── сценарий 3: без --tiho — второй процесс обязан ПОПРОБОВАТЬ поднять чужое окно ──"
+pkill -f "Kelevra.exe" 2>/dev/null; sleep 1
+rm -f "$ZHURNAL" "$METKA"
+env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 40 "$WINE" "$STEND/Kelevra.exe" \
+  >"$STEND/okno_a.log" 2>&1 &
+PID_A=$!
+predel=$((SECONDS + 30))
+while [ ! -f "$METKA" ] && [ "$SECONDS" -lt "$predel" ]; do sleep 0.2; done
+wait "$PID_A" 2>/dev/null
+
+if [ ! -f "$METKA" ]; then
+  echo "  ⚫ ПРИБОР МЁРТВ: первая копия не отметилась — сценарий 3 ничего не измерил"
+  tretiy_rc=7
+else
+  env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 40 "$WINE" "$STEND/Kelevra.exe" \
+    >"$STEND/okno_b.log" 2>&1
+  echo "── журнал второго процесса (без --tiho) ──"
+  tail -20 "$STEND/okno_b.log" | sed 's/^/  b: /'
+  if grep -q "пробую поднять её окно вместо создания своего" "$STEND/okno_b.log"; then
+    echo "  зелёный: второй процесс попробовал поднять чужое окно (не создал своё вслепую)"
+    tretiy_rc=0
+  else
+    echo "  КРАСНЫЙ: в журнале второго процесса нет попытки поднять чужое окно"
+    tretiy_rc=1
+  fi
+  echo "  ЧЕСТНО: под wine WebView2 нет — «нашёл и поднял чужое окно» этим сценарием не доказано,"
+  echo "  доказан только сам факт попытки вместо слепого создания своего."
+fi
+pkill -f "Kelevra.exe" 2>/dev/null
+
 echo "── итог ──"
-[ "$gonok" -gt 0 ] && echo "КРАСНЫЙ 1/2: гонка воспроизведена ($gonok/$POVTOROV)"
-[ "$gonok" -eq 0 ] && echo "зелёный 1/2: ни разу больше одной службы ($odinoznak/$POVTOROV)"
-[ "$vtoroy_rc" -eq 0 ] && echo "зелёный 2/2: штатный повторный запуск не ждёт замка"
+[ "$gonok" -gt 0 ] && echo "КРАСНЫЙ 1/3: гонка воспроизведена ($gonok/$POVTOROV)"
+[ "$gonok" -eq 0 ] && echo "зелёный 1/3: ни разу больше одной службы ($odinoznak/$POVTOROV)"
+[ "$vtoroy_rc" -eq 0 ] && echo "зелёный 2/3: штатный повторный запуск не ждёт замка"
+[ "$tretiy_rc" -eq 0 ] && echo "зелёный 3/3: второй процесс без --tiho пробует поднять чужое окно"
 [ "$gonok" -gt 0 ] && exit 1
 [ "$vtoroy_rc" -ne 0 ] && exit "$vtoroy_rc"
-echo "ЗЕЛЁНЫЙ: оба сценария"
+[ "$tretiy_rc" -ne 0 ] && exit "$tretiy_rc"
+echo "ЗЕЛЁНЫЙ: все три сценария"
 exit 0
