@@ -389,6 +389,11 @@ type otvetSostoyaniya struct {
 	// Obstanovka пустая, пока служитель не крутится (Vklyuchen == false).
 	AvtorezhimVklyuchen  bool   `json:"avtorezhim_vklyuchen"`
 	AvtorezhimObstanovka string `json:"avtorezhim_obstanovka,omitempty"`
+	// AvtorezhimSlepPrichina — почему авторежим PodryadDoPrichiny заходов
+	// подряд не может понять, дома ли ноутбук (см. avtorezhim.Avtorezhim.
+	// PrichinaSlepoty). Пусто — либо слепоты нет, либо она ещё не длится
+	// достаточно, чтобы тревожить человека.
+	AvtorezhimSlepPrichina string `json:"avtorezhim_slep_prichina,omitempty"`
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -446,6 +451,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	o.AvtorezhimVklyuchen = s.Nastroyki.Avtorezhim
 	if s.avtorezhimEkz != nil {
 		o.AvtorezhimObstanovka = s.avtorezhimEkz.Zadvizhka.Tekushcheye().String()
+		o.AvtorezhimSlepPrichina = s.avtorezhimEkz.PrichinaSlepoty()
 	}
 	s.avtorezhimZamok.Unlock()
 	otdat(w, o, nil)

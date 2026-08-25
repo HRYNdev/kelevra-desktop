@@ -158,9 +158,11 @@ type Avtorezhim struct {
 	// Когда возвращает true, заход пробует узнать DNS-адрес физического
 	// адаптера (см. SetevoyAdres) и спросить его напрямую — обычный Dns
 	// (системный резолвер) в этот заход НЕ спрашивается вовсе, он видел бы
-	// наш же туннель. Если адрес узнать не вышло или он не приватный, заход
-	// целиком слепой (см. Nablyudeniye.ZondSlep) — платить сетевым запросом
-	// за заведомо негодный ответ незачем.
+	// наш же туннель. Если адрес узнать не вышло вовсе, заход целиком слепой
+	// (см. Nablyudeniye.ZondSlep) — платить сетевым запросом за заведомо
+	// негодный ответ незачем. Приватность адреса больше не блокирует запрос
+	// (см. adresFizicheskogoAdaptera) — публичный резолвер тоже спрашивается
+	// напрямую, вердикт всё равно выносит его честный ответ.
 	// Важно: в прокси-режиме признак должен быть false — системный прокси
 	// зонды не уважают (net.Dialer и net.Resolver идут мимо него), так что
 	// там они честны.
@@ -177,6 +179,26 @@ type Avtorezhim struct {
 	// проставленными адресами. Поле — ради теста: настоящий сетевой запрос
 	// на резолвер физического адаптера тесту не нужен.
 	DnsPryamoy func(adresResolvera, lokalnyAdres string) DnsProver
+
+	// slepyhPodryad и poslednyayaPrichinaSlepoty — учёт подряд идущих
+	// слепых заходов (см. Nablyudeniye.ZondSlep) для PrichinaSlepoty:
+	// единичная слепота не повод тревожить человека, а вот PodryadDoPrichiny
+	// подряд — уже обстановка, в которой авторежим ничего не делает и
+	// обязан в этом признаться. Любой незрячий заход (в том числе «сети
+	// нет») счётчик сбрасывает — тревога только про ДЛЯЩУЮСЯ слепоту.
+	slepyhPodryad              int
+	poslednyayaPrichinaSlepoty string
+}
+
+// PrichinaSlepoty — человеческая причина того, что авторежим PodryadDoPrichiny
+// заходов подряд не может понять, дома ли ноутбук, поэтому не переключает
+// защиту сам. Пустая строка — рано (слепота ещё не длится достаточно) или
+// слепоты нет вовсе.
+func (a *Avtorezhim) PrichinaSlepoty() string {
+	if a.slepyhPodryad < PodryadDoPrichiny {
+		return ""
+	}
+	return a.poslednyayaPrichinaSlepoty
 }
 
 // Novyy собирает авторежим с рабочими зондами по умолчанию.
@@ -216,7 +238,9 @@ var privatnyeSeti = func() []*net.IPNet {
 }()
 
 // privatnyyAdres — host из "host:port" (или голый host) лежит в одной из
-// privatnyeSeti.
+// privatnyeSeti. Больше не решает, слепой ли заход (см. adresFizicheskogoAdaptera
+// и правку про снятие приватности как жёсткого блокера) — приватность
+// осталась просто фактом наблюдения, доверия к нему это не убавляет.
 func privatnyyAdres(dnsAdres string) bool {
 	host, _, err := net.SplitHostPort(dnsAdres)
 	if err != nil {
@@ -234,6 +258,27 @@ func privatnyyAdres(dnsAdres string) bool {
 	return false
 }
 
+// PodryadDoPrichiny — сколько слепых заходов подряд (см. Nablyudeniye.ZondSlep)
+// вещь молчит, прежде чем сказать о слепоте человеку. Единичная слепота —
+// обычное дело (сеть ещё поднимается после сна), а вот три подряд — это уже
+// не заминка, а обстановка, в которой автоматический режим ничего не делает
+// и должен в этом признаться, а не изображать работу молча.
+const PodryadDoPrichiny = 3
+
+// Причины слепоты — то, что показывается человеку (см. Avtorezhim.PrichinaSlepoty).
+// Различаются два случая: адаптер не нашёлся вовсе (в том числе — нашёлся,
+// но без адреса резолвера, см. SetevoyAdapter) и адрес резолвера узнать
+// удалось, но он не приватный. После снятия приватности как жёсткого
+// блокера (adresFizicheskogoAdaptera опрашивает и публичный резолвер тоже)
+// второй случай сам по себе больше НЕ делает заход слепым — он остаётся
+// здесь как текст на случай, если приватность когда-нибудь снова станет
+// условием, а не просто фактом наблюдения.
+const prichinaAdapterNeNaiden = "физический сетевой адаптер не найден"
+
+func prichinaDnsNePrivaten(dnsAdres string) string {
+	return "DNS адаптера не приватный: " + dnsAdres
+}
+
 // Zahod — один заход: спрашивает зонды и предлагает наблюдение задвижке.
 //
 // @param estSet — сеть физически есть (обычно спрашивается у ОС уровнем
@@ -248,6 +293,8 @@ func privatnyyAdres(dnsAdres string) bool {
 // TCP-запрос платить незачем.
 func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nablyudeniye Nablyudeniye, izmenilos bool, tekushcheye Sostoyanie) {
 	if !estSet {
+		a.slepyhPodryad = 0
+		a.poslednyayaPrichinaSlepoty = ""
 		n := Nablyudeniye{EstSet: false}
 		izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 		return n, izm, a.Zadvizhka.Tekushcheye()
@@ -255,7 +302,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 
 	dns := a.Dns
 	if a.TunnelPodnyat != nil && a.TunnelPodnyat() {
-		dnsAdres, lokalnyIP, uznali := a.adresFizicheskogoAdaptera()
+		dnsAdres, lokalnyIP, uznali, prichina := a.adresFizicheskogoAdaptera()
 		if !uznali {
 			// Задвижке не предлагаем НИЧЕГО, даже Neizvestno: слепой заход —
 			// это отсутствие наблюдения, а не наблюдение «не знаю». Предложи
@@ -264,16 +311,30 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 			// человеку «неизвестно» вместо честного «вне дома», а из этой
 			// ямы авторежим уже не выбрался бы: туннель-то поднят, следующий
 			// заход тоже слепой.
+			//
+			// Слепота при этом не молчит вечно (см. PrichinaSlepoty): счётчик
+			// подряд идущих слепых заходов растёт, и после PodryadDoPrichiny
+			// причина становится видна человеку — до тех пор автоматический
+			// режим только выглядит работающим, а на деле ничего не решает.
+			a.slepyhPodryad++
+			a.poslednyayaPrichinaSlepoty = prichina
 			return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
 		}
-		// Адрес физического адаптера известен и приватен — DnsZond
-		// спрашивает ЕГО напрямую (DnsZond.AdresResolvera), в обход
-		// туннеля: заход больше не слепой, ZondSlep не ставится.
+		// Адрес физического адаптера известен — DnsZond спрашивает ЕГО
+		// напрямую (DnsZond.AdresResolvera), в обход туннеля: заход больше
+		// не слепой, ZondSlep не ставится. Приватность адреса тут больше не
+		// условие (см. adresFizicheskogoAdaptera) — публичный резолвер
+		// честно ответит «не дома», если это не наш роутер.
+		a.slepyhPodryad = 0
+		a.poslednyayaPrichinaSlepoty = ""
 		tvorec := a.DnsPryamoy
 		if tvorec == nil {
 			tvorec = novyyDnsZondPryamoy
 		}
 		dns = tvorec(dnsAdres, lokalnyIP)
+	} else {
+		a.slepyhPodryad = 0
+		a.poslednyayaPrichinaSlepoty = ""
 	}
 
 	dnsDoma, err := dns.DomaPoDns(ctx)
@@ -302,16 +363,27 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 }
 
 // adresFizicheskogoAdaptera — DNS-адрес и локальный IP физического
-// адаптера, если удалось узнать (SetevoyAdres) и адрес лежит в приватном
-// диапазоне (privatnyyAdres). SetevoyAdres == nil (не собран через Novyy) —
-// тоже «не узнали», тот же безопасный слепой путь.
-func (a *Avtorezhim) adresFizicheskogoAdaptera() (dnsAdres string, lokalnyIP string, uznali bool) {
+// адаптера, если удалось узнать (SetevoyAdres). SetevoyAdres == nil (не
+// собран через Novyy) — тоже «не узнали», тот же безопасный слепой путь.
+//
+// Приватность адреса больше не блокирует: раньше публичный DNS-сервер на
+// физическом адаптере (роутер, раздающий 1.1.1.1/8.8.8.8) приравнивался к
+// «адрес неизвестен», и заход оставался слепым НАВСЕГДА — Reshit при
+// ZondSlep всегда возвращает Neizvestno, колбэк службы (avtorezhimKolbek)
+// на Neizvestno не делает ничего, значит вернувшийся домой человек с таким
+// роутером видел бы поднятый туннель бесконечно. Ложного «дома» отсюда не
+// возникает: вердикт всё равно выносит честный ответ РЕЗОЛВЕРА на домашнее
+// имя (см. DnsZond, Reshit) — публичный резолвер просто скажет «нет такого
+// имени». Слепым остаётся только случай, когда физический адаптер не
+// нашёлся вовсе или адреса резолвера у него нет (uznali=false) — тогда
+// prichina объясняет, почему (см. Avtorezhim.PrichinaSlepoty).
+func (a *Avtorezhim) adresFizicheskogoAdaptera() (dnsAdres string, lokalnyIP string, uznali bool, prichina string) {
 	if a.SetevoyAdres == nil {
-		return "", "", false
+		return "", "", false, prichinaAdapterNeNaiden
 	}
 	dnsAdres, lokalnyIP, err := a.SetevoyAdres()
-	if err != nil || dnsAdres == "" || !privatnyyAdres(dnsAdres) {
-		return "", "", false
+	if err != nil || dnsAdres == "" {
+		return "", "", false, prichinaAdapterNeNaiden
 	}
-	return dnsAdres, lokalnyIP, true
+	return dnsAdres, lokalnyIP, true, ""
 }
