@@ -1,14 +1,19 @@
 package obnovlenie
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // spisok собирает ответ GitHub из кусков «тег → файл нужного размера».
@@ -166,5 +171,127 @@ func TestSpisokNeUporyadochenPoVersii(t *testing.T) {
 	}
 	if n.Versiya != "0.6.15" {
 		t.Fatalf("ждал 0.6.15 (максимум по версии), получил %s", n.Versiya)
+	}
+}
+
+// TestPostavitHelperProcess — не самостоятельный тест, а тело для СУБПРОЦЕССА,
+// который запускает TestPostavitMezhprocessnayaGonkaNePortitFayl (стандартный
+// go-приём: перезапуск os.Args[0] с -test.run=этот_тест). Без переменной
+// окружения он ничего не делает и завершается как обычный зелёный тест.
+func TestPostavitHelperProcess(t *testing.T) {
+	if os.Getenv("KD_POSTAVIT_HELPER") != "1" {
+		return
+	}
+	put := os.Getenv("KD_POSTAVIT_PUT")
+	adres := os.Getenv("KD_POSTAVIT_URL")
+	razmer, _ := strconv.ParseInt(os.Getenv("KD_POSTAVIT_RAZMER"), 10, 64)
+	err := Postavit(context.Background(), &http.Client{Timeout: 30 * time.Second},
+		Novaya{Versiya: "0.9.9", Ssylka: adres, Razmer: razmer}, put)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "postavit:", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// TestPostavitMezhprocessnayaGonkaNePortitFayl — настоящая гонка: несколько
+// ЗАПУЩЕННЫХ .exe (реальные ОС-процессы, не горутины) одновременно тянут
+// обновление на один и тот же putExe. cmd/kelevra/obnovlenie.go зовёт
+// Postavit ДО одиночного замка приложения, поэтому в жизни это ровно так и
+// бывает: два экземпляра стартовали почти вместе.
+//
+// Опасное окно ýже, чем «записи наложились»: оно между тем, как процесс
+// ЗАКРЫЛ временный файл и проверил размер (значит, поверил, что всё
+// записано верно), и тем, как он его ПЕРЕИМЕНОВАЛ на место putExe. Если в
+// этот самый момент другой процесс открывает ОБЩЕЕ имя ".new" с O_TRUNC, он
+// обнуляет уже проверенные байты первого — и первый переименует в
+// putExe чужую, ещё не дописанную порцию, хотя сам вернёт nil (успех). Ровно
+// поэтому попытка — не одна: узкое окно ловится не с первого раза, но у
+// сегодняшнего кода — почти всегда за разумное число попыток, а у
+// исправленного — никогда (у каждого процесса свой файл).
+func TestPostavitMezhprocessnayaGonkaNePortitFayl(t *testing.T) {
+	// Эталонное тело: большое и не однородное, чтобы порчу от наложения
+	// записей нельзя было случайно не заметить.
+	etalon := make([]byte, 64*1024)
+	for i := range etalon {
+		etalon[i] = byte(i % 251)
+	}
+
+	// Сервер отдаёт тело МЕДЛЕННО, кусками с задержкой: так у нескольких
+	// процессов гарантированно есть окно, где их запись друг друга накладывается.
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fl, _ := w.(http.Flusher)
+		const kusok = 256
+		for i := 0; i < len(etalon); i += kusok {
+			konec := i + kusok
+			if konec > len(etalon) {
+				konec = len(etalon)
+			}
+			w.Write(etalon[i:konec])
+			if fl != nil {
+				fl.Flush()
+			}
+			time.Sleep(300 * time.Microsecond)
+		}
+	}))
+	defer s.Close()
+
+	const N = 8        // процессов в одной попытке
+	const Popytok = 25 // попыток: узкое окно ловится не всегда, но накопительно — надёжно
+	kolvoUspehovVsego := 0
+	for popytka := 0; popytka < Popytok; popytka++ {
+		papka := t.TempDir()
+		put := filepath.Join(papka, "Kelevra.exe")
+		if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		var wg sync.WaitGroup
+		uspeh := make([]bool, N)
+		vyvod := make([]string, N)
+		for i := 0; i < N; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				cmd := exec.Command(os.Args[0], "-test.run=^TestPostavitHelperProcess$")
+				cmd.Env = append(os.Environ(),
+					"KD_POSTAVIT_HELPER=1",
+					"KD_POSTAVIT_PUT="+put,
+					"KD_POSTAVIT_URL="+s.URL,
+					"KD_POSTAVIT_RAZMER="+strconv.Itoa(len(etalon)),
+				)
+				out, err := cmd.CombinedOutput()
+				vyvod[idx] = string(out)
+				uspeh[idx] = err == nil
+			}(i)
+		}
+		wg.Wait()
+
+		kolvoUspehov := 0
+		for _, u := range uspeh {
+			if u {
+				kolvoUspehov++
+			}
+		}
+		kolvoUspehovVsego += kolvoUspehov
+		if kolvoUspehov == 0 {
+			continue // в этой попытке никто не поставился — судить не о чем
+		}
+
+		// Главная проверка: раз хоть один процесс отчитался успехом (err==nil),
+		// файл на месте putExe обязан побайтно совпасть с эталоном. Несовпадение
+		// значит, что проверка размера прошла по СВОИМ записанным байтам, а не
+		// по факту на диске, и гонка при записи временного файла её обманула.
+		posle, err := os.ReadFile(put)
+		if err != nil {
+			t.Fatalf("попытка %d: после обновления файл не читается: %v", popytka, err)
+		}
+		if !bytes.Equal(posle, etalon) {
+			t.Fatalf("попытка %d: файл на месте приложения испорчен гонкой: длина %d (ждали %d), успешных процессов %d из %d, вывод: %v",
+				popytka, len(posle), len(etalon), kolvoUspehov, N, vyvod)
+		}
+	}
+	if kolvoUspehovVsego == 0 {
+		t.Fatalf("ни один процесс ни в одной из %d попыток не поставил обновление", Popytok)
 	}
 }
