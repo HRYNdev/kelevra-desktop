@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -21,10 +22,20 @@ import (
 )
 
 // argSluzhba/argTiho — режимы запуска этого же .exe (см. шапку файла).
+// argSmena — не режим, а сообщение от прошлой, ещё не повышенной копии:
+// значение после флага — её pid (см. prava.Poprosit и polnayaZashchita).
 const (
 	argSluzhba = "--sluzhba"
 	argTiho    = "--tiho"
+	argSmena   = "--smena"
 )
+
+// srokOzhidaniyaSmeny — сколько новая, уже повышенная копия ждёт смерти
+// старой перед тем, как всё равно занять её место. Гонка 25.08 («2 нахуй
+// открыто») была устроена ровно наоборот — фиксированным time.Sleep(300ms) на
+// СТОРОНЕ СТАРОЙ копии без всякой обратной связи; здесь ждёт та копия, что
+// реально должна знать правду, и явным опросом, а не наугад.
+const srokOzhidaniyaSmeny = 10 * time.Second
 
 // srokPodnyatiyaSluzhby — сколько окно ждёт, пока отдельно запущенная служба
 // отметится меткой копии. Дольше держать человека перед пустым экраном
@@ -72,12 +83,23 @@ func main() {
 		return
 	}
 
+	// --smena <pid> — эта копия только что повышена через UAC из
+	// polnayaZashchita: старая копия (тот самый pid) ещё может быть жива и
+	// держит метку. adresKopii ждёт её смерти сама, а не идёт по обычной
+	// ветке «нашёл чужую живую копию» (см. её комментарий).
+	smenaPID, estSmena := argSmenaPID()
+
 	// --tiho — для автозапуска с Windows: поднять службу молча, без окна.
-	tiho := estArg(argTiho)
+	// Смена режима идёт тем же путём: это внутренний перезапуск самого
+	// приложения, а не человек, дважды щёлкнувший по значку, — новое окно
+	// тут никто не просил. Раньше его всё равно открывал бы pokazatOkno,
+	// и человек увидел бы то самое второе окно поверх старого, которое
+	// сторож (storozh_okna.go) ещё не успел закрыть.
+	tiho := estArg(argTiho) || estSmena
 
 	// Окно — ВНЕ замка (см. adresKopii): pokazatOkno не возвращается, пока
 	// человек не закроет окно.
-	adres, chuzhaya := adresKopii(papka, putZhurnala)
+	adres, chuzhaya := adresKopii(papka, putZhurnala, smenaPID)
 	if !tiho {
 		// Беда 23.08: adresKopii уже отличает «нашёл чужую копию» от «поднял
 		// свою службу», но раньше main звал pokazatOkno одинаково в обоих
@@ -121,7 +143,7 @@ func main() {
 // ещё не дойдя до чтения метки, и человек видел бы, что ничего не
 // происходит. Под wine это не проверить (окна нет), поэтому запрет держится
 // не стендом, а формой: pokazatOkno вызвать отсюда попросту нельзя.
-func adresKopii(papka, putZhurnala string) (string, bool) {
+func adresKopii(papka, putZhurnala string, smenaPID int) (string, bool) {
 	// Срок ожидания тот же, что окно и так готово ждать службу: дольше держать
 	// человека всё равно нечем. Не взяли (истёк срок или примитив недоступен) —
 	// идём по старой схеме: это прежнее поведение, а не новый отказ.
@@ -131,9 +153,16 @@ func adresKopii(papka, putZhurnala string) (string, bool) {
 	}
 	defer zamok.Otdat()
 
-	// Приложение уже работает: открываем его окно, а не поднимаем второе ядро
-	// на те же порты. Для человека двойной запуск выглядит как «показать окно».
-	if adres, est := kopiya.Nayti(papka); est {
+	if smenaPID > 0 {
+		// Смена режима (см. polnayaZashchita): старая копия жива и держит
+		// метку нарочно. Ждём её смерти вместо того, чтобы, как обычная
+		// вторая копия, открыть её (умирающее) окно.
+		zhdatSmenu(smenaPID)
+		kopiya.Osvobodit(papka)
+	} else if adres, est := kopiya.Nayti(papka); est {
+		// Приложение уже работает: открываем его окно, а не поднимаем второе
+		// ядро на те же порты. Для человека двойной запуск выглядит как
+		// «показать окно».
 		log.Printf("копия уже запущена, открываю её окно: %s", adres)
 		return adres, true
 	}
@@ -146,6 +175,40 @@ func adresKopii(papka, putZhurnala string) (string, bool) {
 		umeret(putZhurnala, "служба Kelevra не поднялась за 20 секунд", err)
 	}
 	return adres, false
+}
+
+// argSmenaPID ищет "--smena <pid>" среди аргументов запуска (см. константы
+// вверху файла). Это не режим самого запуска, а сообщение от прошлой,
+// ещё не повышенной копии, которая только что позвала ShellExecuteW.
+func argSmenaPID() (int, bool) {
+	for i, a := range os.Args {
+		if a == argSmena && i+1 < len(os.Args) {
+			if pid, err := strconv.Atoi(os.Args[i+1]); err == nil && pid > 0 {
+				return pid, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// zhdatSmenu ждёт смерть старой копии (её pid передан аргументом --smena),
+// прежде чем эта, уже повышенная копия займёт её место. Замена гонки
+// (фиксированный time.Sleep(300ms) на стороне СТАРОЙ копии из прежней
+// polnayaZashchita, без всякой обратной связи от новой) явным опросом:
+// новая копия — та, что реально должна знать правду о смерти старой, а не
+// наоборот. Не дождалась за srokOzhidaniyaSmeny — не виснем вечно, старая
+// копия и правда могла зависнуть, но след в журнале обязателен: молчать о
+// таком нельзя.
+func zhdatSmenu(pid int) {
+	predel := time.Now().Add(srokOzhidaniyaSmeny)
+	for zhivProcess(pid) {
+		if time.Now().After(predel) {
+			log.Printf("смена режима: старая копия (pid %d) не завершилась за %s, занимаю её место всё равно", pid, srokOzhidaniyaSmeny)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	log.Printf("смена режима: старая копия (pid %d) завершилась, занимаю её место", pid)
 }
 
 // snyatOsirotevshiySled чинит жёсткую смерть предыдущего запуска: Диспетчер
