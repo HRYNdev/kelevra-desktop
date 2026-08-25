@@ -692,6 +692,14 @@ function perevestiBedu(syroe) {
 // internal/konfig/konfig.go).
 function zametkaAvtorezhima(s) {
   if (!s.avtorezhim_vklyuchen) return null;
+  // Слепота (avtorezhim.PrichinaSlepoty, sluzhba.go): несколько заходов
+  // подряд авторежим не может отличить свою сеть от чужой и молча ничего
+  // не делает. Показываем это раньше «ещё смотрит» — иначе три захода
+  // подряд молчания выглядели бы как секундная заминка.
+  if (s.avtorezhim_slep_prichina) {
+    return "Не пойму, дома вы или нет: " + s.avtorezhim_slep_prichina +
+           ". Автоматический режим сам защиту не переключает.";
+  }
   if (s.avtorezhim_obstanovka === "неизвестно") {
     return "Авторежим ещё смотрит, что это за сеть.";
   }
