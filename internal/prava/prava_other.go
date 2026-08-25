@@ -20,7 +20,9 @@ func Est() bool {
 	return os.Geteuid() == 0
 }
 
-// Poprosit — окно UAC есть только на Windows.
-func Poprosit() error {
+// Poprosit — окно UAC есть только на Windows. smenaPID сохраняет ту же
+// сигнатуру, что и windows-версия (см. prava_windows.go), чтобы sluzhba.go
+// собиралась одинаково на обеих платформах.
+func Poprosit(smenaPID int) error {
 	return fmt.Errorf("запросить права можно только на Windows")
 }

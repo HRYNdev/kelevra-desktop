@@ -38,7 +38,15 @@ func Est() bool {
 // Poprosit перезапускает приложение с правами администратора (окно UAC).
 // Возвращается только при отказе: при согласии старый процесс должен уйти,
 // иначе на машине окажутся две копии.
-func Poprosit() error {
+//
+// smenaPID — pid ЭТОЙ, ещё не повышенной копии. Передаётся новой копии
+// аргументом --smena, чтобы та знала: она не первый запуск, а смена режима,
+// и старая копия может быть ещё жива (см. cmd/kelevra/main.go: zhdatSmenu).
+// Раньше метка единственного экземпляра снималась ДО этого вызова, и новая
+// копия, ничего не зная о старой, стартовала как первая — обе оказывались
+// живы разом (беда 25.08, «2 *** открыто»). Теперь метка живёт у старой
+// копии до её смерти, а связь между копиями — явный аргумент, а не гонка.
+func Poprosit(smenaPID int) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -49,7 +57,7 @@ func Poprosit() error {
 	verb, _ := syscall.UTF16PtrFromString("runas")
 	fayl, _ := syscall.UTF16PtrFromString(exe)
 	papka, _ := syscall.UTF16PtrFromString(katalog(exe))
-	argy, _ := syscall.UTF16PtrFromString("")
+	argy, _ := syscall.UTF16PtrFromString(fmt.Sprintf("--smena %d", smenaPID))
 
 	const swShowNormal = 1
 	r, _, _ := shellExecute.Call(0,
