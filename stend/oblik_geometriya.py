@@ -26,6 +26,15 @@
       беды тут нет; но если обрезан именно текущий выбор — человек не видит,
       что у него выбрано (снимки 11_beda_port.png/12_beda_seti.png, 24.08:
       «Нидерланды 2» обрезана ровно посередине текста).
+  (е) пять состояний точки сигнала узла (.uzel .signal — bystro/sredne/
+      medlenno/mertv/«без замера») обязаны иметь ПОПАРНО РАЗНЫЙ вычисленный
+      вид (background-color + box-shadow + border). Судим getComputedStyle,
+      а не текст CSS-правила: цвета приходят из var(), и слияние видно только
+      ПОСЛЕ подстановки (25.08: sredne и medlenno делили один var(--zhdem) —
+      все 23 сцены стенда несли задержки 78/64/91мс, «sredne»/«medlenno» не
+      попадали на экран НИ РАЗУ, и щуп это не заметил — вход был пуст).
+      Смотрим только на сцене 24_uzly_vse_gradacii — единственной, где все
+      пять состояний нарисованы разом.
 
     python3 stend/oblik_geometriya.py
 """
@@ -113,6 +122,42 @@ def proverit_glavnyy_ekran(str_, imya_sceny):
     return bedy
 
 
+SIGNAL_JS = """() => {
+  const sostoyaniya = ["bystro", "sredne", "medlenno", "mertv"];
+  const kakoe = (el) => sostoyaniya.find((s) => el.classList.contains(s)) || "bez_zamera";
+  const otpechatki = {};
+  for (const el of document.querySelectorAll(".uzel .signal")) {
+    const st = getComputedStyle(el);
+    otpechatki[kakoe(el)] = [st.backgroundColor, st.boxShadow,
+                             st.borderStyle, st.borderWidth, st.borderColor].join("|");
+  }
+  return otpechatki;
+}"""
+
+
+def proverit_gradacii_signala(str_, imya_sceny):
+    """Пять состояний .uzel .signal обязаны различаться на глаз (д. выше).
+
+    Судим по фактическому getComputedStyle, а не по тексту правила CSS: цвет
+    приходит из var(--zhdem) и т.п., и «средне» с «медленно» можно свести к
+    одному виду, ни разу не тронув слово medlenno в самом правиле — ровно так
+    беда 25.08 и прошла бы мимо текстового сравнения.
+    """
+    otp = str_.evaluate(SIGNAL_JS)
+    zhdem = ["bystro", "sredne", "medlenno", "mertv", "bez_zamera"]
+    otsutstvuet = [s for s in zhdem if s not in otp]
+    if otsutstvuet:
+        return [f"{imya_sceny}: (е) сцена не показала состояния {otsutstvuet} — "
+                "щупу нечем судить попарную разницу"]
+    bedy = []
+    for i, a in enumerate(zhdem):
+        for b in zhdem[i + 1:]:
+            if otp[a] == otp[b]:
+                bedy.append(f"{imya_sceny}: (е) состояния «{a}» и «{b}» сигнала неразличимы "
+                            f"на экране (одинаковый вид: {otp[a]})")
+    return bedy
+
+
 def zamerit():
     vse_bedy = []
     with socketserver.TCPServer(("127.0.0.1", 0), Ruchki) as srv:
@@ -136,6 +181,8 @@ def zamerit():
                 str_.goto(f"http://127.0.0.1:{port}/index.html")
                 str_.wait_for_timeout(700)
                 bedy = proverit_glavnyy_ekran(str_, imya_sceny)
+                if imya_sceny == "24_uzly_vse_gradacii":
+                    bedy += proverit_gradacii_signala(str_, imya_sceny)
                 znak = "🔴" if bedy else "🟢"
                 print(f"  {znak} {imya_sceny}")
                 for b in bedy:
