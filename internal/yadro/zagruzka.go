@@ -17,7 +17,13 @@ import (
 
 // Relizy — откуда приложение берёт ядро. Сборка ядра лежит в релизах этого же
 // репозитория (теги core-*), собирает её .github/workflows/core.yml.
-const Relizy = "https://api.github.com/repos/HRYNdev/kelevra-desktop/releases?per_page=20"
+//
+// Окно 100, а не 20: в этом же репозитории живут релизы приложения, и их уже 31
+// против одной сборки ядра. GitHub отдаёт список по дате коммита тега, поэтому
+// единственный core-релиз (03.08) провалился на 31-е место — при per_page=20
+// приложение переставало его видеть и отвечало «в сборках ядра нет файла».
+// Замер 25.08: окно 20 → ядро НЕ найдено, окно 100 → core-v1.14.0-beta.4-1.
+const Relizy = "https://api.github.com/repos/HRYNdev/kelevra-desktop/releases?per_page=100"
 
 // ImyaArhiva — ассет под текущую систему.
 func ImyaArhiva() string {
@@ -43,7 +49,7 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 }
 
 func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, Relizy, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, y.spisok(), nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	otvet, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
