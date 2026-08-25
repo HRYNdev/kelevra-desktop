@@ -19,10 +19,19 @@ import (
 	"time"
 )
 
-// SpisokReliza — откуда берём список релизов. Именно СПИСОК, а не /latest:
-// в этом же репозитории лежат релизы ядра (core-*), и «latest» легко окажется
-// ядром, а не приложением.
-const SpisokReliza = "https://api.github.com/repos/HRYNdev/kelevra-desktop/releases?per_page=20"
+// SpisokReliza — откуда берём список релизов.
+//
+// Именно СПИСОК, а не /latest: в этом же репозитории лежат релизы ядра
+// (core-*), и «latest» легко окажется ядром, а не приложением.
+//
+// per_page=100 (не 20): порядок в ответе GitHub — по дате коммита тега, а
+// НЕ по версии (см. Sravnit и TestSpisokNeUporyadochenPoVersii). Замерено
+// живьём 25.08.2026: в репозитории 32 релиза, 31 из них app-v, и релиз со
+// старым коммитом (app-v0.6.9) лежит в ответе ВЫШЕ более новой app-v0.6.15.
+// При окне в 20 и 31 app-релизе самый свежий рискует вовсе выпасть за
+// границу страницы — тогда клиент слышит «обновлений нет» уже навсегда,
+// сколько бы ни спрашивал.
+const SpisokReliza = "https://api.github.com/repos/HRYNdev/kelevra-desktop/releases?per_page=100"
 
 // PrefiksPrilozheniya — метка релизов самого приложения.
 const PrefiksPrilozheniya = "app-v"
@@ -160,38 +169,67 @@ func Postavit(ctx context.Context, klient *http.Client, n Novaya, putExe string)
 
 	// Рядом с самим приложением: переименование поверх дисков не работает, а
 	// нам нужна именно замена файла на своём месте.
-	vremennyy := putExe + ".new"
-	f, err := os.OpenFile(vremennyy, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	//
+	// Имя — СВОЁ у каждого вызова (os.CreateTemp), а не жёсткое putExe+".new".
+	// Обновление идёт ДО одиночного замка приложения (см. cmd/kelevra), а
+	// значит два одновременно запущенных .exe вполне могут звать Postavit
+	// разом. При общем имени оба открывали один и тот же файл с O_TRUNC —
+	// один процесс обнулял уже записанные байты другого, а проверка размера
+	// сверяла СВОИ байты из io.Copy, а не то, что реально лежит на диске:
+	// оба проходили проверку, хотя файл на диске был перемешан. Отдельный
+	// файл на процесс убирает наложение записей в принципе.
+	f, err := os.CreateTemp(filepath.Dir(putExe), ".kelevra-*.new")
 	if err != nil {
 		return fmt.Errorf("не могу записать рядом с приложением: %w", err)
 	}
-	skachano, err := io.Copy(f, otvet.Body)
-	zakryt := f.Close()
-	if err == nil {
-		err = zakryt
+	vremennyy := f.Name()
+	// Уборка мусора на любом выходе с ошибкой: uspeshno=true выставляется
+	// только прямо перед тем, как файл встаёт на постоянное место.
+	uspeshno := false
+	defer func() {
+		if !uspeshno {
+			os.Remove(vremennyy)
+		}
+	}()
+	// os.CreateTemp создаёт файл с 0600 — нам нужен запускаемый .exe.
+	if err := f.Chmod(0o755); err != nil {
+		f.Close()
+		return fmt.Errorf("не могу выставить права на новый файл: %w", err)
 	}
+
+	_, err = io.Copy(f, otvet.Body)
 	if err != nil {
-		os.Remove(vremennyy)
+		f.Close()
+		return err
+	}
+	// Размер сверяем по ФАКТУ на диске, а не по счётчику io.Copy: счётчик —
+	// это сколько байт записал именно я, а на диске могло оказаться другое,
+	// если файл написан не тем.
+	svedeniya, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return fmt.Errorf("не могу проверить записанный файл: %w", err)
+	}
+	skachano := svedeniya.Size()
+	if err := f.Close(); err != nil {
 		return err
 	}
 	// Оборванная закачка не должна встать на место рабочего приложения.
 	if n.Razmer > 0 && skachano != n.Razmer {
-		os.Remove(vremennyy)
 		return fmt.Errorf("скачано %d байт вместо %d", skachano, n.Razmer)
 	}
 
 	staryy := putExe + ".old"
 	os.Remove(staryy)
 	if err := os.Rename(putExe, staryy); err != nil {
-		os.Remove(vremennyy)
 		return fmt.Errorf("не могу отодвинуть текущее приложение: %w", err)
 	}
 	if err := os.Rename(vremennyy, putExe); err != nil {
 		// Возврат на исходное: без этого человек остаётся вообще без .exe.
 		os.Rename(staryy, putExe)
-		os.Remove(vremennyy)
 		return fmt.Errorf("не могу поставить новое приложение: %w", err)
 	}
+	uspeshno = true
 	return nil
 }
 
