@@ -28,7 +28,6 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/avtozapusk"
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
-	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
@@ -46,14 +45,11 @@ type Sluzhba struct {
 	Yadro     *yadro.Yadro
 	Podpiska  *podpiska.Klient
 
-	// Adres — свой же URL окна (с ключом). Нужен, чтобы вернуть метку копии
-	// на место, если человек откажет в правах администратора.
-	Adres string
-
 	// poprositPrava — точка подмены для стенда: настоящее окно UAC на linux
-	// не показать, а порядок «снять метку → спросить → вернуть при отказе»
-	// проверять надо именно тут (гонка 23.08, см. polnayaZashchita).
-	poprositPrava func() error
+	// не показать, а то, что новая копия получает pid этой, ещё не повышенной
+	// (передачу смены, а не гонку — см. polnayaZashchita), проверять надо
+	// именно тут.
+	poprositPrava func(smenaPID int) error
 	// vyhod — как эта копия уходит после согласия на права. По умолчанию
 	// os.Exit(0); на стенде подменяется, иначе тест убил бы сам себя.
 	vyhod func()
@@ -155,7 +151,6 @@ func (s *Sluzhba) Slushat() (net.Listener, string, error) {
 		return nil, "", err
 	}
 	url := fmt.Sprintf("http://%s/%s/", l.Addr().String(), s.klyuch)
-	s.Adres = url
 	return l, url, nil
 }
 
@@ -865,23 +860,19 @@ func (s *Sluzhba) polnayaZashchita(w http.ResponseWriter, r *http.Request) {
 		otdat(w, map[string]any{"gotovo": true}, nil)
 		return
 	}
-	// Метка копии снимается ДО окна UAC, а не после него. ShellExecuteW
-	// возвращается уже с запущенной копией, и та копия первым делом смотрит
-	// метку: увидев ещё живую службу, она решает «приложение уже работает» и
-	// открывает окно на адрес, который умрёт через мгновение. Раньше это
-	// кончалось вторым окном-трупом, теперь (со сторожем окна) кончилось бы
-	// тем, что приложение у человека просто исчезает с экрана.
-	papka := hranenie.Papka()
-	kopiya.Osvobodit(papka)
+	// Метка копии раньше снималась ДО окна UAC. ShellExecuteW возвращается
+	// уже с запущенной копией, а та копия первым делом смотрит метку: не
+	// увидев её, она решала «приложения ещё нет» и стартовала как первая —
+	// поверх ещё живой старой (беда 25.08, «2 *** открыто»: гонка между
+	// «метка снята» и «старая копия реально умерла» проигрывалась). Метка
+	// теперь живёт у этой копии до самой её смерти; вместо гонки — явная
+	// передача: новая копия получает наш pid аргументом --smena и сама ждёт
+	// нашу смерть, прежде чем снять метку и занять её место (см.
+	// cmd/kelevra/main.go: zhdatSmenu).
 	if err := s.sprositPrava(); err != nil {
-		// Человек нажал «Нет»: эта копия остаётся работать — значит и метка
-		// обязана вернуться. Без неё следующий двойной щелчок поднял бы
-		// второе ядро на уже занятые порты.
-		if s.Adres != "" {
-			if err := kopiya.Zanyat(papka, s.Adres, time.Now()); err != nil {
-				log.Printf("метка копии не вернулась после отказа в правах: %v", err)
-			}
-		}
+		// Человек нажал «Нет»: метку никто не трогал — эта копия остаётся
+		// работать как ни в чём не бывало, второй запуск по-прежнему увидит
+		// её живой.
 		otdat(w, nil, err)
 		return
 	}
@@ -898,12 +889,13 @@ func (s *Sluzhba) polnayaZashchita(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// sprositPrava — настоящее окно UAC либо подмена со стенда.
+// sprositPrava — настоящее окно UAC либо подмена со стенда. Передаёт свой
+// pid, чтобы новая копия знала, чьей смерти ей ждать (см. Poprosit).
 func (s *Sluzhba) sprositPrava() error {
 	if s.poprositPrava != nil {
-		return s.poprositPrava()
+		return s.poprositPrava(os.Getpid())
 	}
-	return prava.Poprosit()
+	return prava.Poprosit(os.Getpid())
 }
 
 func otdat(w http.ResponseWriter, telo any, err error) {
