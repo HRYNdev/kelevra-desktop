@@ -155,14 +155,28 @@ func TestZahodVTunneleSPrivatnymAdapteromNeSlep(t *testing.T) {
 	}
 }
 
-// TestZahodVTunneleSPublichnymAdresomOstayotsyaSlep — контроль на
-// подмену: адрес адаптера узнать УДАЛОСЬ, но он не приватный (публичный
-// DNS) — это подозрительно похоже на ту же беду, от которой лечим, поэтому
-// заход остаётся слепым, как и при полностью неизвестном адресе.
-func TestZahodVTunneleSPublichnymAdresomOstayotsyaSlep(t *testing.T) {
+// TestZahodVTunneleSPublichnymAdresomOprashivayetsyaPryamoIDohoditDoDoma —
+// ПЕРЕПИСАН 25.08 под новый закон (см. adresFizicheskogoAdaptera): раньше
+// (TestZahodVTunneleSPublichnymAdresomOstayotsyaSlep) публичный адрес
+// резолвера приравнивался к «адрес неизвестен», заход оставался слепым, а
+// Reshit на ZondSlep всегда отдаёт Neizvestno — колбэк службы (avtorezhimKolbek)
+// на Neizvestno не делает НИЧЕГО, то есть человек с роутером, раздающим
+// 1.1.1.1/8.8.8.8, вернувшись домой, видел бы поднятый туннель вечно (см.
+// доказательство в диагнозе: 20 заходов подряд с 1.1.1.1:53 не давали Doma).
+//
+// Почему это не заводит ложное «дома»: вердикт всё равно выносит честный
+// ответ РЕЗОЛВЕРА на домашнее имя — публичный резолвер, спрошенный напрямую,
+// просто ответит «нет такого имени», и Reshit вернёт VneDoma, как обычно.
+// Приватность адреса тут не блокер, а только доп. факт, поэтому этот тест
+// подставляет fakeDns{doma: true} — ответ решает не адрес резолвера, а его
+// содержимое, — и ждёт, что физический адаптер с ПУБЛИЧНЫМ DNS всё равно
+// доходит до Doma за конечное число заходов, а не висит в Neizvestno вечно.
+func TestZahodVTunneleSPublichnymAdresomOprashivayetsyaPryamoIDohoditDoDoma(t *testing.T) {
+	trafik := &fakeTrafik{izmereno: true, proshel: true}
 	dnsZvali := 0
+	var polucheno struct{ adresResolvera, lokalnyAdres string }
 	a := &Avtorezhim{
-		Trafik:        &fakeTrafik{},
+		Trafik:        trafik,
 		Zadvizhka:     NovayaZadvizhka(VneDoma),
 		TunnelPodnyat: func() bool { return true },
 		SetevoyAdres: func() (string, string, error) {
@@ -170,14 +184,91 @@ func TestZahodVTunneleSPublichnymAdresomOstayotsyaSlep(t *testing.T) {
 		},
 		DnsPryamoy: func(adresResolvera, lokalnyAdres string) DnsProver {
 			dnsZvali++
+			polucheno.adresResolvera, polucheno.lokalnyAdres = adresResolvera, lokalnyAdres
 			return fakeDns{doma: true}
 		},
 	}
-	n, _, _ := a.Zahod(context.Background(), true, false)
-	if !n.ZondSlep {
-		t.Fatal("публичный адрес резолвера принят как приватный — заход обязан остаться слепым")
+
+	var posledneye Nablyudeniye
+	var tek Sostoyanie
+	for i := 0; i < Podtverzhdeniy; i++ {
+		posledneye, _, tek = a.Zahod(context.Background(), true, false)
+		if posledneye.ZondSlep {
+			t.Fatalf("заход %d: наблюдение помечено слепым — публичный адрес резолвера больше не блокер", i)
+		}
 	}
-	if dnsZvali != 0 {
-		t.Fatal("DnsPryamoy позван с публичным адресом резолвера — не должен был")
+	if dnsZvali == 0 {
+		t.Fatal("DnsPryamoy ни разу не позван с публичным адресом резолвера — заход не спросил его напрямую")
+	}
+	if polucheno.adresResolvera != "1.1.1.1:53" || polucheno.lokalnyAdres != "203.0.113.5" {
+		t.Fatalf("DnsPryamoy получил (%q, %q), хочу (1.1.1.1:53, 203.0.113.5)", polucheno.adresResolvera, polucheno.lokalnyAdres)
+	}
+	if tek != Doma {
+		t.Fatalf("после %d подтверждений «дома» через публичный резолвер обстановка = %v, раньше висела бы в Neizvestno вечно", Podtverzhdeniy, tek)
+	}
+}
+
+// TestPrichinaSlepotyPoyavlyayetsyaPosleTryohSlepyhZahodov — правка A: слепота
+// больше не молчит вечно. Физический адаптер не находится вовсе (та же
+// беда, что доказана диагнозом: 20 заходов подряд без Doma), и после
+// PodryadDoPrichiny таких заходов подряд PrichinaSlepoty обязана назвать
+// человеческую причину — «адаптер не найден», а не молчать бесконечно.
+// Обстановка при этом остаётся НЕ Doma (безопасность цела) — тревога только
+// говорит правду о том, что автоматика бездействует.
+func TestPrichinaSlepotyPoyavlyayetsyaPosleTryohSlepyhZahodov(t *testing.T) {
+	a := &Avtorezhim{
+		Trafik:        &fakeTrafik{},
+		Zadvizhka:     NovayaZadvizhka(VneDoma),
+		TunnelPodnyat: func() bool { return true },
+		SetevoyAdres: func() (string, string, error) {
+			return "", "", errors.New("не нашёл подходящий физический адаптер")
+		},
+	}
+	for i := 0; i < PodryadDoPrichiny; i++ {
+		if got := a.PrichinaSlepoty(); got != "" {
+			t.Fatalf("заход %d: причина появилась раньше срока: %q", i, got)
+		}
+		_, _, tek := a.Zahod(context.Background(), true, false)
+		if tek == Doma {
+			t.Fatalf("заход %d: обстановка стала Doma при не найденном адаптере — защита не должна сниматься вслепую", i)
+		}
+	}
+	prichina := a.PrichinaSlepoty()
+	if prichina == "" {
+		t.Fatalf("после %d слепых заходов подряд PrichinaSlepoty молчит", PodryadDoPrichiny)
+	}
+	if prichina != prichinaAdapterNeNaiden {
+		t.Fatalf("PrichinaSlepoty() = %q, хочу %q (адаптер не найден, а не что-то другое)", prichina, prichinaAdapterNeNaiden)
+	}
+}
+
+// TestPrichinaSlepotySbrasyvayetsyaZryachimZahodom — счётчик не должен
+// копить слепоту вечно: один зрячий заход (адаптер нашёлся) обязан обнулить
+// и счётчик, и причину — иначе временная заминка сети продолжала бы пугать
+// человека даже после того, как авторежим снова всё видит.
+func TestPrichinaSlepotySbrasyvayetsyaZryachimZahodom(t *testing.T) {
+	slep := true
+	a := &Avtorezhim{
+		Dns:           fakeDns{doma: false},
+		Trafik:        &fakeTrafik{},
+		Zadvizhka:     NovayaZadvizhka(VneDoma),
+		TunnelPodnyat: func() bool { return true },
+		SetevoyAdres: func() (string, string, error) {
+			if slep {
+				return "", "", errors.New("нет адаптера")
+			}
+			return "192.168.1.192:53", "192.168.1.77", nil
+		},
+	}
+	for i := 0; i < PodryadDoPrichiny; i++ {
+		a.Zahod(context.Background(), true, false)
+	}
+	if a.PrichinaSlepoty() == "" {
+		t.Fatal("после серии слепых заходов причина должна быть выставлена — тест сломан ещё до проверки сброса")
+	}
+	slep = false
+	a.Zahod(context.Background(), true, false)
+	if got := a.PrichinaSlepoty(); got != "" {
+		t.Fatalf("после зрячего захода причина не сброшена: %q", got)
 	}
 }
