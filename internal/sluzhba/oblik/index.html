@@ -12,35 +12,34 @@
      выглядело другим продуктом (хозяин, 0.6.8: «единый дизайн ты не знаешь что
      такое»). */
   :root {
-    --fon:#0B0E13; --fon2:#11151C; --karta:#161B24; --karta-verh:#1D2430;
-    --gran:#262E3B; --gran2:#333E50;
-    --tekst:#E8EDF5; --tihiy:#93A0B4; --slabyy:#5F6B7D;
-    --akcent:#35D0A5; --akcent2:#2BA6FF; --akcent-tem:#04140F;
-    --zhdem:#F5A524; --beda:#F2555A;
+    --fon:#111310; --fon2:#0c0e0b; --karta:#191c18; --karta-verh:#21251f;
+    --gran:#2b2f29; --gran2:#3a3f37;
+    --tekst:#f0f1ec; --tihiy:#a5aba3; --slabyy:#71766f;
+    --akcent:#a8cc6b; --akcent-tem:#1a2010;
+    --zhdem:#e0a34a; --beda:#f08379; --norma:#4fbfa4;
     --shapka:56px; --nizhnyaya:84px; --taby-vysota:66px;
     /* KDim: RadiusL 26dp, RadiusM 18dp, RadiusS 12dp, DialSize 210dp, DialStroke 2dp. */
     --r-m:18px; --r-s:12px; --krug:210px;
   }
-  /* Шрифты — те же файлы, что зашиты в телефон (app/src/main/res/font/), а не
-     системные: конвертированы в woff2 и лежат рядом (oblik/*, встраивается в
-     .exe целиком через go:embed), поэтому грузятся без интернета. */
+  /* Шрифт заголовков — тот же файл, что зашит в телефон (app/src/main/res/
+     font/), а не системный: конвертирован в woff2 и лежит рядом (oblik/*,
+     встраивается в .exe целиком через go:embed), поэтому грузится без
+     интернета. Единственная кастомная гарнитура (DESIGN_SISTEMY.md §2: «одна
+     кастомная гарнитура на заголовки, с системным fallback») — Roboto Mono
+     убран, моно-роли идут системным моно-стеком. */
   @font-face {
     font-family:"Montserrat"; src:url("montserrat.woff2") format("woff2");
-    font-weight:100 900; font-style:normal; font-display:swap;
-  }
-  @font-face {
-    font-family:"Roboto Mono"; src:url("roboto_mono.woff2") format("woff2");
-    font-weight:100 900; font-style:normal; font-display:swap;
+    font-weight:400 900; font-style:normal; font-display:swap;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
   body {
     margin:0; background:var(--fon); color:var(--tekst);
-    font:15px/1.45 "Montserrat", system-ui, sans-serif;
+    font:15px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing:antialiased; overflow:hidden;
     user-select:none;
   }
-  .mono { font-family:"Roboto Mono", ui-monospace, Consolas, monospace; }
+  .mono { font-family:ui-monospace, Consolas, monospace; }
 
   /* Шапка приклеена сверху, кнопка действия — снизу, а всё, что между ними,
      прокручивается. Раньше страница просто росла вниз, и на окне 420x660
@@ -48,10 +47,13 @@
   .shapka {
     position:fixed; top:0; left:0; right:0; height:var(--shapka); z-index:3;
     display:flex; align-items:center; gap:10px; padding:0 18px;
-    background:rgba(11,13,17,.92); backdrop-filter:blur(8px);
+    background:rgba(17,19,16,.92); backdrop-filter:blur(8px);
     border-bottom:1px solid var(--gran);
   }
-  .shapka .imya { font-size:16px; font-weight:650; letter-spacing:.3px; }
+  .shapka .imya {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size:16px; font-weight:650; letter-spacing:.3px;
+  }
   .znachok { display:block; }
   .chip {
     margin-left:auto; display:flex; align-items:center; gap:7px;
@@ -59,8 +61,8 @@
     border:1px solid var(--gran); border-radius:999px; background:var(--karta);
   }
   .tochka { width:7px; height:7px; border-radius:50%; background:var(--slabyy); }
-  .chip.rabotaet .tochka { background:var(--akcent); box-shadow:0 0 8px var(--akcent); }
-  .chip.rabotaet { color:var(--akcent); border-color:rgba(53,208,165,.35); }
+  .chip.rabotaet .tochka { background:var(--norma); box-shadow:0 0 8px rgba(79,191,164,.18); }
+  .chip.rabotaet { color:var(--norma); border-color:rgba(79,191,164,.35); }
   .chip.podnimaem .tochka { background:var(--zhdem); animation:pulse 1.1s infinite; }
   .chip.podnimaem { color:var(--zhdem); }
   .chip.slomalos .tochka { background:var(--beda); }
@@ -149,7 +151,10 @@
     position:absolute; inset:0; display:flex; flex-direction:column;
     align-items:center; justify-content:center; text-align:center; padding:0 30px;
   }
-  .krug-slovo { font-size:20px; font-weight:650; letter-spacing:.2px; }
+  .krug-slovo {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size:20px; font-weight:650; letter-spacing:.2px;
+  }
   /* Слово длиннее девяти букв («подключаюсь») вылезает за окружность буквами
      по обе стороны. Резать смысл ради вёрстки не хочу, поэтому длинному слову
      даём кегль поменьше — «защищено» и «отключено» остаются крупными. */
@@ -172,22 +177,26 @@
      stend/oblik_geometriya.py — круг→подсказка обязан быть и ≤24px, и меньше
      подсказка→ключ. */
   .krug-podskazka {
-    margin-top:6px; font-family:"Roboto Mono", ui-monospace, monospace;
+    margin-top:6px; font-family:ui-monospace, Consolas, monospace;
     font-size:10px; font-weight:500; letter-spacing:1.4px; text-transform:uppercase;
     color:var(--slabyy); text-align:center;
   }
 
-  /* Медленное, мягкое дыхание свечения — не мигание. Хватает 3-4 секунд на
-     цикл, чтобы глаз не цеплялся («не вырвиглазный»). */
+  /* Медленное, мягкое дыхание — не мигание. Хватает 3-4 секунд на цикл, чтобы
+     глаз не цеплялся («не вырвиглазный»). Раньше дыхание несло ещё и
+     drop-shadow currentColor (неограниченная альфа, до 13px) — яркий цветной
+     ореол вокруг круга, ровно тот неон, что DESIGN_SISTEMY.md §1 запрещает
+     вне очень слабого (альфа ≤0.18). Убран в пользу тонкой обводки — она у
+     круга уже есть (stroke-width 2.5px), дыхание держит только opacity. */
   @keyframes krug-dyshit {
-    0%, 100% { filter:drop-shadow(0 0 3px currentColor); opacity:.75; }
-    50% { filter:drop-shadow(0 0 13px currentColor); opacity:1; }
+    0%, 100% { opacity:.75; }
+    50% { opacity:1; }
   }
   @keyframes krug-vrashaetsya { to { transform:rotate(360deg); } }
 
-  .krug-blok.rabotaet .krug-koltso { stroke:var(--akcent); color:var(--akcent);
+  .krug-blok.rabotaet .krug-koltso { stroke:var(--norma); color:var(--norma);
     animation:krug-dyshit 3.6s ease-in-out infinite; }
-  .krug-blok.rabotaet .krug-slovo { color:var(--akcent); }
+  .krug-blok.rabotaet .krug-slovo { color:var(--norma); }
   .krug-blok.podnimaem .krug-koltso { stroke:var(--zhdem); color:var(--zhdem);
     stroke-dasharray:34 220; animation:krug-vrashaetsya 2.6s linear infinite; }
   .krug-blok.podnimaem .krug-slovo { color:var(--zhdem); }
@@ -203,7 +212,7 @@
      4.5:1 для текста 11.5px), обмерено формулой относительной яркости. */
   .zagolovok-bloka {
     display:flex; align-items:center; margin:18px 13px 8px;
-    font-family:"Roboto Mono", ui-monospace, monospace;
+    font-family:ui-monospace, Consolas, monospace;
     font-size:11.5px; letter-spacing:.9px; text-transform:uppercase; color:var(--tihiy);
   }
   /* Тот же капкан, что у .perekl-ryad: явный display:flex перебивает
@@ -254,9 +263,9 @@
     position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
     background:var(--tihiy); transition:left .15s, background .15s;
   }
-  .perekl.vklyuchen { background:rgba(53,208,165,.32); }
+  .perekl.vklyuchen { background:rgba(168,204,107,.32); }
   .perekl.vklyuchen .knob { left:18px; background:var(--akcent); }
-  .perekl.ustarela { background:rgba(245,165,36,.32); }
+  .perekl.ustarela { background:rgba(224,163,74,.32); }
   .perekl.ustarela .knob { background:var(--zhdem); }
   .perekl:disabled { opacity:.55; cursor:default; }
 
@@ -267,17 +276,17 @@
     transition:border-color .15s, background .15s;
   }
   .uzel:hover:not(:disabled) { background:var(--karta-verh); border-color:var(--gran2); }
-  .uzel.vybran { border-color:rgba(53,208,165,.45); background:rgba(53,208,165,.06); }
+  .uzel.vybran { border-color:rgba(168,204,107,.45); background:rgba(168,204,107,.06); }
   .uzel.vybran .imya { color:var(--akcent); font-weight:600; }
   .uzel .signal { width:8px; height:8px; border-radius:50%; flex:none; background:var(--slabyy); }
-  .uzel .signal.bystro { background:var(--akcent); }
+  .uzel .signal.bystro { background:var(--norma); }
   .uzel .signal.sredne { background:var(--zhdem); }
-  .uzel .signal.medlenno { background:#ef8354; }
+  .uzel .signal.medlenno { background:var(--zhdem); }
   .uzel .signal.mertv { background:var(--beda); }
   .uzel .imya { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .uzel .ms {
     margin-left:auto; color:var(--tihiy); font-size:12px; font-variant-numeric:tabular-nums;
-    font-family:"Roboto Mono", ui-monospace, monospace;
+    font-family:ui-monospace, Consolas, monospace;
   }
   /* Узел с бедой (сигнал mertv, красная точка) раньше писал текст беды тем же
      серым, что и обычные мс — глазом не отличить «64 мс» от «нет ответа» без
@@ -309,10 +318,10 @@
      кнопки внизу, чтобы порядок важности остался прежним. */
   .tihaya.zovyot {
     color:var(--akcent); font-weight:600;
-    background:rgba(53,208,165,.07); border-color:rgba(53,208,165,.42);
+    background:rgba(168,204,107,.07); border-color:rgba(168,204,107,.42);
   }
   .tihaya.zovyot:hover:not(:disabled) {
-    background:rgba(53,208,165,.13); border-color:var(--akcent);
+    background:rgba(168,204,107,.13); border-color:var(--akcent);
   }
   /* В настройках .tihaya — пункты списка, а не призыв к действию: ставим их
      по левому краю, чтобы он совпал со строкой тумблера, заголовками блоков и
@@ -348,6 +357,7 @@
      телефоне (SimpleSettingsScreen.kt: Montserrat SemiBold 21sp, letter-
      spacing -0.4). Без него список из трёх кнопок ничем не подписан. */
   .zagolovok-ekrana {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
     font-weight:650; font-size:21px; letter-spacing:-.4px; color:var(--tekst);
     margin:18px 13px 6px;
   }
@@ -367,29 +377,29 @@
 
   input {
     width:100%; padding:13px 14px; border-radius:var(--r-m); border:1px solid var(--gran);
-    background:#080A0E; color:var(--tekst); font:inherit; font-size:16px; letter-spacing:2px;
+    background:var(--fon2); color:var(--tekst); font:inherit; font-size:16px; letter-spacing:2px;
     user-select:text;
   }
   input::placeholder { letter-spacing:.5px; color:var(--slabyy); }
 
   .beda {
     display:none; margin-top:12px; padding:11px 13px; border-radius:var(--r-m);
-    background:rgba(242,85,90,.08); border:1px solid rgba(242,85,90,.28);
-    color:#ffb1b1; font-size:12.5px; line-height:1.45;
+    background:rgba(240,131,121,.08); border:1px solid rgba(240,131,121,.28);
+    color:var(--beda); font-size:12.5px; line-height:1.45;
     white-space:pre-wrap; word-break:break-word; user-select:text;
   }
   .beda.vidno { display:block; }
   .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
-  .beda.vnimanie { background:rgba(245,165,36,.09); border-color:rgba(245,165,36,.3); color:#f3cf86; }
+  .beda.vnimanie { background:rgba(224,163,74,.09); border-color:rgba(224,163,74,.3); color:var(--zhdem); }
   .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:5px; }
-  .beda-sovet { color:#e8b9b9; }
+  .beda-sovet { color:var(--tihiy); }
   .beda-podrobnosti {
     display:block; margin-top:9px; padding:0; border:0; background:none;
     color:var(--tihiy); font:inherit; font-size:11.5px; text-decoration:underline;
     text-underline-offset:2px; cursor:pointer;
   }
   .beda-syroe {
-    margin-top:8px; font-family:"Roboto Mono", ui-monospace, monospace;
+    margin-top:8px; font-family:ui-monospace, Consolas, monospace;
     font-size:11px; line-height:1.45; color:var(--tihiy); word-break:break-word;
   }
   /* Минимальные данные о подписке — спокойной строкой под кругом (спека
@@ -407,14 +417,14 @@
      остальные пары «имя · значение» в окне. */
   .podpiska .srok { color:var(--tihiy); }
   .podpiska.istekaet {
-    padding:11px 13px; border-color:rgba(245,165,36,.3); background:rgba(245,165,36,.07);
+    padding:11px 13px; border-color:rgba(224,163,74,.3); background:rgba(224,163,74,.07);
   }
   .podpiska.istekaet .srok { color:var(--zhdem); }
 
   #zhurnal {
     max-height:190px; overflow:auto; margin-top:10px; padding:10px 12px;
-    background:#080A0E; border:1px solid var(--gran); border-radius:var(--r-s);
-    font:11.5px/1.45 "Roboto Mono", ui-monospace, monospace; color:var(--tihiy);
+    background:var(--fon2); border:1px solid var(--gran); border-radius:var(--r-s);
+    font:11.5px/1.45 ui-monospace, Consolas, monospace; color:var(--tihiy);
     white-space:pre-wrap; word-break:break-word; text-align:left; user-select:text;
   }
   #zhurnal::-webkit-scrollbar { width:8px; }
@@ -426,7 +436,10 @@
      затронут, но отступ обязан остаться тем же. */
   #karta-koda { margin-top:0; }
   #karta-koda .vstuplenie { font-size:13px; color:var(--tihiy); margin:8px 0 14px; line-height:1.5; }
-  #karta-koda h2 { font-size:17px; margin:0; font-weight:650; }
+  #karta-koda h2 {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size:17px; margin:0; font-weight:650;
+  }
 </style>
 </head>
 <body>
@@ -434,8 +447,8 @@
 <div class="shapka">
   <svg class="znachok" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
     <path d="M12 2.5 4.5 5.6v6.1c0 4.6 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.2 7.5-9.8V5.6L12 2.5Z"
-          stroke="#35D0A5" stroke-width="1.6" stroke-linejoin="round"/>
-    <path d="m8.6 12.1 2.4 2.4 4.4-4.6" stroke="#35D0A5" stroke-width="1.8"
+          stroke="#a8cc6b" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="m8.6 12.1 2.4 2.4 4.4-4.6" stroke="#a8cc6b" stroke-width="1.8"
           stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <span class="imya">Kelevra</span>
