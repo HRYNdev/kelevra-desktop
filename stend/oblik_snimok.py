@@ -40,6 +40,24 @@ UZLY_OTKLYUCHENO = {"gruppy": [{
         {"imya": "Финляндия 1"},
     ]}]}
 
+# 25.08: во всех сценах выше задержки узлов — 78/64/91 мс, все «bystro».
+# `sredne` (<250) и `medlenno` (≥250) не рисовались НИ РАЗУ ни на одном
+# снимке — забор геометрии их не видел, потому что их не было на входе, а не
+# потому что они были в порядке (класс беды «проверка с пустым входом
+# зеленеет»). Эта сцена нарочно кладёт все пять состояний .uzel .signal
+# разом: bystro/sredne/medlenno по задержке, mertv через "beda", и «без
+# замера» — узел вовсе без ключа zaderzhka (ровно как отдаёт статика, когда
+# ядро не работает).
+UZLY_VSE_GRADACII = {"gruppy": [{
+    "imya": "Выбор узла", "sam": False, "seychas": "Быстрый",
+    "uzly": [
+        {"imya": "Быстрый", "zaderzhka": 64},
+        {"imya": "Средний", "zaderzhka": 180},
+        {"imya": "Медленный", "zaderzhka": 420},
+        {"imya": "Мёртвый", "beda": "нет ответа"},
+        {"imya": "Без замера"},
+    ]}]}
+
 def zametki_iz_go():
     """Заметки окна — ИЗ konfig.go, а не выдуманные тут.
 
@@ -195,6 +213,12 @@ SCENY = {
     # что теперь честно отдаёт исправленная ручка.
     "21_vyklyucheno_vruchnuyu": dict(BAZA, sost="stoit", rezhim="proksi",
                                      mozhno_tun=True, zametka=""),
+    # 25.08: список узлов в остальных сценах ниже не различает sredne/medlenno
+    # (см. UZLY_VSE_GRADACII выше) — эта сцена единственная, где все пять
+    # классов .uzel .signal стоят на экране разом, и щуп геометрии
+    # (proverit_gradacii_signala) может их сравнить.
+    "24_uzly_vse_gradacii": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
+                                 zametka=ZAMETKI["ZametkaVes"], uzly=UZLY_VSE_GRADACII),
 }
 
 # Автозапуск, смена кода и журнал переехали на вкладку «Настройки» (спека
@@ -223,8 +247,10 @@ class Ruchki(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith("/api/sostoyanie"):
             return self._json(sostoyanie["tek"])
         if self.path.startswith("/api/uzly"):
-            return self._json(UZLY if sostoyanie["tek"]["sost"] == "rabotaet"
-                              else UZLY_OTKLYUCHENO)
+            tek = sostoyanie["tek"]
+            if tek["sost"] != "rabotaet":
+                return self._json(UZLY_OTKLYUCHENO)
+            return self._json(tek.get("uzly", UZLY))
         if self.path.startswith("/api/obnovlenie"):
             # Сеть на стенде намеренно недоступна (это же честное поведение
             # живой ручки без интернета, sluzhba.go: obnovlenieRuchka) —
