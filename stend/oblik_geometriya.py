@@ -35,6 +35,15 @@
       попадали на экран НИ РАЗУ, и щуп это не заметил — вход был пуст).
       Смотрим только на сцене 24_uzly_vse_gradacii — единственной, где все
       пять состояний нарисованы разом.
+  (ж) ОСЬ ПРОКРУТКИ. Круг обязан оставаться в пределах окна (0…VYSOTA по
+      вертикали) не только сразу после goto() (scrollTop=0 — это уже смотрят
+      (а)/(б) выше), но и после прокрутки .lenta до самого конца. Единственный
+      скролл несёт круг+кнопку «Включить для всех программ»+список узлов
+      разом, и круг ничем не закреплён не был — при докрутке уезжал за
+      верхний край (Вова, 25.08 19:31, дословно: «какого хуя блять у тебя
+      круг куда то съехал сука»). Ни одна проверка (а)-(е) этого не ловила:
+      все они читают rect сразу после goto(), то есть на scrollTop=0, и по
+      оси прокрутки слепы для всех 24 сцен разом.
 
     python3 stend/oblik_geometriya.py
 """
@@ -122,6 +131,34 @@ def proverit_glavnyy_ekran(str_, imya_sceny):
     return bedy
 
 
+KRUG_POSLE_PROKRUTKI_JS = """() => {
+  // Докручиваем ЕДИНСТВЕННЫЙ скролл экрана (.lenta несёт круг+кнопку+список
+  // разом) до самого конца и меряем круг ПОСЛЕ этого — ровно то положение,
+  // которого ни goto(), ни одна проверка (а)-(е) не трогают (те читают rect
+  // сразу после загрузки, на scrollTop=0).
+  const lenta = document.getElementById('lenta');
+  const el = document.querySelector('.krug-fon');
+  if (!lenta || !el) return null;
+  lenta.scrollTop = lenta.scrollHeight - lenta.clientHeight;
+  const rr = el.getBoundingClientRect();
+  if (!(rr.width > 0 || rr.height > 0)) return null;  // сцена без круга (1_kod)
+  return {top: rr.top, bottom: rr.bottom};
+}"""
+
+
+def proverit_krug_pri_prokrutke(str_, imya_sceny):
+    """(ж) Круг обязан целиком помещаться в окно (0…VYSOTA) и после прокрутки
+    .lenta до конца, не только на scrollTop=0. Допуск 1px на округление —
+    тот же, что и у остальных проверок этого забора."""
+    d = str_.evaluate(KRUG_POSLE_PROKRUTKI_JS)
+    if not d:
+        return []
+    if d["top"] < -1 or d["bottom"] > VYSOTA + 1:
+        return [f"{imya_sceny}: (ж) круг после прокрутки ленты до конца "
+                f"{d['top']:.0f}…{d['bottom']:.0f}px, а окно 0…{VYSOTA}px — круг уехал за край"]
+    return []
+
+
 SIGNAL_JS = """() => {
   const sostoyaniya = ["bystro", "sredne", "medlenno", "mertv"];
   const kakoe = (el) => sostoyaniya.find((s) => el.classList.contains(s)) || "bez_zamera";
@@ -181,6 +218,7 @@ def zamerit():
                 str_.goto(f"http://127.0.0.1:{port}/index.html")
                 str_.wait_for_timeout(700)
                 bedy = proverit_glavnyy_ekran(str_, imya_sceny)
+                bedy += proverit_krug_pri_prokrutke(str_, imya_sceny)
                 if imya_sceny == "24_uzly_vse_gradacii":
                     bedy += proverit_gradacii_signala(str_, imya_sceny)
                 znak = "🔴" if bedy else "🟢"
