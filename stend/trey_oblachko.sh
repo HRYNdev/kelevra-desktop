@@ -76,6 +76,13 @@ pochistit() {
     [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
   done
   pkill -KILL -f "$STEND" 2>/dev/null
+  # ДОЖДАТЬСЯ смерти, а не просто послать сигнал: следующий стенд в очереди
+  # `stend/vse.sh` считает чужие живые процессы и краснеет от них (26.08 так
+  # покраснел polnyy_rezhim.sh). `wait` тут работает, потому что все, кого мы
+  # убиваем, — прямые дети этой оболочки; на чужих он просто вернёт сразу.
+  for pid in "${PIDY[@]:-}"; do
+    [ -n "$pid" ] && wait "$pid" 2>/dev/null
+  done
 }
 trap pochistit EXIT
 
@@ -87,7 +94,13 @@ fi
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 pishi_relizy "app-v$VERSIYA_B"
-(cd "$RELIZY_DOM" && python3 -m http.server "$PORT" >/dev/null 2>&1 &)
+# ПРЯМЫМ ребёнком, не в подоболочке: `( … & )` отвязывает процесс (ppid=1) и
+# теряет его pid, а поймать его потом нечем — в командной строке
+# `python3 -m http.server <порт>` НЕТ ни пути стенда, ни чего-либо нашего, поэтому
+# `pkill -f "$STEND"` в pochistit по нему промахивался. 26.08 так набралось три
+# сироты, живших полчаса и державших порты, после трёх прогонов этого же стенда.
+python3 -m http.server "$PORT" --directory "$RELIZY_DOM" >/dev/null 2>&1 &
+PIDY+=("$!")
 sleep 1
 
 # zapusti_sluzhbu <имя> <KELEVRA_RELIZY> <KELEVRA_PERIOD_OBNOVLENIYA> [KELEVRA_DIR] —
