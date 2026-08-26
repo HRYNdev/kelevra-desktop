@@ -6,11 +6,39 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 )
+
+// ustanovitObnovlenie — хук, которым тычок в пузырь трея (trey_windows.go:
+// tychokVPuzyr) зовёт установку найденного обновления. Живёт без build-тега
+// (не в trey_windows.go/trey_other.go): подключение из main.go должно
+// собираться на любой платформе, а не только на Windows, где живёт сам трей.
+// nil — служба ещё не поднялась (или это стенд-сборка без main) — тогда
+// tychokVPuzyr тихо пишет в журнал и ничего не делает.
+var ustanovitObnovlenie func() (string, error)
+
+// zapustitSmenuPosleObnovleniya поднимает новую копию (уже свежую с диска)
+// после того, как sluzhba.PostavitNaydennoe заменила .exe на месте: ровно та
+// же передача смены, что уже работает у prava.Poprosit после согласия на UAC
+// (см. main.go: --smena, zhdatSmenu) — новая копия сама дожидается смерти
+// этого pid, а не гонка на фиксированной паузе. pid здесь — эта, ещё старая
+// копия, которая вот-вот уйдёт (см. sluzhba.PostavitNaydennoe).
+//
+// put приходит от вызывающего кода, а не от собственного obnovlenie.PutSebya()
+// здесь: этот хук зовётся из ЕЩЁ ЖИВОЙ старой копии уже ПОСЛЕ Postavit(), а на
+// Linux os.Executable() у такого процесса возвращает путь к переименованному
+// .old-файлу (readlink /proc/self/exe следует за inode при rename) — новая
+// копия стартовала бы от старого файла и сама себя перекачивала бы заново. См.
+// комментарий поля PerezapuskPosleObnovleniya в internal/sluzhba/sluzhba.go.
+func zapustitSmenuPosleObnovleniya(put string, pid int) error {
+	cmd := exec.Command(put, argTiho, argSmena, strconv.Itoa(pid))
+	cmd.Env = os.Environ()
+	return cmd.Start()
+}
 
 // srokProverki — сколько ждём ответа GitHub. Это время человек стоит перед
 // закрытым окном, поэтому оно короткое: не ответили — работаем как есть.
