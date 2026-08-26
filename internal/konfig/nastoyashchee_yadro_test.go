@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,18 @@ import (
 // .../repos/, и там, как назло, оказался чужой sing-box от другого стенда —
 // щуп молча сверялся не с тем бинарём и всё равно зеленел (найдено 21.08 при
 // проверке, что скрытие .stend/sing-box-linux даёт красный: не дало).
+//
+// Развилка по GOOS: под wine (stend/testy_pod_wine.sh) линуксовый ELF не
+// запускается вообще — exec падает на "executable file not found", это не
+// ядро отвергло конфиг, а щуп сверялся не с той сборкой. Windows-ядро кладётся
+// отдельно, в .stend/sing-box-windows.exe.
 func kandidatyYadra() []string {
+	if runtime.GOOS == "windows" {
+		return []string{
+			"../../.stend/dom/yadro/sing-box.exe",
+			"../../.stend/sing-box-windows.exe",
+		}
+	}
 	return []string{
 		"../../.stend/dom/yadro/sing-box",
 		"../../.stend/sing-box-linux",

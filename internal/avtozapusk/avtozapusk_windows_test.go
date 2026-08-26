@@ -9,15 +9,27 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
+// Куст, внутри которого лежит ветка автозагрузки. Есть на любой Windows.
+const kustVetki = `Software\Microsoft\Windows\CurrentVersion`
+
 // Тест трогает НАСТОЯЩУЮ пользовательскую ветку реестра — под wine это
 // песочница стенда, у человека этот тест никогда не выполняется. Чтобы не
 // оставить за собой чужой автозапуск, исходное состояние снимается и
 // возвращается назад.
+//
+// Осторожно с пропуском: недоступная ветка автозагрузки — это НЕ особенность
+// стенда, а ровно та беда, ради которой тест и написан (автозапуск молча
+// перестаёт работать у человека). Раньше здесь стоял Skip, и порча пути в
+// vetka проходила мимо всей приёмки зелёной. Пропуск оправдан только тогда,
+// когда нет самого куста CurrentVersion — то есть машина вообще не Windows.
 func vernutPosle(t *testing.T) {
 	t.Helper()
 	k, err := registry.OpenKey(registry.CURRENT_USER, vetka, registry.QUERY_VALUE)
 	if err != nil {
-		t.Skipf("ветка автозагрузки недоступна: %v", err)
+		if _, kustErr := registry.OpenKey(registry.CURRENT_USER, kustVetki, registry.QUERY_VALUE); kustErr != nil {
+			t.Skipf("нет куста %s, машина не похожа на Windows: %v", kustVetki, kustErr)
+		}
+		t.Fatalf("куст %s на месте, а ветка автозагрузки %s недоступна (%v) — автозапуск у человека работать не будет", kustVetki, vetka, err)
 	}
 	bylo, _, errCht := k.GetStringValue(Imya)
 	k.Close()
