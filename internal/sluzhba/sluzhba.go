@@ -68,6 +68,19 @@ type Sluzhba struct {
 	// /api/sostoyanie, просто без звука.
 	OblachkoObnovleniya func(versiya string)
 
+	// MetkaObnovleniya — как показать СОСТОЯНИЕ «обновление ждёт» на значке
+	// трея (cmd/kelevra/metka_obnovleniya.go: pometitObnovlenie). Отдельный
+	// хук от OblachkoObnovleniya нарочно, и вот почему: пузырь — СОБЫТИЕ,
+	// про версию он звучит ровно один раз навсегда (povestitEsliNovaya,
+	// отметка на диске), а метка — СОСТОЯНИЕ, она обязана держаться, пока
+	// обновление не поставлено. Свяжи их вместе — и после перезапуска копии
+	// (пузырь про эту версию уже сказан в прошлой жизни) значок снова
+	// выглядел бы так, будто ставить нечего, и тыкать человеку было бы не
+	// во что. Поэтому зовётся на КАЖДОЙ фоновой проверке: версия — есть
+	// находка, "" — версия и так свежая, метку снять. nil — хук не
+	// подключён (стенд-тесты внутри пакета).
+	MetkaObnovleniya func(versiya string)
+
 	// PerezapuskPosleObnovleniya — как поднять новую копию после того, как
 	// PostavitNaydennoe заменила .exe на диске: та же передача смены, что уже
 	// работает у prava.Poprosit после согласия на UAC (cmd/kelevra/main.go:
@@ -320,6 +333,15 @@ func (s *Sluzhba) ProveritObnovlenieFonom() {
 	s.zamok.Lock()
 	s.naydennoeObnovlenie = n // может стать снова nil — «версия и так свежая», это тоже правда
 	s.zamok.Unlock()
+	if s.MetkaObnovleniya != nil {
+		// СОСТОЯНИЕ, а не событие: и находку, и её исчезновение (версия и
+		// так свежая) значок обязан отразить — см. поле MetkaObnovleniya.
+		if n != nil {
+			s.MetkaObnovleniya(n.Versiya)
+		} else {
+			s.MetkaObnovleniya("")
+		}
+	}
 	if n != nil {
 		log.Printf("фоновая проверка обновления: найдена версия %s", n.Versiya)
 		s.povestitEsliNovaya(n.Versiya)
