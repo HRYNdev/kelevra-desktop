@@ -23,3 +23,14 @@ func zapustitTrey(vyhod chan<- struct{}) {}
 func pokazatOblachkoObnovleniya(versiya string) {
 	log.Printf("трей (не-Windows заглушка): пузырь про версию %s", versiya)
 }
+
+// obnovitPodskazkuTreya вне Windows рисовать негде — значка нет. Строка в
+// журнале не формальность: метка «обновление ждёт» (metka_obnovleniya.go)
+// сама по себе от платформы не зависит, и живой linux-стенд
+// (stend/trey_oblachko.sh) проверяет по этой строке главное свойство метки —
+// что она ПЕРЕЖИВАЕТ пузырь и перезапуск копии. Настоящую отрисовку значка
+// на Windows это не доказывает и не подменяет (там свой файл, свой вызов
+// Shell_NotifyIconW и свой след в журнале).
+func obnovitPodskazkuTreya() {
+	log.Printf("трей (не-Windows заглушка): подсказка значка -> %q", podskazkaTreya())
+}
