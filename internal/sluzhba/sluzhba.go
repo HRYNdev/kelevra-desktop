@@ -68,6 +68,28 @@ type Sluzhba struct {
 	// /api/sostoyanie, просто без звука.
 	OblachkoObnovleniya func(versiya string)
 
+	// PerezapuskPosleObnovleniya — как поднять новую копию после того, как
+	// PostavitNaydennoe заменила .exe на диске: та же передача смены, что уже
+	// работает у prava.Poprosit после согласия на UAC (cmd/kelevra/main.go:
+	// zapustitSmenuPosleObnovleniya, --smena, zhdatSmenu) — новая копия сама
+	// дожидается смерти этого pid, а не гонка на фиксированной паузе.
+	// Подключается снаружи из main.go по тому же принципу, что и
+	// OblachkoObnovleniya выше: пакет sluzhba не порождает процессы сам. nil —
+	// хук не подключён (стенд-тесты внутри этого пакета); тогда установка всё
+	// равно считается удавшейся (файл на диске уже новый), но эта копия себя
+	// НЕ гасит — иначе человек остался бы вообще без работающей копии.
+	//
+	// put — путь к новому .exe, УЖЕ разрешённый до Postavit(), а не то, что
+	// хук получил бы, спроси он obnovlenie.PutSebya() заново сам: на Linux
+	// os.Executable() у ещё живого (старого) процесса после Postavit()
+	// возвращает путь ПЕРЕИМЕНОВАННОГО файла (readlink /proc/self/exe следует
+	// за inode при rename) — замерено живьём при разборе stend/
+	// obnovlenie_postavit.sh: вторая копия PutSebya() отдавала «...Kelevra.old»,
+	// и новая копия лишний раз сама себя перекачивала поверх уже поставленной
+	// версии, прежде чем встать правильно. Тот же put, что уже использован для
+	// самого Postavit(), snимает вопрос совсем — его и передаём.
+	PerezapuskPosleObnovleniya func(put string, pid int) error
+
 	zamok      sync.Mutex
 	svedeniya  *podpiska.Svedeniya
 	klyuch     string
@@ -84,6 +106,10 @@ type Sluzhba struct {
 	// idetProverkaObnovleniya — не даёт фоновому тику и толчку от открытия
 	// окна другой копии (obnovlenieProveritRuchka) спросить GitHub разом.
 	idetProverkaObnovleniya bool
+	// idetUstanovkaObnovleniya — свой замок, отдельный от idetProverkaObnovleniya
+	// выше: второй тычок в пузырь, пока первый ещё качает найденную сборку, не
+	// должен звать obnovlenie.Postavit второй раз (см. PostavitNaydennoe).
+	idetUstanovkaObnovleniya bool
 
 	// Авторежим (переключение защиты по смене сети) живёт под своим замком,
 	// отдельным от zamok выше: запуск/остановка служителя не должны ждать
@@ -194,6 +220,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/zhurnal", s.zhurnal)
 	m.HandleFunc(pref+"/api/obnovlenie", s.obnovlenieRuchka)
 	m.HandleFunc(pref+"/api/obnovlenie_proverit", s.obnovlenieProveritRuchka)
+	m.HandleFunc(pref+"/api/obnovlenie_postavit", s.obnovleniePostavitRuchka)
 	return m
 }
 
@@ -201,6 +228,12 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 // обновление» в окне. Короче обычного (obnovlenie идёт в фоне при старте) —
 // тут человек стоит и смотрит на подпись «Проверяем…».
 const srokProverkiObnovleniya = 6 * time.Second
+
+// srokUstanovkiObnovleniya — сколько ждём скачивание найденной сборки по
+// тычку в пузырь (та же величина, что и у холодного обновления в
+// cmd/kelevra/obnovlenie.go: srokZagruzki, ~8 МБ по обычной сети укладываются
+// с большим запасом).
+const srokUstanovkiObnovleniya = 3 * time.Minute
 
 type otvetObnovleniya struct {
 	Tekushchaya string `json:"tekushchaya"`
@@ -318,6 +351,94 @@ func (s *Sluzhba) povestitEsliNovaya(versiya string) {
 	if s.OblachkoObnovleniya != nil {
 		s.OblachkoObnovleniya(versiya)
 	}
+}
+
+// obnovleniePostavitRuchka — тычок в пузырь трея (cmd/kelevra/trey_windows.go:
+// tychokVPuzyr) либо ручной путь к тому же самому: заказ человека 26.08 —
+// «приходит обновление и ты тыкаешь, и всё», а не открывать окно и жать
+// «Проверить обновление» самому. Только POST: это действие, а не чтение.
+func (s *Sluzhba) obnovleniePostavitRuchka(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		otdat(w, nil, fmt.Errorf("только POST"))
+		return
+	}
+	versiya, err := s.PostavitNaydennoe()
+	if err != nil {
+		otdat(w, nil, err)
+		return
+	}
+	otdat(w, map[string]any{"gotovo": true, "versiya": versiya}, nil)
+}
+
+// PostavitNaydennoe скачивает и ставит НАЙДЕННУЮ фоновой проверкой сборку
+// (naydennoeObnovlenie) — в отличие от ProveritObnovlenieFonom, который
+// только запоминает находку и никогда сам не качает и не ставит (см. её
+// комментарий). Тычок человека — вот то согласие, которого не хватало.
+//
+// idetUstanovkaObnovleniya под тем же zamok, что и naydennoeObnovlenie: второй
+// тычок, пока первый ещё качает, тихо получает «установка уже идёт» вместо
+// того, чтобы звать obnovlenie.Postavit второй раз (риск наложения записи —
+// см. комментарий Postavit про CreateTemp на процесс).
+//
+// Любая неудача — ничего не гасим и не трогаем: эта копия продолжает жить
+// старой версией, человек может нажать «Проверить обновление» и попробовать
+// снова. Успех — уходим тем же путём, каким уходит polnayaZashchita после
+// согласия на UAC: гасим своё ядро, поднимаем смену (PerezapuskPosleObnovleniya)
+// и завершаем процесс, — с той же паузой ~300мс, чтобы HTTP-ответ успел уйти.
+func (s *Sluzhba) PostavitNaydennoe() (string, error) {
+	s.zamok.Lock()
+	if s.naydennoeObnovlenie == nil {
+		s.zamok.Unlock()
+		return "", fmt.Errorf("обновления нет: сперва проверка")
+	}
+	if s.idetUstanovkaObnovleniya {
+		s.zamok.Unlock()
+		return "", fmt.Errorf("установка уже идёт")
+	}
+	n := *s.naydennoeObnovlenie
+	s.idetUstanovkaObnovleniya = true
+	s.zamok.Unlock()
+	defer func() {
+		s.zamok.Lock()
+		s.idetUstanovkaObnovleniya = false
+		s.zamok.Unlock()
+	}()
+
+	put, err := obnovlenie.PutSebya()
+	if err != nil {
+		log.Printf("установка обновления по тычку: не знаю, где лежу: %v", err)
+		return "", fmt.Errorf("не знаю, где лежу: %w", err)
+	}
+	ctx, otmena := context.WithTimeout(context.Background(), srokUstanovkiObnovleniya)
+	defer otmena()
+	if err := obnovlenie.Postavit(ctx, &http.Client{Timeout: srokUstanovkiObnovleniya}, n, put); err != nil {
+		log.Printf("установка обновления по тычку: не вышло (%v), работаю старой версией", err)
+		return "", fmt.Errorf("не поставилось: %w", err)
+	}
+	log.Printf("установка обновления по тычку: версия %s встала на диск", n.Versiya)
+
+	pid := os.Getpid()
+	go func() {
+		time.Sleep(300 * time.Millisecond) // дать HTTP-ответу уйти в окно/пузырь
+		if s.PerezapuskPosleObnovleniya == nil {
+			// Не гасим себя: без хука новую копию поднять некому, и человек
+			// остался бы вообще без работающей защиты. Файл на диске уже
+			// новый — свежая версия встанет со следующего обычного запуска.
+			log.Printf("установка обновления: хук перезапуска не подключён, эта копия продолжает работать старым процессом")
+			return
+		}
+		_ = s.Yadro.Ostanovit() // ядро старой копии гасим сами, как и polnayaZashchita
+		if err := s.PerezapuskPosleObnovleniya(put, pid); err != nil {
+			log.Printf("установка обновления: не поднял новую копию: %v", err)
+			return
+		}
+		if s.vyhod != nil {
+			s.vyhod()
+			return
+		}
+		os.Exit(0)
+	}()
+	return n.Versiya, nil
 }
 
 // SleditZaObnovleniem крутит ProveritObnovlenieFonom по расписанию, пока
