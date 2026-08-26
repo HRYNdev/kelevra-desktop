@@ -16,6 +16,7 @@ import (
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
+	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
 	"github.com/HRYNdev/kelevra-desktop/internal/sluzhba"
@@ -72,16 +73,19 @@ func main() {
 	// перезагрузка Windows, пропадание питания) не даёт службе дойти до
 	// proksi.Snyat() в конце zapustitSluzhbu — реестр остаётся с нашим прокси
 	// висеть без ядра за ним, и у человека НЕ грузится ни один сайт, пока он
-	// сам не откроет Kelevra и не выйдет аккуратно. До obnovitsya(): мёртвый
-	// системный прокси рубит и саму проверку обновления.
+	// сам не откроет Kelevra и не выйдет аккуратно.
 	snyatOsirotevshiySled(papka)
 
-	// Свежесть — забота приложения, а не человека: иначе каждая новая сборка
-	// это моё письмо со ссылкой и его ручное «скачай заново». Служба сама
-	// обновление не проверяет: её поднимает уже проверенная копия.
-	if obnovitsya() {
-		return
-	}
+	// Свежесть больше не подменяет .exe САМА на холодном старте (заказ Вовы
+	// 26.08: «просто приходит обновление и ты тыкаешь, а не автоматом» —
+	// раньше здесь стоял obnovitsya(), который качал и ставил новую сборку
+	// молча, без единого клика, и человек это «автоматом» не видел никогда:
+	// копия успевала стать свежей раньше, чем он моргал). Находка и предложение
+	// — теперь дело службы сразу после подъёма (internal/sluzhba.
+	// SleditZaObnovleniem: первая проверка не ждёт периода), установка —
+	// только по тычку человека в пузырь трея (PostavitNaydennoe). Здесь
+	// остаётся только уборка ХВОСТА прошлого обновления.
+	ubratHvostProshlogoObnovleniya()
 
 	// --smena <pid> — эта копия только что повышена через UAC из
 	// polnayaZashchita: старая копия (тот самый pid) ещё может быть жива и
@@ -250,6 +254,21 @@ func snyatOsirotevshiySled(papka string) {
 	}
 	log.Printf("прошлый запуск умер жёстко и не снял системный прокси (%s), снимаю сам", adres)
 	proksi.Snyat()
+}
+
+// ubratHvostProshlogoObnovleniya убирает <имя>.old, оставшийся от прошлого
+// тычка в пузырь (obnovlenie.Postavit переименовывает старый файл, а не
+// удаляет — пока он был запущен, удалить было нельзя). Раньше эту же строку
+// звал obnovitsya() на каждом холодном старте попутно со своей автоматической
+// подменой .exe (см. её комментарий в main()); теперь это единственное, что
+// здесь осталось от того пути — тихо, без сети и не блокируя запуск.
+func ubratHvostProshlogoObnovleniya() {
+	put, err := obnovlenie.PutSebya()
+	if err != nil {
+		log.Printf("уборка хвоста обновления: не знаю, где лежу: %v", err)
+		return
+	}
+	obnovlenie.UbratHvost(put)
 }
 
 // estArg — есть ли такой флаг среди os.Args.

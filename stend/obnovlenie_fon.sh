@@ -144,26 +144,28 @@ zhiva() { kill -0 "$1" 2>/dev/null; } # zhiva <pid>
 echo "── площадка готова: версия сборки $STARAYA_VERSIYA, поддельный GitHub на 127.0.0.1:$PORT отдаёт app-v$NOVAYA_VERSIYA ──"
 
 # =============================================================================
-# сцена а) тикер сам, БЕЗ единого клика человека, находит обновление и кладёт
-# его в /api/sostoyanie — тем же полем, каким index.html показывает ручную
-# кнопку «Проверить обновление» (podpisObnovleniya, oblik/index.html).
-# Первая проверка не сразу: до истечения периода поле обязано быть пустым.
+# сцена а) БЕЗ единого клика человека и БЕЗ ожидания тика находит обновление и
+# кладёт его в /api/sostoyanie — тем же полем, каким index.html показывает
+# ручную кнопку «Проверить обновление» (podpisObnovleniya, oblik/index.html).
+# Первая проверка — СРАЗУ при старте (заказ Вовы 26.08: «приходит само»), не
+# ждёт периода тикера: период тут нарочно огромный (1ч), чтобы доказать —
+# находка пришла от немедленной первой проверки, а не от совпавшего тика.
 # =============================================================================
 [ "$KONTROL" = "a" ] && pishi_relizy "app-v$STARAYA_VERSIYA" # порча: GitHub «отдаёт» ту же версию — обновляться не на что
-zapusti_sluzhbu a "http://127.0.0.1:$PORT/relizy.json" "600ms"
+zapusti_sluzhbu a "http://127.0.0.1:$PORT/relizy.json" "1h"
 ADR_A=$ADR; PID_A=$PID_SLUZHBY
-DO_TIKA=$(sostoyanie "$ADR_A" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("novaya_versiya_dostupna",""))' 2>/dev/null)
-if [ -n "$DO_TIKA" ]; then
-  past "фон находит обновление сам" "до первого тика (период 600мс) поле пустое" "уже заполнено сразу после старта: «$DO_TIKA» — «не сразу» не соблюдается"
-fi
-sleep 1.3
-POSLE_TIKA=$(sostoyanie "$ADR_A" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("novaya_versiya_dostupna",""))' 2>/dev/null)
+NAYDENO_A=""
+for _ in $(seq 1 20); do
+  NAYDENO_A=$(sostoyanie "$ADR_A" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("novaya_versiya_dostupna",""))' 2>/dev/null)
+  [ "$NAYDENO_A" = "$NOVAYA_VERSIYA" ] && break
+  sleep 0.25
+done
 [ "$KONTROL" = "a" ] && pishi_relizy "app-v$NOVAYA_VERSIYA" # откат порчи для следующих сцен, если сцена уже провалилась выше
-if [ "$POSLE_TIKA" != "$NOVAYA_VERSIYA" ]; then
-  past "фон находит обновление сам" "после тика novaya_versiya_dostupna == $NOVAYA_VERSIYA" \
-    "получил «$POSLE_TIKA»" "$(cat "$STEND/sluzhba_a.log")"
+if [ "$NAYDENO_A" != "$NOVAYA_VERSIYA" ]; then
+  past "фон находит обновление сразу при старте" "novaya_versiya_dostupna == $NOVAYA_VERSIYA в первые секунды (период сам — 1ч)" \
+    "получил «$NAYDENO_A»" "$(cat "$STEND/sluzhba_a.log")"
 fi
-shag "фон находит обновление сам" "до тика поле пустое, после тика — «$POSLE_TIKA»" "человек увидит находку, даже ничего не нажимая"
+shag "фон находит обновление сразу при старте" "novaya_versiya_dostupna стало «$NAYDENO_A» без ожидания тика (период 1ч)" "человек увидит находку в первые секунды, даже ничего не нажимая"
 kill -KILL "$PID_A" 2>/dev/null; wait "$PID_A" 2>/dev/null
 
 # =============================================================================
