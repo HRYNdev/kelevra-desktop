@@ -39,6 +39,19 @@
 // internal/yadro/uzly.go:GruppyStatik. Поведение замера каждого узла
 // управляется файлом zamer_scen.json в той же папке (см. zamerScen ниже) —
 // стенд переписывает его между сценами без перезапуска процесса.
+//
+// Четвёртое применение — stend/vybor_uzla.sh (клик по узлу в списке «Выбор
+// узла», ручка /api/vybrat, internal/sluzhba/sluzhba.go:vybrat, в ядре —
+// internal/yadro/uzly.go:Vybrat, PUT /proxies/<группа> {"name":"<узел>"}).
+// Настоящий Clash API держит текущий выбор группы (`now`) в памяти и
+// проверяет, что запрошенный узел вообще входит в группу (`all`); это лже-ядро
+// повторяет обе черты — vybratNow ниже и проверку в proxiesVybrat — иначе
+// GET /proxies после переключения продолжал бы врать дефолтом из config.json,
+// а стенд не смог бы поймать «сервер сказал 200, но узел не переключился».
+// vybrat_scen.json в той же папке даёт две порчи по заказу стенда:
+// «ignorirovat» — принять запрос (204), но не применить его (тихий баг живого
+// Clash API), «propustit_proverku» — принять любой узел, даже не входящий в
+// группу (баг противоположного рода — ядро согласилось на мусор).
 package main
 
 import (
@@ -46,6 +59,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -73,6 +87,32 @@ func chitatZamerScen() zamerScen {
 	_ = json.Unmarshal(b, &s)
 	return s
 }
+
+// vybratScen — порча PUT /proxies/<группа> по заказу stend/vybor_uzla.sh,
+// читается заново на каждый запрос (без перезапуска процесса), тем же
+// приёмом, что chitatZamerScen.
+type vybratScen struct {
+	Ignorirovat     bool `json:"ignorirovat"`        // принять запрос, но не менять vybratNow (тихий баг)
+	PropustitProver bool `json:"propustit_proverku"` // принять узел, даже не входящий в группу
+}
+
+func chitatVybratScen() vybratScen {
+	var s vybratScen
+	b, err := os.ReadFile("vybrat_scen.json")
+	if err != nil {
+		return s
+	}
+	_ = json.Unmarshal(b, &s)
+	return s
+}
+
+// vybratNow — что реально выбрано в каждой группе прямо сейчас, поверх
+// default из config.json. Пусто, пока PUT ни разу не приходил, — тогда
+// proxiesSpisok берёт o.Default, как настоящее ядро на старте.
+var (
+	vybratMu  sync.Mutex
+	vybratNow = map[string]string{}
+)
 
 func main() {
 	if _, err := os.Stat(markerTiho); err == nil {
@@ -103,6 +143,7 @@ func sluzhit() {
 	})
 	mux.HandleFunc("GET /proxies", proxiesSpisok)
 	mux.HandleFunc("GET /proxies/{name}/delay", proxiesDelay)
+	mux.HandleFunc("PUT /proxies/{name}", proxiesVybrat)
 	if err := http.ListenAndServe(clashAdres, mux); err != nil {
 		fmt.Fprintln(os.Stderr, "лже-ядро: не поднял Clash API:", err)
 		os.Exit(1)
@@ -137,11 +178,16 @@ func proxiesSpisok(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"message": "лже-ядро: config.json битый: " + err.Error()})
 		return
 	}
+	vybratMu.Lock()
+	defer vybratMu.Unlock()
 	proxies := make(map[string]any, len(d.Outbounds))
 	for _, o := range d.Outbounds {
 		seychas := o.Default
 		if seychas == "" && len(o.Outbounds) > 0 {
 			seychas = o.Outbounds[0]
+		}
+		if v, est := vybratNow[o.Tag]; est {
+			seychas = v
 		}
 		vse := o.Outbounds
 		if vse == nil {
@@ -194,4 +240,68 @@ func proxiesDelay(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]int{"delay": d})
+}
+
+// proxiesVybrat отвечает на PUT /proxies/<группа> — переключение узла
+// (Vybrat, internal/yadro/uzly.go:106-129). Настоящий Clash API отказывает
+// (>=400), если группы нет или запрошенный узел не входит в её `all`; при
+// успехе меняет `now`, который потом отдаёт GET /proxies. Обе черты нужны
+// stend/vybor_uzla.sh: без проверки членства узел, которого больше нет в
+// профиле, «переключился» бы молча; без запоминания `now` стенд не смог бы
+// увидеть, что переключение и правда случилось, а не просто ответило 200.
+func proxiesVybrat(w http.ResponseWriter, r *http.Request) {
+	gruppa := r.PathValue("name")
+	var telo struct {
+		Uzel string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&telo); err != nil || telo.Uzel == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "лже-ядро: тело без имени узла"})
+		return
+	}
+	b, err := os.ReadFile("config.json")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "лже-ядро: не прочитал config.json: " + err.Error()})
+		return
+	}
+	var d struct {
+		Outbounds []outboundCfg `json:"outbounds"`
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "лже-ядро: config.json битый: " + err.Error()})
+		return
+	}
+	scen := chitatVybratScen()
+	var naydenaGruppa bool
+	var vhodit bool
+	for _, o := range d.Outbounds {
+		if o.Tag != gruppa {
+			continue
+		}
+		naydenaGruppa = true
+		for _, n := range o.Outbounds {
+			if n == telo.Uzel {
+				vhodit = true
+				break
+			}
+		}
+	}
+	if !naydenaGruppa {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "лже-ядро: нет такой группы: " + gruppa})
+		return
+	}
+	if !vhodit && !scen.PropustitProver {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "лже-ядро: узел «" + telo.Uzel + "» не входит в группу «" + gruppa + "»"})
+		return
+	}
+	if !scen.Ignorirovat {
+		vybratMu.Lock()
+		vybratNow[gruppa] = telo.Uzel
+		vybratMu.Unlock()
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
