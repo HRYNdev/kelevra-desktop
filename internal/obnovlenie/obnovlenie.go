@@ -36,6 +36,17 @@ const SpisokReliza = "https://api.github.com/repos/HRYNdev/kelevra-desktop/relea
 // PrefiksPrilozheniya — метка релизов самого приложения.
 const PrefiksPrilozheniya = "app-v"
 
+// PeriodFonovoyProverki — как часто уже работающая (не только что стартовавшая)
+// копия сама спрашивает GitHub о новой версии.
+//
+// obnovitsya() (cmd/kelevra/obnovlenie.go) зовётся РОВНО ОДИН РАЗ — на
+// холодном старте переднего процесса. Копия, которую человек не закрывал
+// днями (обычный режим работы: свернул в трей и забыл), эту проверку не
+// проходит больше никогда — 0.6.23 и 0.6.24 разошлись 0 раз именно поэтому.
+// Раз в несколько часов достаточно: обновления выходят не каждый день, а
+// более частый опрос не даёт ничего, кроме лишней нагрузки на GitHub API.
+const PeriodFonovoyProverki = 4 * time.Hour
+
 // ImyaFayla — как называется наша сборка внутри релиза.
 const ImyaFayla = "Kelevra.exe"
 
