@@ -293,6 +293,12 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	if err != nil {
 		umeret(putZhurnala, "Kelevra не смогла подготовить свои файлы", err)
 	}
+	// Хук подключается тут, а не живёт внутри internal/sluzhba: пакет sluzhba
+	// про трей и Windows ничего не знает (см. комментарий поля). На Windows
+	// это настоящий пузырь (trey_windows.go), на остальных платформах — след
+	// в журнале для стенда (trey_other.go); обе реализации лежат в одном
+	// пакете main, поэтому здесь имя одно и то же независимо от ОС.
+	s.OblachkoObnovleniya = pokazatOblachkoObnovleniya
 	slushatel, url, err := s.Slushat()
 	if err != nil {
 		umeret(putZhurnala, "Kelevra не смогла занять локальный порт (обычно это фаервол или антивирус)", err)

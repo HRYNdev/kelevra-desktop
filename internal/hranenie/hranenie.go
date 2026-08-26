@@ -80,6 +80,15 @@ type Nastroyki struct {
 	// см. konfig.zapomnitVybor) — но ЭТО хранилище живёт и когда ядро ещё не
 	// запускалось ни разу: без него выбор «до Подключить» был бы декорацией.
 	Uzly map[string]string `json:"uzly,omitempty"`
+	// ObyavlennoeObnovlenie — версия, про которую фоновая проверка уже
+	// показала пузырь в трее (internal/sluzhba.ProveritObnovlenieFonom).
+	// На диске, а не только в памяти процесса: копия висит в трее неделями и
+	// её могут перезапустить (в том числе само обновление себя, см.
+	// cmd/kelevra/obnovlenie.go) — перезапуск не повод сказать про ТУ ЖЕ
+	// версию ещё раз, человек её уже видел. Новая, ещё не объявленная версия
+	// (строка не совпадает) при этом обязана прозвучать заново — поле не
+	// запирает уведомления навсегда, а помнит только последнюю названную.
+	ObyavlennoeObnovlenie string `json:"obyavlennoe_obnovlenie,omitempty"`
 }
 
 var zamok sync.Mutex

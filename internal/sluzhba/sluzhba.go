@@ -59,6 +59,15 @@ type Sluzhba struct {
 	// живого ядра. По умолчанию nil — PodnyatZashchitu зовёт s.Yadro.Zapustit.
 	zapustitYadro func(context.Context) error
 
+	// OblachkoObnovleniya — как сказать о находке пузырём в трее (cmd/kelevra/
+	// trey_windows.go: pokazatOblachkoObnovleniya), подключается снаружи из
+	// main.go: пакет sluzhba про Windows-трей ничего не знает и знать не
+	// должен (см. шапку файла — окно и логика разведены нарочно). nil —
+	// сборка вызывающего кода не подключила хук (например, стенд-тесты
+	// внутри этого пакета) — тогда находка всё равно видна в
+	// /api/sostoyanie, просто без звука.
+	OblachkoObnovleniya func(versiya string)
+
 	zamok      sync.Mutex
 	svedeniya  *podpiska.Svedeniya
 	klyuch     string
@@ -280,6 +289,34 @@ func (s *Sluzhba) ProveritObnovlenieFonom() {
 	s.zamok.Unlock()
 	if n != nil {
 		log.Printf("фоновая проверка обновления: найдена версия %s", n.Versiya)
+		s.povestitEsliNovaya(n.Versiya)
+	}
+}
+
+// povestitEsliNovaya решает, стоит ли беспокоить человека пузырём в трее.
+//
+// ГОВОРИМ РОВНО ОДИН РАЗ НА ВЕРСИЮ. Тик крутится раз в несколько часов
+// (SleditZaObnovleniem) и без этой проверки копия, которая молча висит в
+// трее сутками, повторяла бы один и тот же пузырь на каждом тике — хозяин
+// продукта 26.08 ругался матом именно на повторяющиеся уведомления.
+//
+// Отметка хранится на диске (hranenie.Nastroyki.ObyavlennoeObnovlenie), не
+// только в памяти процесса: перезапуск НЕ повод сказать заново про версию,
+// про которую уже сказали в прошлом запуске — само обновление умеет
+// перезапускать себя (cmd/kelevra/obnovlenie.go), а человек может закрыть и
+// снова открыть приложение вручную; ни то ни другое не значит, что он забыл
+// уже увиденный пузырь. Вышла версия ЕЩЁ новее — строка не совпадёт, и
+// объявление придёт снова: каждая новая версия имеет право прозвучать один раз.
+func (s *Sluzhba) povestitEsliNovaya(versiya string) {
+	if s.Nastroyki.ObyavlennoeObnovlenie == versiya {
+		return
+	}
+	s.Nastroyki.ObyavlennoeObnovlenie = versiya
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("не сохранил отметку об объявленном обновлении: %v", err)
+	}
+	if s.OblachkoObnovleniya != nil {
+		s.OblachkoObnovleniya(versiya)
 	}
 }
 

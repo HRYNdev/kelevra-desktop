@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -73,11 +74,15 @@ const (
 	wmTreyIkonka    = wmApp + 1 // наше сообщение: несёт его Shell_NotifyIconW
 
 	nimAdd    = 0
+	nimModify = 1
 	nimDelete = 2
 
 	nifMessage = 0x00000001
 	nifIcon    = 0x00000002
 	nifTip     = 0x00000004
+	nifInfo    = 0x00000010
+
+	niifInfo = 0x00000001 // NIIF_INFO — обычный (не «варнинг», не «ошибка») значок пузыря
 
 	mfString       = 0x00000000
 	tpmLeftAlign   = 0x0000
@@ -91,6 +96,17 @@ const (
 	idMenuVyhod  = 1002
 
 	trayIconID = 1
+)
+
+// treyHwnd — окно трея, которое видно ЛЮБОЙ горутине, не только той, что
+// крутит цикл сообщений. pokazatOblachkoObnovleniya зовётся из совсем другой
+// горутины (фоновая проверка обновления, internal/sluzhba), а Shell_NotifyIconW
+// звать с чужого потока можно — она не рисует ничего сама, а лишь пересылает
+// данные оболочке, вся синхронизация внутри неё самой (см. MSDN). 0 — трей
+// ещё не поднялся или уже погас; тогда пузырю показывать некуда.
+var (
+	treyZamok sync.Mutex
+	treyHwnd  syscall.Handle
 )
 
 // hwndMessage — HWND_MESSAGE, псевдо-родитель для окна, которое не рисуется
@@ -246,6 +262,18 @@ func zapustitTrey(vyhod chan<- struct{}) {
 	hIcon := sobratZnachokTreya()
 	dobavitZnachokTreya(hwnd, hIcon)
 
+	// Окно готово принимать Shell_NotifyIconW(NIM_MODIFY) — публикуем hwnd
+	// для pokazatOblachkoObnovleniya (её могут позвать в любой момент после
+	// этой строки, из другой горутины).
+	treyZamok.Lock()
+	treyHwnd = hwnd
+	treyZamok.Unlock()
+	defer func() {
+		treyZamok.Lock()
+		treyHwnd = 0 // окно вот-вот умрёт вместе с процессом — пузырю больше некуда
+		treyZamok.Unlock()
+	}()
+
 	// Цикл сообщений: живёт, пока не придёт WM_QUIT (шлёт его только наш
 	// собственный обработчик «Выход»/WM_DESTROY выше).
 	var m msgT
@@ -258,6 +286,40 @@ func zapustitTrey(vyhod chan<- struct{}) {
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	log.Printf("трей: цикл сообщений завершён")
+}
+
+// pokazatOblachkoObnovleniya всплывает пузырём в трее, когда фоновая
+// проверка (internal/sluzhba.ProveritObnovlenieFonom) нашла версию новее
+// нынешней. Это единственный способ, которым уже свёрнутая в трей копия
+// говорит человеку «вышло обновление» — раньше находка молча ждала в
+// /api/sostoyanie, пока кто-то сам не откроет окно (диагноз в
+// stend/obnovlenie_fon.sh, шапка файла). Ставить или качать что-либо тут
+// нельзя (задача прямо запрещает): текст только зовёт нажать «Проверить
+// обновление» в окне — саму установку делает человек своей рукой.
+//
+// Подключается из main.go (s.OblachkoObnovleniya = pokazatOblachkoObnovleniya)
+// — internal/sluzhba про трей не знает ничего, см. комментарий поля.
+func pokazatOblachkoObnovleniya(versiya string) {
+	treyZamok.Lock()
+	hwnd := treyHwnd
+	treyZamok.Unlock()
+	if hwnd == 0 {
+		// Трей ещё не поднялся (или уже погас) — сказать некому, а падать
+		// из-за этого служба с поднятой защитой не имеет права.
+		log.Printf("трей: пузырь про версию %s не показан — окно трея не поднято", versiya)
+		return
+	}
+	var d notifyIconDataW
+	d.cbSize = uint32(unsafe.Sizeof(d))
+	d.hWnd = hwnd
+	d.uID = trayIconID
+	d.uFlags = nifInfo
+	d.dwInfoFlags = niifInfo
+	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra: доступно обновление")
+	kopirovatStrokuUTF16(d.szInfo[:], fmt.Sprintf(
+		"Вышла версия %s. Откройте Kelevra и нажмите «Проверить обновление», чтобы поставить её.", versiya))
+	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
+	log.Printf("трей: пузырь про версию %s -> Shell_NotifyIconW(NIM_MODIFY) = %v", versiya, r != 0)
 }
 
 // sobratZnachokTreya делает HICON из znachok.ico настоящим
