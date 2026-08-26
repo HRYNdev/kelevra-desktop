@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -69,13 +70,22 @@ const (
 	wmCommand       = 0x0111
 	wmRButtonUp     = 0x0205
 	wmLButtonDblClk = 0x0203
+	wmContextMenu   = 0x007B
 	wmNull          = 0x0000
 	wmApp           = 0x8000
 	wmTreyIkonka    = wmApp + 1 // наше сообщение: несёт его Shell_NotifyIconW
 
-	nimAdd    = 0
-	nimModify = 1
-	nimDelete = 2
+	// ninSelect/ninBalloonUserClick — сообщения, которые оболочка шлёт только
+	// начиная с NOTIFYICON_VERSION 3 (см. nastroitVersiyuTreya). Без
+	// Shell_NotifyIconW(NIM_SETVERSION) их не будет вовсе — оболочка всегда
+	// молчит версией 0, где есть только «сырые» WM_*, но не NIN_BALLOONUSERCLICK.
+	ninSelect           = 0x0400 // WM_USER — одиночный клик/выбор значка
+	ninBalloonUserClick = 0x0405 // WM_USER+5 — клик по самому пузырю уведомления
+
+	nimAdd        = 0
+	nimModify     = 1
+	nimDelete     = 2
+	nimSetVersion = 4
 
 	nifMessage = 0x00000001
 	nifIcon    = 0x00000002
@@ -114,6 +124,49 @@ var (
 // от меню, а не видимое окно. ^uintptr(2) — это -3 в дополнительном коде,
 // портируемо на любую разрядность uintptr (в этом репозитории — всегда 64-бит).
 var hwndMessage = ^uintptr(2)
+
+// treyPovtorZamok/poslednyeOtkrytie/poslednyeMenu — защита от повтора
+// (26.08): с версией трея 3 (nastroitVersiyuTreya) одно и то же движение
+// мыши может прийти ДВУМЯ сообщениями сразу — NIN_SELECT и WM_LBUTTONDBLCLK
+// для открытия, WM_CONTEXTMENU и WM_RBUTTONUP для меню, — и без защиты от
+// повтора вернулась бы беда 23.08 «два окна поверх друг друга», только
+// теперь от одного клика мышью, а не от гонки процессов.
+var (
+	treyPovtorZamok   sync.Mutex
+	poslednyeOtkrytie time.Time
+	poslednyeMenu     time.Time
+)
+
+const periodPovtoraTreya = 700 * time.Millisecond
+
+// povtorZaschita — true, только если с прошлого срабатывания ЭТОГО же
+// действия (poslednee) прошло не меньше periodPovtoraTreya; заодно
+// обновляет отметку, так что вызов не идемпотентен — зови ровно один раз на
+// попытку сработать.
+func povtorZaschita(poslednee *time.Time) bool {
+	treyPovtorZamok.Lock()
+	defer treyPovtorZamok.Unlock()
+	teper := time.Now()
+	if teper.Sub(*poslednee) < periodPovtoraTreya {
+		return false
+	}
+	*poslednee = teper
+	return true
+}
+
+func otkrytOknoIzTreyaOdnazhdy() {
+	if !povtorZaschita(&poslednyeOtkrytie) {
+		return
+	}
+	otkrytOknoIzTreya()
+}
+
+func pokazatMenuTreyaOdnazhdy(hwnd syscall.Handle) {
+	if !povtorZaschita(&poslednyeMenu) {
+		return
+	}
+	pokazatMenuTreya(hwnd)
+}
 
 type pointT struct{ x, y int32 }
 
@@ -197,11 +250,22 @@ func zapustitTrey(vyhod chan<- struct{}) {
 	wndProc = func(hwnd, msg, wparam, lparam uintptr) uintptr {
 		switch uint32(msg) {
 		case wmTreyIkonka:
-			switch uint32(lparam) {
+			// & 0xffff, а не голый uint32(lparam): работает и для версии 0
+			// трея (значение уже помещается в младшее слово целиком), и для
+			// версии 3 (nastroitVersiyuTreya) — там формат lParam для этого
+			// сообщения не меняется (это ломает только версия 4, которую
+			// нарочно не берём, см. её комментарий).
+			switch uint32(lparam) & 0xffff {
 			case wmRButtonUp:
-				pokazatMenuTreya(syscall.Handle(hwnd))
+				pokazatMenuTreyaOdnazhdy(syscall.Handle(hwnd))
 			case wmLButtonDblClk:
-				otkrytOknoIzTreya()
+				otkrytOknoIzTreyaOdnazhdy()
+			case ninSelect:
+				otkrytOknoIzTreyaOdnazhdy()
+			case wmContextMenu:
+				pokazatMenuTreyaOdnazhdy(syscall.Handle(hwnd))
+			case ninBalloonUserClick:
+				go tychokVPuzyr()
 			}
 			return 0
 		case wmCommand:
@@ -261,6 +325,7 @@ func zapustitTrey(vyhod chan<- struct{}) {
 
 	hIcon := sobratZnachokTreya()
 	dobavitZnachokTreya(hwnd, hIcon)
+	nastroitVersiyuTreya(hwnd)
 
 	// Окно готово принимать Shell_NotifyIconW(NIM_MODIFY) — публикуем hwnd
 	// для pokazatOblachkoObnovleniya (её могут позвать в любой момент после
@@ -288,14 +353,34 @@ func zapustitTrey(vyhod chan<- struct{}) {
 	log.Printf("трей: цикл сообщений завершён")
 }
 
+// nastroitVersiyuTreya включает NOTIFYICON_VERSION 3 (Shell_NotifyIconW,
+// NIM_SETVERSION) сразу после добавления значка. Без неё оболочка навсегда
+// остаётся на версии 0 и никогда не шлёт NIN_BALLOONUSERCLICK — тычок по
+// самому пузырю (заказ человека 26.08: «тыкаешь обновление и всё») просто
+// нечем поймать. Версия 4 нарочно не берётся: там меняется раскладка
+// lParam/wParam у WM_CONTEXTMENU/меню, а это переписало бы уже работающие
+// обработчики wmRButtonUp/wmLButtonDblClk (см. их комментарий в WndProc).
+// uTimeoutOrVersion — то же самое поле структуры, что у показа пузыря
+// (Windows использует его как union: uTimeout при показе, uVersion здесь).
+func nastroitVersiyuTreya(hwnd syscall.Handle) {
+	var d notifyIconDataW
+	d.cbSize = uint32(unsafe.Sizeof(d))
+	d.hWnd = hwnd
+	d.uID = trayIconID
+	d.uTimeoutOrVersion = 3 // NOTIFYICON_VERSION
+	r, _, _ := procShellNotifyIconW.Call(uintptr(nimSetVersion), uintptr(unsafe.Pointer(&d)))
+	log.Printf("трей: Shell_NotifyIconW(NIM_SETVERSION=3) -> %v", r != 0)
+}
+
 // pokazatOblachkoObnovleniya всплывает пузырём в трее, когда фоновая
 // проверка (internal/sluzhba.ProveritObnovlenieFonom) нашла версию новее
 // нынешней. Это единственный способ, которым уже свёрнутая в трей копия
 // говорит человеку «вышло обновление» — раньше находка молча ждала в
 // /api/sostoyanie, пока кто-то сам не откроет окно (диагноз в
-// stend/obnovlenie_fon.sh, шапка файла). Ставить или качать что-либо тут
-// нельзя (задача прямо запрещает): текст только зовёт нажать «Проверить
-// обновление» в окне — саму установку делает человек своей рукой.
+// stend/obnovlenie_fon.sh, шапка файла). С 26.08 (заказ человека: тычок в
+// пузырь ставит обновление сам, без похода в окно и без отдельной кнопки)
+// сам пузырь и есть кнопка — клик по нему ловит NIN_BALLOONUSERCLICK в
+// WndProc и зовёт tychokVPuzyr() ниже.
 //
 // Подключается из main.go (s.OblachkoObnovleniya = pokazatOblachkoObnovleniya)
 // — internal/sluzhba про трей не знает ничего, см. комментарий поля.
@@ -317,9 +402,54 @@ func pokazatOblachkoObnovleniya(versiya string) {
 	d.dwInfoFlags = niifInfo
 	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra: доступно обновление")
 	kopirovatStrokuUTF16(d.szInfo[:], fmt.Sprintf(
-		"Вышла версия %s. Откройте Kelevra и нажмите «Проверить обновление», чтобы поставить её.", versiya))
+		"Вышла версия %s. Нажмите это сообщение, чтобы поставить её.", versiya))
 	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
 	log.Printf("трей: пузырь про версию %s -> Shell_NotifyIconW(NIM_MODIFY) = %v", versiya, r != 0)
+}
+
+// tychokVPuzyr — реакция на клик по самому пузырю (NIN_BALLOONUSERCLICK):
+// заказ человека 26.08 дословно — «просто приходит обновление и ты тыкаешь
+// обновление и всё», без похода в окно и без отдельной кнопки. Зовёт
+// package-level хук ustanovitObnovlenie (obnovlenie.go, без build-тега),
+// подключённый из main.go на sluzhba.PostavitNaydennoe — этот файл про
+// internal/sluzhba ничего не знает напрямую, тот же принцип, что и у
+// OblachkoObnovleniya.
+func tychokVPuzyr() {
+	if ustanovitObnovlenie == nil {
+		log.Printf("трей: тычок в пузырь — хук установки не подключён")
+		return
+	}
+	versiya, err := ustanovitObnovlenie()
+	if err != nil {
+		log.Printf("трей: тычок в пузырь — установка не удалась: %v", err)
+		pokazatOblachkoBedyUstanovki()
+		return
+	}
+	log.Printf("трей: тычок в пузырь — версия %s поставлена, служба уходит на смену", versiya)
+}
+
+// pokazatOblachkoBedyUstanovki — второй пузырь, если тычок не поставил
+// обновление (сеть легла, диск занят и т.п.): копия жива на старой версии,
+// а человеку остаётся ручной путь — открыть окно и нажать «Проверить
+// обновление» — тот, что работал и до этой правки.
+func pokazatOblachkoBedyUstanovki() {
+	treyZamok.Lock()
+	hwnd := treyHwnd
+	treyZamok.Unlock()
+	if hwnd == 0 {
+		log.Printf("трей: пузырь о неудачной установке не показан — окно трея не поднято")
+		return
+	}
+	var d notifyIconDataW
+	d.cbSize = uint32(unsafe.Sizeof(d))
+	d.hWnd = hwnd
+	d.uID = trayIconID
+	d.uFlags = nifInfo
+	d.dwInfoFlags = niifInfo
+	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra: обновление не поставилось")
+	kopirovatStrokuUTF16(d.szInfo[:], "Откройте Kelevra и нажмите «Проверить обновление», чтобы попробовать снова.")
+	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
+	log.Printf("трей: пузырь о неудачной установке -> Shell_NotifyIconW(NIM_MODIFY) = %v", r != 0)
 }
 
 // sobratZnachokTreya делает HICON из znachok.ico настоящим
