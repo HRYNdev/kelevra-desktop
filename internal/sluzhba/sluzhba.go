@@ -65,6 +65,17 @@ type Sluzhba struct {
 	kachaemBin bool // идёт скачивание ядра
 	kartina    konfig.Kartina
 
+	// naydennoeObnovlenie — находка ФОНОВОЙ проверки (SleditZaObnovleniem,
+	// obnovlenieProveritRuchka), не ручного нажатия кнопки: та отвечает
+	// прямо в HTTP-ответ и не запоминает себя. nil — фон ничего не нашёл
+	// (или ещё не спрашивал). Видна человеку через /api/sostoyanie тем же
+	// полем, что и остальная правда о приложении — молчащая в логе находка
+	// человеку не видна вообще.
+	naydennoeObnovlenie *obnovlenie.Novaya
+	// idetProverkaObnovleniya — не даёт фоновому тику и толчку от открытия
+	// окна другой копии (obnovlenieProveritRuchka) спросить GitHub разом.
+	idetProverkaObnovleniya bool
+
 	// Авторежим (переключение защиты по смене сети) живёт под своим замком,
 	// отдельным от zamok выше: запуск/остановка служителя не должны ждать
 	// того же замка, что держат при пересборке конфига или скачивании ядра.
@@ -173,6 +184,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
 	m.HandleFunc(pref+"/api/zhurnal", s.zhurnal)
 	m.HandleFunc(pref+"/api/obnovlenie", s.obnovlenieRuchka)
+	m.HandleFunc(pref+"/api/obnovlenie_proverit", s.obnovlenieProveritRuchka)
 	return m
 }
 
@@ -210,6 +222,87 @@ func (s *Sluzhba) obnovlenieRuchka(w http.ResponseWriter, r *http.Request) {
 		o.Novaya = n.Versiya
 	}
 	otdat(w, o, nil)
+}
+
+// obnovlenieProveritRuchka — тихий толчок фоновой проверке от ДРУГОЙ копии
+// (cmd/kelevra/main.go: chuzhaya в adresKopii). Человек кликнул значок в
+// трее, пока Kelevra уже работала где-то в фоне неделями, — момент не хуже
+// холодного старта, чтобы спросить GitHub. Сам ответ HTTP ждать нечего:
+// проверка идёт в своей горутине, а ручка отвечает сразу, чтобы открытие
+// чужого окна не задержалось на сетевой таймаут.
+func (s *Sluzhba) obnovlenieProveritRuchka(w http.ResponseWriter, r *http.Request) {
+	go s.ProveritObnovlenieFonom()
+	otdat(w, map[string]any{"zapushcheno": true}, nil)
+}
+
+// ProveritObnovlenieFonom — тело фоновой проверки, общее для тикера
+// (SleditZaObnovleniem) и толчка от другой копии (obnovlenieProveritRuchka).
+//
+// Не ставит найденную сборку сама (obnovlenie.Postavit тут не звучит): это
+// значило бы менять .exe и просить человека на перезапуск прямо у него под
+// руками, без предупреждения, посреди рабочего сеанса с поднятой защитой —
+// то, что задача запрещает напрямую. Только запоминает находку в
+// naydennoeObnovlenie, чтобы её увидел /api/sostoyanie — тем же путём, каким
+// человек уже видит остальную правду о приложении (кнопка «Проверить
+// обновление» ставит её так же, только сразу в HTTP-ответ и без памяти).
+//
+// idetProverkaObnovleniya не даёт наложиться двум одновременным проверкам
+// (тик и толчок совпали): вторая тихо выходит, не трогая сеть повторно.
+func (s *Sluzhba) ProveritObnovlenieFonom() {
+	s.zamok.Lock()
+	if s.idetProverkaObnovleniya {
+		s.zamok.Unlock()
+		return
+	}
+	s.idetProverkaObnovleniya = true
+	s.zamok.Unlock()
+	defer func() {
+		s.zamok.Lock()
+		s.idetProverkaObnovleniya = false
+		s.zamok.Unlock()
+	}()
+
+	adres := obnovlenie.SpisokReliza
+	if svoy := os.Getenv("KELEVRA_RELIZY"); svoy != "" {
+		adres = svoy // стенд
+	}
+	ctx, otmena := context.WithTimeout(context.Background(), srokProverkiObnovleniya)
+	defer otmena()
+	n, err := obnovlenie.Proverit(ctx, &http.Client{Timeout: srokProverkiObnovleniya}, adres, podpiska.Versiya)
+	if err != nil {
+		// Нет сети — обычное дело для приложения, которое чинит сеть: тихо,
+		// без паники и без падения процесса. Следующий тик попробует снова.
+		log.Printf("фоновая проверка обновления: не вышло (%v), работаю как есть", err)
+		return
+	}
+	s.zamok.Lock()
+	s.naydennoeObnovlenie = n // может стать снова nil — «версия и так свежая», это тоже правда
+	s.zamok.Unlock()
+	if n != nil {
+		log.Printf("фоновая проверка обновления: найдена версия %s", n.Versiya)
+	}
+}
+
+// SleditZaObnovleniem крутит ProveritObnovlenieFonom по расписанию, пока
+// живёт служба (тот же ctx, что и ObnovlyatProfil — оба гасит один и тот же
+// defer otmena() в zapustitSluzhbu).
+//
+// Первая проверка — НЕ сразу: этот же запуск, скорее всего, только что прошёл
+// obnovitsya() на холодном старте (cmd/kelevra/obnovlenie.go) — спрашивать
+// GitHub второй раз в ту же секунду бессмысленно и просто грузит его API.
+// period внедряемый (не голая obnovlenie.PeriodFonovoyProverki внутри
+// функции): стенд гоняет его в миллисекундах, а не ждёт настоящих часов.
+func (s *Sluzhba) SleditZaObnovleniem(ctx context.Context, period time.Duration) {
+	t := time.NewTicker(period)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.ProveritObnovlenieFonom()
+		}
+	}
 }
 
 // zhurnal отдаёт хвост журнала прямо в окно.
@@ -389,6 +482,11 @@ type otvetSostoyaniya struct {
 	// PrichinaSlepoty). Пусто — либо слепоты нет, либо она ещё не длится
 	// достаточно, чтобы тревожить человека.
 	AvtorezhimSlepPrichina string `json:"avtorezhim_slep_prichina,omitempty"`
+	// NovayaVersiyaDostupna — находка ФОНОВОЙ проверки (SleditZaObnovleniem,
+	// obnovlenieProveritRuchka), а не ручного нажатия кнопки «Проверить
+	// обновление» — та отвечает своим отдельным otvetObnovleniya.Novaya.
+	// Пусто — фон ничего не нашёл или ещё не спрашивал.
+	NovayaVersiyaDostupna string `json:"novaya_versiya_dostupna,omitempty"`
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -409,6 +507,9 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		o.Imya, o.DoUnix = s.svedeniya.Imya, s.svedeniya.Do
 	}
 	k := s.kartina
+	if s.naydennoeObnovlenie != nil {
+		o.NovayaVersiyaDostupna = s.naydennoeObnovlenie.Versiya
+	}
 	s.zamok.Unlock()
 	o.Rezhim = string(k.Rezhim)
 	// Zametka описывает ОБЪЁМ защиты («защищены только браузеры» и соседи,

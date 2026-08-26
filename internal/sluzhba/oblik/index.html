@@ -778,6 +778,11 @@ function podpisObnovleniya(s) {
   if (obnovlenieItog && obnovlenieItog.beda) return "Не удалось проверить";
   if (obnovlenieItog && obnovlenieItog.novaya) return "Доступна версия " + obnovlenieItog.novaya;
   if (obnovlenieItog && obnovlenieItog.svezhaya) return "Установлена свежая версия";
+  // Находка ФОНОВОЙ проверки (internal/sluzhba.SleditZaObnovleniem) — та
+  // спрашивает GitHub сама, без нажатия кнопки, пока копия просто висит в
+  // трее. Молчащая в логе находка человеку не видна вообще — показываем её
+  // тем же путём, каким видна ручная проверка чуть выше.
+  if (s.novaya_versiya_dostupna) return "Доступна версия " + s.novaya_versiya_dostupna;
   return "Версия " + (s.versiya || "—");
 }
 
