@@ -68,6 +68,19 @@ type Sluzhba struct {
 	// /api/sostoyanie, просто без звука.
 	OblachkoObnovleniya func(versiya string)
 
+	// MetkaObnovleniya — как показать СОСТОЯНИЕ «обновление ждёт» на значке
+	// трея (cmd/kelevra/metka_obnovleniya.go: pometitObnovlenie). Отдельный
+	// хук от OblachkoObnovleniya нарочно, и вот почему: пузырь — СОБЫТИЕ,
+	// про версию он звучит ровно один раз навсегда (povestitEsliNovaya,
+	// отметка на диске), а метка — СОСТОЯНИЕ, она обязана держаться, пока
+	// обновление не поставлено. Свяжи их вместе — и после перезапуска копии
+	// (пузырь про эту версию уже сказан в прошлой жизни) значок снова
+	// выглядел бы так, будто ставить нечего, и тыкать человеку было бы не
+	// во что. Поэтому зовётся на КАЖДОЙ фоновой проверке: версия — есть
+	// находка, "" — версия и так свежая, метку снять. nil — хук не
+	// подключён (стенд-тесты внутри пакета).
+	MetkaObnovleniya func(versiya string)
+
 	// PerezapuskPosleObnovleniya — как поднять новую копию после того, как
 	// PostavitNaydennoe заменила .exe на диске: та же передача смены, что уже
 	// работает у prava.Poprosit после согласия на UAC (cmd/kelevra/main.go:
@@ -320,6 +333,15 @@ func (s *Sluzhba) ProveritObnovlenieFonom() {
 	s.zamok.Lock()
 	s.naydennoeObnovlenie = n // может стать снова nil — «версия и так свежая», это тоже правда
 	s.zamok.Unlock()
+	if s.MetkaObnovleniya != nil {
+		// СОСТОЯНИЕ, а не событие: и находку, и её исчезновение (версия и
+		// так свежая) значок обязан отразить — см. поле MetkaObnovleniya.
+		if n != nil {
+			s.MetkaObnovleniya(n.Versiya)
+		} else {
+			s.MetkaObnovleniya("")
+		}
+	}
 	if n != nil {
 		log.Printf("фоновая проверка обновления: найдена версия %s", n.Versiya)
 		s.povestitEsliNovaya(n.Versiya)
@@ -445,12 +467,29 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 // живёт служба (тот же ctx, что и ObnovlyatProfil — оба гасит один и тот же
 // defer otmena() в zapustitSluzhbu).
 //
-// Первая проверка — НЕ сразу: этот же запуск, скорее всего, только что прошёл
-// obnovitsya() на холодном старте (cmd/kelevra/obnovlenie.go) — спрашивать
-// GitHub второй раз в ту же секунду бессмысленно и просто грузит его API.
+// Первая проверка — СРАЗУ при старте, до входа в цикл тикера (заказ хозяина
+// 26.08: «просто приходит обновление и ты тыкаешь, а не автоматом» — раньше
+// единственным моментом узнать о новой версии был холодный старт, где
+// cmd/kelevra/obnovlenie.go молча ставил её сам; теперь установка требует
+// тычка человека, а найти обновление служба обязана сама и сразу, не через
+// period часов — иначе «приходит само» не выполняется, просто откладывается
+// на 4 часа). Отменённый ДО первого вызова ctx уважаем и в сеть не ходим
+// вовсе. KELEVRA_BEZ_OBNOVLENIYA=1 — тот же переключатель, что раньше глушил
+// obnovitsya() на холодном старте, — глушит и эту немедленную проверку: на
+// нём стоит масса стендов (stend/*.sh), которым сеть тут не нужна и не
+// должна понадобиться неожиданно. Сам тикер эта переменная не трогает, как и
+// раньше.
 // period внедряемый (не голая obnovlenie.PeriodFonovoyProverki внутри
 // функции): стенд гоняет его в миллисекундах, а не ждёт настоящих часов.
 func (s *Sluzhba) SleditZaObnovleniem(ctx context.Context, period time.Duration) {
+	if os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") != "1" {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			s.ProveritObnovlenieFonom()
+		}
+	}
 	t := time.NewTicker(period)
 	defer t.Stop()
 	for {
