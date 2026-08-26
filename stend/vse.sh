@@ -24,7 +24,7 @@ TAYMAUT=${TAYMAUT:-900}
 # стендом, то есть новый щуп попадает в приёмку сам, а не забывается.
 NE_STEND=("vse.sh" "znachok.py" "obshchee.sh" "pe_resursy.py")
 # Нужен wine: под ним гоняются настоящие windows-бинарники.
-NUZHEN_WINE=("windows.sh" "razdvoenie.sh" "trey.sh" "obnovlenie.sh" "proksi.sh" "polnyy_rezhim.sh")
+NUZHEN_WINE=("windows.sh" "razdvoenie.sh" "trey.sh" "trey_zhivoy.sh" "obnovlenie.sh" "proksi.sh" "polnyy_rezhim.sh")
 
 est_v() { local i n=$1; shift; for i in "$@"; do [ "$i" = "$n" ] && return 0; done; return 1; }
 
