@@ -35,7 +35,12 @@ cat > "$S/relizy.json" <<JSON
  {"tag_name":"app-v0.5.0","draft":false,"prerelease":false,
   "assets":[{"name":"Kelevra.exe","browser_download_url":"http://127.0.0.1:$PORT/novaya/Kelevra.exe","size":$RAZMER}]}]
 JSON
-(cd "$S" && python3 -m http.server "$PORT" >/dev/null 2>&1 &)
+# Прямым ребёнком с пойманным pid и снос по EXIT: уборка строками 87-89 ниже
+# работает только на счастливом пути, а past выходит раньше — и сервер
+# оставался жить сиротой (см. obnovlenie_fon.sh о том, чем это кончается).
+python3 -m http.server "$PORT" --directory "$S" >/dev/null 2>&1 &
+PID_SERVERA=$!
+trap 'kill -KILL "$PID_SERVERA" 2>/dev/null' EXIT
 sleep 2
 
 ZH="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/kelevra.log"
