@@ -318,6 +318,7 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	// в журнале для стенда (trey_other.go); обе реализации лежат в одном
 	// пакете main, поэтому здесь имя одно и то же независимо от ОС.
 	s.OblachkoObnovleniya = pokazatOblachkoObnovleniya
+	s.MetkaObnovleniya = pometitObnovlenie
 	s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
 	// Тычок в пузырь трея зовёт этот же метод напрямую (trey_windows.go:
 	// tychokVPuzyr) — пакет trey про internal/sluzhba ничего не знает, тем же

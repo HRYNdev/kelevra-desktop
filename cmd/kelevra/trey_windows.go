@@ -95,6 +95,7 @@ const (
 	niifInfo = 0x00000001 // NIIF_INFO — обычный (не «варнинг», не «ошибка») значок пузыря
 
 	mfString       = 0x00000000
+	mfSeparator    = 0x00000800
 	tpmLeftAlign   = 0x0000
 	tpmRightButton = 0x0002
 
@@ -102,8 +103,9 @@ const (
 	idcArrow       = 32512
 	smCxSmIcon     = 49
 
-	idMenuOtkryt = 1001
-	idMenuVyhod  = 1002
+	idMenuOtkryt  = 1001
+	idMenuVyhod   = 1002
+	idMenuObnovit = 1003
 
 	trayIconID = 1
 )
@@ -270,6 +272,9 @@ func zapustitTrey(vyhod chan<- struct{}) {
 			return 0
 		case wmCommand:
 			switch uint32(wparam) & 0xffff {
+			case idMenuObnovit:
+				log.Printf("трей: «Обновить» из меню")
+				go tychokVObnovlenie("пункт меню")
 			case idMenuOtkryt:
 				otkrytOknoIzTreya()
 			case idMenuVyhod:
@@ -398,6 +403,13 @@ func pokazatOblachkoObnovleniya(versiya string) {
 	d.cbSize = uint32(unsafe.Sizeof(d))
 	d.hWnd = hwnd
 	d.uID = trayIconID
+	// Пузырь погаснет через секунды — метка и подсказка значка обязаны его
+	// пережить (metka_obnovleniya.go). Обычно её уже поставил хук
+	// sluzhba.MetkaObnovleniya до этого вызова; здесь — на случай сборки,
+	// где хук не подключён: пузырь без метки оставил бы человека без
+	// второго пути тычка.
+	zapomnitObnovlenie(versiya)
+	obnovitPodskazkuTreya()
 	d.uFlags = nifInfo
 	d.dwInfoFlags = niifInfo
 	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra: доступно обновление")
@@ -407,6 +419,28 @@ func pokazatOblachkoObnovleniya(versiya string) {
 	log.Printf("трей: пузырь про версию %s -> Shell_NotifyIconW(NIM_MODIFY) = %v", versiya, r != 0)
 }
 
+// obnovitPodskazkuTreya перерисовывает szTip значка под нынешнюю метку
+// (NIM_MODIFY с одним NIF_TIP — сам значок и обработчик не трогаем).
+// Это то, что человек видит, наведя мышь: пузыря на экране уже нет, а
+// подсказка говорит и про версию, и про то, чем её ставить.
+func obnovitPodskazkuTreya() {
+	treyZamok.Lock()
+	hwnd := treyHwnd
+	treyZamok.Unlock()
+	if hwnd == 0 {
+		return // трей ещё не поднялся или уже погас — рисовать негде
+	}
+	var d notifyIconDataW
+	d.cbSize = uint32(unsafe.Sizeof(d))
+	d.hWnd = hwnd
+	d.uID = trayIconID
+	d.uFlags = nifTip
+	podskazka := podskazkaTreya()
+	kopirovatStrokuUTF16(d.szTip[:], podskazka)
+	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
+	log.Printf("трей: подсказка значка -> %q, Shell_NotifyIconW(NIM_MODIFY) = %v", podskazka, r != 0)
+}
+
 // tychokVPuzyr — реакция на клик по самому пузырю (NIN_BALLOONUSERCLICK):
 // заказ человека 26.08 дословно — «просто приходит обновление и ты тыкаешь
 // обновление и всё», без похода в окно и без отдельной кнопки. Зовёт
@@ -414,18 +448,27 @@ func pokazatOblachkoObnovleniya(versiya string) {
 // подключённый из main.go на sluzhba.PostavitNaydennoe — этот файл про
 // internal/sluzhba ничего не знает напрямую, тот же принцип, что и у
 // OblachkoObnovleniya.
-func tychokVPuzyr() {
+func tychokVPuzyr() { tychokVObnovlenie("пузырь") }
+
+// tychokVObnovlenie — общее тело тычка для обоих путей: клика по пузырю и
+// пункта меню «Обновить до X». otkuda попадает в журнал, потому что на
+// машине человека это единственный способ узнать, чем он ткнул.
+func tychokVObnovlenie(otkuda string) {
 	if ustanovitObnovlenie == nil {
-		log.Printf("трей: тычок в пузырь — хук установки не подключён")
+		log.Printf("трей: тычок (%s) — хук установки не подключён", otkuda)
 		return
 	}
 	versiya, err := ustanovitObnovlenie()
 	if err != nil {
-		log.Printf("трей: тычок в пузырь — установка не удалась: %v", err)
+		// Метку НЕ снимаем: обновление всё ещё ждёт, и пункт меню —
+		// единственное, чем человек попробует ещё раз (пузырь про эту
+		// версию больше не придёт никогда).
+		log.Printf("трей: тычок (%s) — установка не удалась: %v", otkuda, err)
 		pokazatOblachkoBedyUstanovki()
 		return
 	}
-	log.Printf("трей: тычок в пузырь — версия %s поставлена, служба уходит на смену", versiya)
+	zabytObnovlenie()
+	log.Printf("трей: тычок (%s) — версия %s поставлена, служба уходит на смену", otkuda, versiya)
 }
 
 // pokazatOblachkoBedyUstanovki — второй пузырь, если тычок не поставил
@@ -590,7 +633,7 @@ func dobavitZnachokTreya(hwnd syscall.Handle, hIcon syscall.Handle) {
 	d.uFlags = nifMessage | nifIcon | nifTip
 	d.uCallbackMessage = wmTreyIkonka
 	d.hIcon = hIcon
-	kopirovatStrokuUTF16(d.szTip[:], "Kelevra: VPN включён")
+	kopirovatStrokuUTF16(d.szTip[:], podskazkaTreya())
 	r, _, _ := procShellNotifyIconW.Call(uintptr(nimAdd), uintptr(unsafe.Pointer(&d)))
 	log.Printf("трей: Shell_NotifyIconW(NIM_ADD) -> %v", r != 0)
 }
@@ -624,6 +667,15 @@ func pokazatMenuTreya(hwnd syscall.Handle) {
 		return
 	}
 	defer procDestroyMenu.Call(hMenu)
+
+	// Пункт «Обновить до X» — первым и только когда ставить есть что
+	// (metka_obnovleniya.go). Это второй и последний путь тычка: первый —
+	// сам пузырь, но он живёт секунды, а меню открывается когда угодно.
+	if tekst, est := punktMenyuObnovleniya(); est {
+		obn, _ := syscall.UTF16PtrFromString(tekst)
+		procAppendMenuW.Call(hMenu, mfString, uintptr(idMenuObnovit), uintptr(unsafe.Pointer(obn)))
+		procAppendMenuW.Call(hMenu, mfSeparator, 0, 0)
+	}
 
 	otkr, _ := syscall.UTF16PtrFromString("Открыть")
 	vyh, _ := syscall.UTF16PtrFromString("Выход")
