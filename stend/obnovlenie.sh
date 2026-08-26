@@ -49,11 +49,44 @@ rm -f "$ZH"
 wine_zapusti "$S/run.log" "$ZH" - 25 -- \
   env KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" timeout 90 "$WINE" "$S/dom/Kelevra.exe" --tiho
 mertv=$?
-pkill -f "$S/dom/Kelevra.exe" 2>/dev/null
-# Боевой путь порождает ОТДЕЛЬНЫЙ процесс службы: он переживёт родителя и
-# займёт метку копии, из-за чего следующий прогон не поднимется вовсе.
-pkill -f "Kelevra.exe --sluzhba" 2>/dev/null
-pkill -f "http.server $PORT" 2>/dev/null
+# Убить и ДОЖДАТЬСЯ смерти, с эскалацией в KILL.
+#
+# Голого `pkill -f` (это TERM) тут мало по двум замеренным причинам. Первая:
+# боевой путь порождает ОТДЕЛЬНЫЙ процесс службы АСИНХРОННО (main.go,
+# podnyatSluzhbuOtdelno) — один выстрел сразу после выхода wine-обёртки может
+# уйти раньше, чем ребёнок вообще появился. Вторая: под wine этот Kelevra.exe
+# на TERM не реагирует — 26.08 замерено, что после TERM он жил 5с и 20с, а от
+# KILL умирал мгновенно.
+#
+# Почему это не косметика: stend/vse.sh гоняет стенды подряд, и соседи считают
+# ЧУЖИЕ живые процессы. 26.08 из-за этих хвостов покраснел polnyy_rezhim.sh
+# («процессов Kelevra.exe до старта: 3, площадка нечистая»), сам по себе
+# зелёный, — то есть моя приёмка стала случайной из-за уборки в этом файле.
+ubit_i_dozhdatsya() { # ubit_i_dozhdatsya <образец для pkill -f>
+  local obrazec=$1 i pusto=0
+  pkill -TERM -f "$obrazec" 2>/dev/null || true
+  # Выходим не по ПЕРВОМУ пустому замеру, а по трём подряд с паузой. Замер
+  # 26.08: после первой (успешной!) уборки процесс появился заново с возрастом
+  # 11с — служба поднимается асинхронно и может родиться уже ПОСЛЕ того, как
+  # мы посмотрели и увидели пусто. Один взгляд тут ничего не доказывает.
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if pgrep -f "$obrazec" >/dev/null 2>&1; then
+      pusto=0
+      pkill -KILL -f "$obrazec" 2>/dev/null
+    else
+      pusto=$((pusto + 1))
+      [ "$pusto" -ge 3 ] && return 0
+    fi
+    sleep 0.5
+  done
+  # Не молчать: если процесс пережил даже KILL, следующий стенд покраснеет от
+  # него, и разбираться будут не с этой строкой, а с невиновным соседом.
+  echo "⚠ уборка: процессы «$obrazec» пережили TERM и KILL — площадка останется грязной" >&2
+  return 1
+}
+ubit_i_dozhdatsya "$S/dom/Kelevra.exe" || true
+ubit_i_dozhdatsya "Kelevra.exe --sluzhba" || true
+ubit_i_dozhdatsya "http.server $PORT" || true
 if [ "$mertv" -eq 77 ]; then
   echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
   exit 7
