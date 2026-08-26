@@ -100,7 +100,14 @@ fi
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 pishi_relizy "app-v$NOVAYA_VERSIYA"
-(cd "$RELIZY_DOM" && python3 -m http.server "$PORT" >/dev/null 2>&1 &)
+# ПРЯМЫМ ребёнком, не в подоболочке. `( … & )` теряет pid внутри подоболочки,
+# в PIDY он не попадает, а pkill в pochistit по нему промахивается: в строке
+# `python3 -m http.server <порт>` НЕТ ни пути стенда, ни чего-либо нашего.
+# 26.08 из-за этого сервер пережил стенд и ДЕРЖАЛ ОТКРЫТЫМ конвейер всей
+# приёмки: vse.sh печатал итог, а вызвавший его vypusk.sh не получал EOF и
+# висел вечно — два выпуска подряд были сняты по таймауту как «долгие».
+python3 -m http.server "$PORT" --directory "$RELIZY_DOM" >/dev/null 2>&1 &
+PIDY+=("$!")
 sleep 1
 
 # zapusti_sluzhbu <имя> <KELEVRA_RELIZY> <KELEVRA_PERIOD_OBNOVLENIYA> — поднимает
