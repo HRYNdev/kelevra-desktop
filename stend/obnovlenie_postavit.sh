@@ -150,12 +150,23 @@ sleep 1
 # unix-pid через PID_SLUZHBY, каталог через DOM.
 zapusti_sluzhbu() {
   local imya=$1
+  # Второй аргумент (любое непустое) — поднять копию БЕЗ немедленной фоновой
+  # проверки. С 26.08 sluzhba.SleditZaObnovleniem спрашивает список релизов
+  # сразу при старте, а не через период (заказ Вовы: «просто приходит
+  # обновление и ты тыкаешь, а не автоматом» — значит находка обязана прийти
+  # сама и быстро). Сцене «нечего ставить» нужна копия, которая ещё НИЧЕГО не
+  # находила: иначе находка приезжает за доли секунды и postavit отвечает 200
+  # совершенно по делу. KELEVRA_BEZ_OBNOVLENIYA гасит только фон и НЕ трогает
+  # ручку api/obnovlenie_proverit — поэтому порча b (она эту ручку и дёргает)
+  # по-прежнему ловит слепую сцену.
+  local bez_fona=${2:-}
   local dom="$STEND/dom_$imya" log="$STEND/sluzhba_$imya.log"
   mkdir -p "$dom"
   cp "$BIN_STARAYA" "$dom/Kelevra"
   chmod +x "$dom/Kelevra"
   rm -f "$log"
-  KELEVRA_DIR="$dom" KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" \
+  env KELEVRA_DIR="$dom" KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" \
+    ${bez_fona:+KELEVRA_BEZ_OBNOVLENIYA=1} \
     "$dom/Kelevra" --sluzhba > "$log" 2>&1 &
   PID_SLUZHBY=$!
   PIDY+=("$PID_SLUZHBY")
@@ -260,7 +271,7 @@ ubit_i_dozhdatsya "$DOM_A/Kelevra" || true
 # сцена б) НЕЧЕГО СТАВИТЬ: без предварительной проверки ставить нечего —
 # 400, процесс жив, ничего не тронуто.
 # =============================================================================
-zapusti_sluzhbu b
+zapusti_sluzhbu b bez_fona
 ADR_B=$ADR; PID_B=$PID_SLUZHBY
 if [ "$KONTROL" = "b" ]; then
   # порча: спрашиваем GitHub заранее (аномально для этой сцены) — теперь

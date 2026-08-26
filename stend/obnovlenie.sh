@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
-# Стенд обновления: приложение забирает новую версию само и перезапускается.
+# Стенд обновления (Windows/wine): холодный старт находит новую версию сам,
+# но .exe подменяет ТОЛЬКО тычок в пузырь — не автоматом.
 #
-# Проверяется настоящей windows-сборкой под wine, потому что вся суть здесь в
-# файловой семантике Windows: запущенный .exe нельзя затереть, но можно
-# переименовать. На линуксовой сборке этот шаг ничего не доказывает.
+# До 26.08 этот стенд доказывал обратное: что --tiho сам, без единого клика,
+# качает свежую сборку, подменяет .exe на месте и перезапускается ею же — это
+# и была беда («Реализуй лучше обновления как на телефоне... не автоматом»,
+# Вова 26.08 11:33). Правка убрала автоподмену из холодного старта
+# (cmd/kelevra/main.go: obnovitsya() удалён) и оставила программе только
+# НАЙТИ и ПРЕДЛОЖИТЬ — ставит теперь только тычок человека в пузырь
+# (internal/sluzhba.PostavitNaydennoe, ручка /api/obnovlenie_postavit).
+#
+# Проверяется настоящей windows-сборкой под wine, потому что установка по
+# тычку — та же файловая семантика Windows, что была тут всегда: запущенный
+# .exe нельзя затереть, но можно переименовать (obnovlenie.Postavit это не
+# трогало и тут не трогается). Линуксовый холодный старт без всякой Windows-
+# семантики уже покрыт stend/holodnyy_start_bez_avtopodmeny.sh, а сама ручка
+# тычка платформенно-независимо — stend/obnovlenie_postavit.sh; здесь —
+# именно связка «--tiho под настоящей Windows → тычок → реальная подмена».
 #
 # Ход стенда: собираем 0.4.2 и 0.5.0, поднимаем поддельный GitHub со списком
 # релизов (внутри — и релиз ЯДРА, чтобы приложение не приняло его за себя),
-# запускаем 0.4.2 и смотрим, что дальше живёт 0.5.0.
+# запускаем 0.4.2 боевым путём (--tiho), сами бьём по найденной ручке тычка и
+# смотрим, что дальше на диске лежит 0.5.0 — но не раньше тычка.
 set -u
 KORFN=$(cd "$(dirname "$0")/.." && pwd)
 WINE=${WINE:-/usr/lib/wine/wine64}
@@ -27,6 +41,8 @@ export DISPLAY=${DISPLAY:-:97}
 versiya() { echo "-X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$1"; }
 GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui $(versiya 0.4.2)" -o "$S/dom/Kelevra.exe" "$KORFN/cmd/kelevra" || exit 1
 GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui $(versiya 0.5.0)" -o "$S/novaya/Kelevra.exe" "$KORFN/cmd/kelevra" || exit 1
+MD5_STARAYA_DO=$(md5sum < "$S/dom/Kelevra.exe")
+MD5_NOVAYA=$(md5sum < "$S/novaya/Kelevra.exe")
 
 RAZMER=$(stat -c%s "$S/novaya/Kelevra.exe")
 cat > "$S/relizy.json" <<JSON
@@ -35,9 +51,9 @@ cat > "$S/relizy.json" <<JSON
  {"tag_name":"app-v0.5.0","draft":false,"prerelease":false,
   "assets":[{"name":"Kelevra.exe","browser_download_url":"http://127.0.0.1:$PORT/novaya/Kelevra.exe","size":$RAZMER}]}]
 JSON
-# Прямым ребёнком с пойманным pid и снос по EXIT: уборка строками 87-89 ниже
-# работает только на счастливом пути, а past выходит раньше — и сервер
-# оставался жить сиротой (см. obnovlenie_fon.sh о том, чем это кончается).
+# Прямым ребёнком с пойманным pid и снос по EXIT: уборка ниже работает только
+# на счастливом пути, а past выходит раньше — и сервер оставался жить сиротой
+# (см. obnovlenie_fon.sh о том, чем это кончается).
 python3 -m http.server "$PORT" --directory "$S" >/dev/null 2>&1 &
 PID_SERVERA=$!
 trap 'kill -KILL "$PID_SERVERA" 2>/dev/null' EXIT
@@ -48,13 +64,64 @@ rm -f "$ZH"
 # Запускаем БОЕВЫМ путём (--tiho), а не служебным. 20.08 разведение окна и
 # службы на два процесса поставило ветку --sluzhba ДО проверки обновления,
 # и стенд, стоявший на KELEVRA_BEZ_OKNA=1, стал щупать дверь, за которой
-# обновления нет по замыслу: служба его не проверяет никогда, её поднимает
+# обновления нет по замыслу: служба его не проверяет never, её поднимает
 # уже проверенная копия. --tiho — тот же путь, которым приложение стартует
-# из автозапуска Windows: обновление проверяется, окна не открывается.
-wine_zapusti "$S/run.log" "$ZH" - 25 -- \
+# из автозапуска Windows: поиск обновления — дело службы сразу после
+# подъёма, окна не открывается.
+wine_zapusti "$S/run.log" "$ZH" "служба слушает" 25 -- \
   env KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" timeout 90 "$WINE" "$S/dom/Kelevra.exe" --tiho
 mertv=$?
-# Убить и ДОЖДАТЬСЯ смерти, с эскалацией в KILL.
+if [ "$mertv" -eq 77 ]; then
+  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
+  kill -KILL "$PID_SERVERA" 2>/dev/null
+  exit 7
+fi
+
+bed=0
+proverit() { # проверит <что должно быть в журнале> <что это значит>
+  if grep -qF "$1" "$ZH" 2>/dev/null; then echo "  ✓ $2"; else echo "  ✗ $2"; bed=1; fi
+}
+proverit_net() { # проверит_нет <что НЕ должно быть в журнале> <что это значит>
+  if grep -qF "$1" "$ZH" 2>/dev/null; then echo "  ✗ $2"; bed=1; else echo "  ✓ $2"; fi
+}
+proverit "фоновая проверка обновления: найдена версия 0.5.0" "нашла свежую сборку сама, без клика (и не спутала её с релизом ядра)"
+proverit_net "версия 0.5.0 встала, перезапускаюсь" "холодный старт САМ ничего не поставил (старой строки автоподмены больше нет)"
+if [ "$(md5sum < "$S/dom/Kelevra.exe")" = "$MD5_STARAYA_DO" ]; then
+  echo "  ✓ .exe на диске не подменился холодным стартом"
+else
+  echo "  ✗ .exe на диске подменился без тычка человека"; bed=1
+fi
+
+# --- тычок в пузырь: та самая настоящая Windows-семантика (rename поверх
+# запущенного .exe), теперь единственный путь к установке. -------------------
+URL=$(grep -o 'http://[^ ]*' "$ZH" 2>/dev/null | head -1)
+if [ -z "$URL" ]; then
+  echo "  ✗ не нашёл адрес службы в журнале — тычок проверить не смог"
+  bed=1
+else
+  TYCHOK=$(curl -s -o "$S/tychok.json" -w '%{http_code}' --max-time 60 -X POST "${URL}api/obnovlenie_postavit") || TYCHOK="000"
+  if [ "$TYCHOK" = "200" ]; then
+    echo "  ✓ тычок POST api/obnovlenie_postavit → 200"
+  else
+    echo "  ✗ тычок POST api/obnovlenie_postavit → $TYCHOK ($(cat "$S/tychok.json" 2>/dev/null))"; bed=1
+  fi
+  # Реальная подмена под Windows идёт асинхронно (см. PostavitNaydennoe): даём
+  # время на скачивание (localhost, ~8МБ) и rename поверх своего же .exe.
+  POSTAVILOS=0
+  for _ in $(seq 1 30); do
+    [ "$(md5sum < "$S/dom/Kelevra.exe" 2>/dev/null)" = "$MD5_NOVAYA" ] && { POSTAVILOS=1; break; }
+    sleep 1
+  done
+  if [ "$POSTAVILOS" -eq 1 ]; then
+    echo "  ✓ после тычка .exe на диске — это новая сборка (Windows rename поверх запущенного файла отработал)"
+  else
+    echo "  ✗ после тычка .exe на диске остался старым"; bed=1
+  fi
+fi
+
+# Убить и ДОЖДАТЬСЯ смерти, с эскалацией в KILL — ПОСЛЕ всех проверок: тычок
+# выше сам просит службу перезапуститься новой копией, гасить раньше нечем
+# мерить.
 #
 # Голого `pkill -f` (это TERM) тут мало по двум замеренным причинам. Первая:
 # боевой путь порождает ОТДЕЛЬНЫЙ процесс службы АСИНХРОННО (main.go,
@@ -91,25 +158,8 @@ ubit_i_dozhdatsya() { # ubit_i_dozhdatsya <образец для pkill -f>
 }
 ubit_i_dozhdatsya "$S/dom/Kelevra.exe" || true
 ubit_i_dozhdatsya "Kelevra.exe --sluzhba" || true
+ubit_i_dozhdatsya "Kelevra.exe --tiho" || true
 ubit_i_dozhdatsya "http.server $PORT" || true
-if [ "$mertv" -eq 77 ]; then
-  echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
-  exit 7
-fi
-
-bed=0
-proverit() { # проверит <что должно быть в журнале> <что это значит>
-  if grep -qF "$1" "$ZH" 2>/dev/null; then echo "  ✓ $2"; else echo "  ✗ $2"; bed=1; fi
-}
-proverit "обновление: вышла версия 0.5.0" "нашло свежую сборку (и не спутало её с релизом ядра)"
-proverit "версия 0.5.0 встала, перезапускаюсь" "заменило себя на месте"
-proverit "запуск Kelevra 0.5.0" "дальше работает уже новая версия"
-if [ "$(md5sum < "$S/dom/Kelevra.exe")" = "$(md5sum < "$S/novaya/Kelevra.exe")" ]; then
-  echo "  ✓ файл на диске — это новая сборка"
-else
-  echo "  ✗ файл на диске остался старым"; bed=1
-fi
-grep -c "обновление: вышла версия" "$ZH" 2>/dev/null | grep -qx 1 && echo "  ✓ обновление не зациклилось" || { echo "  ✗ обновление повторилось"; bed=1; }
 
 echo "── обновление: $([ $bed -eq 0 ] && echo ЗЕЛЁНЫЙ || echo КРАСНЫЙ) ──"
 exit $bed
