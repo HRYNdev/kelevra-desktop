@@ -295,6 +295,21 @@
   .perekl.ustarela .knob { background:var(--zhdem); }
   .perekl:disabled { opacity:.55; cursor:default; }
 
+  /* Полоса выбора режима — образец: телефон, HomeScreen.kt ModeSwitch/ModeHalf
+     (391-467): одна полоса, две половины, активная получает акцентный фон.
+     Свои цвета не заводим — те же переменные, что и у остальных карточек
+     этого окна (--karta/--gran/--akcent/--akcent-tem/--r-m/--r-s). */
+  .rezhim-perekl {
+    display:flex; gap:4px; width:100%; margin-top:16px; padding:4px;
+    border:1px solid var(--gran); border-radius:var(--r-m); background:var(--karta);
+  }
+  .rezhim-pol {
+    flex:1; padding:10px; border-radius:var(--r-s); background:none;
+    color:var(--tihiy); font-size:13.5px; font-weight:500; transition:background .15s, color .15s;
+  }
+  .rezhim-pol.aktivna { background:var(--akcent); color:var(--akcent-tem); font-weight:650; cursor:default; }
+  .rezhim-pol:disabled { cursor:default; }
+
   .uzel {
     display:flex; align-items:center; gap:11px; width:100%; padding:11px 13px;
     margin-top:8px; border-radius:var(--r-m); border:1px solid var(--gran); background:var(--karta);
@@ -544,6 +559,24 @@
 
       <button class="tihaya zovyot" id="knopka-polnaya" hidden>Включить для всех программ</button>
 
+      <!-- Полоса выбора режима — переехала сюда с вкладки «Настройки», где
+           раньше стояла тумблером #ryad-avtorezhim. хозяин 27.08: «не нравится
+           что ты туда натыкал Нидерланды прямой, запасной, комната и тд,
+           должно быть тупо выбор авто режим который сам все определяет, или
+           ручной и там сам выбираешь». Форма — та же, что на телефоне
+           (HomeScreen.kt: ModeSwitch/ModeHalf, 391-467): одна полоса из двух
+           половин, а не тумблер + отдельный список, подписи дословно
+           «Автоматически»/«Вручную». Список узлов ниже виден только в
+           ручном режиме — авторежим сам решает, куда идти. -->
+      <div class="rezhim-perekl" id="rezhim-perekl">
+        <button class="rezhim-pol" id="rezhim-avto" type="button">Автоматически</button>
+        <button class="rezhim-pol" id="rezhim-ruchnoy" type="button">Вручную</button>
+      </div>
+      <!-- Тихая строка обстановки («сейчас: дома») — тот же узел, что раньше
+           стоял под тумблером в настройках (#zametka-avtorezhim), просто
+           переехал сюда следом за полосой: он полезен и никуда не делся. -->
+      <div class="beda" id="zametka-avtorezhim"></div>
+
       <div id="uzly"></div>
     </div>
 
@@ -552,17 +585,6 @@
            него список кнопок ничем не подписан (хозяин 22.08: «настройки
            написаны по-свойски и не то, что я хотел бы видеть»). -->
       <div class="zagolovok-ekrana">Настройки</div>
-
-      <div class="zagolovok-bloka">Сеть</div>
-      <div class="perekl-ryad" id="ryad-avtorezhim">
-        <span class="perekl-tekst">Включать VPN автоматически
-          <span class="podpis">Дома выключается, в чужой сети включается сам.</span>
-        </span>
-        <button class="perekl" id="perekl-avtorezhim" type="button" role="switch" aria-checked="false">
-          <span class="knob"></span>
-        </button>
-      </div>
-      <div class="beda" id="zametka-avtorezhim"></div>
 
       <div class="zagolovok-bloka" id="zag-avtozapusk">Приложение</div>
       <div class="perekl-ryad" id="ryad-avtozapusk" hidden>
@@ -936,12 +958,17 @@ async function obnovit() {
     }
   }
 
-  // Авторежим: тумблер сам по себе виден всегда, тихая строка обстановки
-  // под ним — только пока авторежим включён (выключенному нечего показывать:
-  // служитель не крутится, обстановка не считается).
-  const pereklAvtorezhim = $("perekl-avtorezhim"), zametkaAvtorezhim = $("zametka-avtorezhim");
-  pereklAvtorezhim.className = "perekl" + (s.avtorezhim_vklyuchen ? " vklyuchen" : "");
-  pereklAvtorezhim.setAttribute("aria-checked", s.avtorezhim_vklyuchen ? "true" : "false");
+  // Полоса режима — единственное место, где режим включается/выключается
+  // (хозяин 27.08: «выбор авто режим который сам все определяет, или ручной и
+  // там сам выбираешь»). Список узлов #uzly виден ТОЛЬКО в ручном режиме —
+  // в авто он выбирает сам, показывать список нечего. Тихая строка
+  // обстановки под полосой — только пока авторежим включён (выключенному
+  // нечего показывать: служитель не крутится, обстановка не считается).
+  const rezhimAvto = !!s.avtorezhim_vklyuchen;
+  $("rezhim-avto").classList.toggle("aktivna", rezhimAvto);
+  $("rezhim-ruchnoy").classList.toggle("aktivna", !rezhimAvto);
+  $("uzly").hidden = rezhimAvto;
+  const zametkaAvtorezhim = $("zametka-avtorezhim");
   if (s.avtorezhim_vklyuchen && s.avtorezhim_obstanovka) {
     zametkaAvtorezhim.textContent = "сейчас: " + s.avtorezhim_obstanovka;
     zametkaAvtorezhim.className = "beda spokoyno vidno";
@@ -1126,17 +1153,22 @@ $("perekl-avtozapusk").onclick = async () => {
   perekl.disabled = false; obnovit();
 };
 
-$("perekl-avtorezhim").onclick = async () => {
-  const perekl = $("perekl-avtorezhim");
-  const vklyuchit = !poslednee || !poslednee.avtorezhim_vklyuchen;
-  perekl.disabled = true;
-  try { await api("avtorezhim", {vklyuchit}); }
+// Полоса режима: нажатие на уже активную половину ничего не шлёт (она и так
+// действует), нажатие на вторую половину переключает авторежим ручкой
+// /api/avtorezhim — той же самой, что раньше дёргал тумблер в настройках.
+async function vybratRezhim(vklyuchitAvto) {
+  if (poslednee && !!poslednee.avtorezhim_vklyuchen === vklyuchitAvto) return;
+  $("rezhim-avto").disabled = true; $("rezhim-ruchnoy").disabled = true;
+  try { await api("avtorezhim", {vklyuchit: vklyuchitAvto}); }
   catch (e) {
     $("zametka-avtorezhim").textContent = "Авторежим: " + e.message;
     $("zametka-avtorezhim").className = "beda vidno";
   }
-  perekl.disabled = false; obnovit();
-};
+  $("rezhim-avto").disabled = false; $("rezhim-ruchnoy").disabled = false;
+  obnovit();
+}
+$("rezhim-avto").onclick = () => vybratRezhim(true);
+$("rezhim-ruchnoy").onclick = () => vybratRezhim(false);
 
 $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
 
