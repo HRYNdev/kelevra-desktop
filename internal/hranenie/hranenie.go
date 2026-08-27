@@ -89,6 +89,28 @@ type Nastroyki struct {
 	// (строка не совпадает) при этом обязана прозвучать заново — поле не
 	// запирает уведомления навсегда, а помнит только последнюю названную.
 	ObyavlennoeObnovlenie string `json:"obyavlennoe_obnovlenie,omitempty"`
+	// PravaZaprosheny — приложение уже один раз само спросило права
+	// администратора (см. internal/sluzhba.go: zaprositPravaAvtomaticheskiEsliNado)
+	// при первом успешном подключении, вместо того чтобы ждать, пока человек
+	// нажмёт «Включить для всех программ» сам. Указатель, а НЕ bool: это
+	// единственный способ отличить «поля не было в файле вообще» (старая
+	// версия, файл существовал ДО этого поля) от «явно false» (только что
+	// поставленный с нуля инсталл, которого спросить ещё только предстоит) —
+	// json.Unmarshal молча превращает отсутствующее bool-поле в false, и на
+	// голом bool эти два случая неразличимы. Zagruzit разводит их сама: nil
+	// после чтения существующего файла — доказательство, что файл старше
+	// этого поля, и трогать человека всплывающим UAC без его выбора нельзя
+	// (миграция ставит true, «уже спрашивали»); nil при отсутствии файла —
+	// подлинно чистый инсталл, спросить НУЖНО (миграция ставит false).
+	PravaZaprosheny *bool `json:"prava_zaprosheny,omitempty"`
+}
+
+// UzheSprosiliPrava читает PravaZaprosheny без риска разыменовать nil.
+// nil — то же, что и false, но такого после Zagruzit не остаётся: миграция
+// разводит nil на true (старый файл) или false (чистый инсталл) сама. Метод
+// нужен, чтобы вызывающий код не разыменовывал указатель сам.
+func (n *Nastroyki) UzheSprosiliPrava() bool {
+	return n.PravaZaprosheny != nil && *n.PravaZaprosheny
 }
 
 var zamok sync.Mutex
@@ -103,7 +125,12 @@ func Zagruzit() (*Nastroyki, error) {
 	b, err := os.ReadFile(putNastroek())
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Файла не было вовсе — подлинно чистый инсталл. Спросить права
+			// самим при первом подключении НУЖНО, попап никого не пугает:
+			// человек только что поставил приложение и ждёт от него дела.
 			n.DeviceID = novyyID()
+			zaprosheno := false
+			n.PravaZaprosheny = &zaprosheno
 			return n, nil
 		}
 		return n, err
@@ -117,6 +144,15 @@ func Zagruzit() (*Nastroyki, error) {
 	}
 	if n.ObnovlyatMin <= 0 {
 		n.ObnovlyatMin = 60
+	}
+	if n.PravaZaprosheny == nil {
+		// Файл существовал ДО появления этого поля — то есть человек уже
+		// поставил и запускал более старую версию приложения. Считаем, что
+		// его уже «спрашивали» (на самом деле нет, но и заново спрашивать
+		// нельзя): внезапный UAC-попап на ровном месте на существующей
+		// установке выглядит как malware, а не как забота.
+		uzhe := true
+		n.PravaZaprosheny = &uzhe
 	}
 	return n, nil
 }

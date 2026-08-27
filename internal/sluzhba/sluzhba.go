@@ -684,6 +684,10 @@ type otvetSostoyaniya struct {
 	// обновление» — та отвечает своим отдельным otvetObnovleniya.Novaya.
 	// Пусто — фон ничего не нашёл или ещё не спрашивал.
 	NovayaVersiyaDostupna string `json:"novaya_versiya_dostupna,omitempty"`
+	// PravaUzheSprosheny — приложение уже (само или кнопкой) спрашивало права
+	// администратора хоть раз, отдельно от Prava (есть ли они СЕЙЧАС): вместе
+	// эти два поля различают «ещё не спрашивали» и «спрашивали и отказали».
+	PravaUzheSprosheny bool `json:"prava_uzhe_sprosheny"`
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -722,6 +726,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	}
 	o.Prava = prava.Est()
 	o.MozhnoTun = k.EstTunnel && !o.Prava
+	o.PravaUzheSprosheny = s.Nastroyki.UzheSprosiliPrava()
 	o.RuchnoyProksi = k.RuchnoyProksi
 	// runtime.GOOS, а не сам факт ошибки: на не-Windows avtozapusk всегда
 	// отвечает своей заглушкой avtozapusk.Ne, и эту ошибку незачем нести в
@@ -1103,6 +1108,12 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 
 func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 	err := s.PodnyatZashchitu(context.Background())
+	if err == nil {
+		// В фоне и после ответа: сам запрос прав (окно UAC) не должен
+		// задержать «gotovo» в окне — человек уже подключён, а вопрос про
+		// права идёт следом, а не вместо ответа.
+		go s.zaprositPravaAvtomaticheskiEsliNado()
+	}
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
 
@@ -1176,15 +1187,7 @@ func (s *Sluzhba) polnayaZashchita(w http.ResponseWriter, r *http.Request) {
 	}
 	otdat(w, map[string]any{"gotovo": true, "perezapusk": true}, nil)
 	log.Printf("человек согласился на права администратора, перезапускаюсь")
-	go func() {
-		time.Sleep(300 * time.Millisecond) // дать ответу уйти в окно
-		_ = s.Yadro.Ostanovit()            // ядро старой копии гасим сами
-		if s.vyhod != nil {
-			s.vyhod()
-			return
-		}
-		os.Exit(0)
-	}()
+	s.uydiPosleSoglasiyaNaPrava()
 }
 
 // sprositPrava — настоящее окно UAC либо подмена со стенда. Передаёт свой
@@ -1194,6 +1197,59 @@ func (s *Sluzhba) sprositPrava() error {
 		return s.poprositPrava(os.Getpid())
 	}
 	return prava.Poprosit(os.Getpid())
+}
+
+// uydiPosleSoglasiyaNaPrava — общий хвост согласия на права: и кнопка
+// «Включить для всех программ» (polnayaZashchita), и автозапрос после первого
+// успешного подключения (zaprositPravaAvtomaticheskiEsliNado) заканчиваются
+// одинаково — повышенная копия уже запущена (ShellExecuteW внутри sprositPrava
+// это сделал), а эта, старая, обязана погасить своё ядро и уйти, иначе на
+// машине останутся две живые копии (беда 25.08).
+func (s *Sluzhba) uydiPosleSoglasiyaNaPrava() {
+	go func() {
+		time.Sleep(300 * time.Millisecond) // дать ответу/сохранению уйти
+		_ = s.Yadro.Ostanovit()            // ядро старой копии гасим сами
+		if s.vyhod != nil {
+			s.vyhod()
+			return
+		}
+		os.Exit(0)
+	}()
+}
+
+// zaprositPravaAvtomaticheskiEsliNado — первый успешный коннект с профилем,
+// которому нужен туннель (EstTunnel), сам спрашивает права администратора
+// ОДИН раз, тем же путём, что и кнопка «Включить для всех программ»: человек
+// уже впустил приложение (ввёл код доступа), и запрос прав — тот же шаг,
+// который он иначе сделал бы сам следующим кликом. Кнопка остаётся на месте
+// как запасной путь — этот автозапрос её не заменяет, а опережает.
+//
+// Не критический путь для podklyuchit: вызывается уже ПОСЛЕ того, как
+// PodnyatZashchitu вернула успех и ответ ушёл в окно, поэтому отказ или
+// ошибка тут не портят сам факт подключения — только пишутся в журнал.
+//
+// UzheSprosiliPrava() — единственный сторож повторного вопроса и, что
+// важнее, сторож против незваного попапа на СУЩЕСТВУЮЩЕЙ установке: миграция
+// в hranenie.Zagruzit уже отметила такие файлы как «спрошено», сюда эта
+// функция для них вообще не доходит.
+func (s *Sluzhba) zaprositPravaAvtomaticheskiEsliNado() {
+	s.zamok.Lock()
+	estTunnel := s.kartina.EstTunnel
+	s.zamok.Unlock()
+	if !estTunnel || s.Nastroyki.UzheSprosiliPrava() || prava.Est() {
+		return
+	}
+	if err := s.sprositPrava(); err != nil {
+		log.Printf("автозапрос прав администратора при первом подключении: отказ или ошибка: %v", err)
+	} else {
+		log.Printf("человек согласился на права администратора при первом подключении, перезапускаюсь")
+		s.uydiPosleSoglasiyaNaPrava()
+	}
+	zaprosheno := true
+	s.Nastroyki.PravaZaprosheny = &zaprosheno
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("не сохранил отметку об автозапросе прав администратора: %v", err)
+	}
 }
 
 func otdat(w http.ResponseWriter, telo any, err error) {
