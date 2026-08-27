@@ -73,3 +73,42 @@ func TestZagruzitStaryyFaylBezAvtorezhimaDayotVyklyucheno(t *testing.T) {
 		t.Fatalf("остальные поля старого файла не сохранились: %+v", n)
 	}
 }
+
+// TestZagruzitStaryyFaylBezPravaZaprosheny — критичный риск миграции: у
+// человека, поставившего приложение ЛЮБОЙ версией до появления автозапроса
+// прав, файл настроек уже существует, а поля prava_zaprosheny в нём нет.
+// Считаем это «уже спрашивали» — иначе первый же коннект на новой версии
+// выкинет незваный UAC-попап, который выглядит как malware (см. диагноз).
+func TestZagruzitStaryyFaylBezPravaZaprosheny(t *testing.T) {
+	t.Setenv("KELEVRA_DIR", t.TempDir())
+	staryy := `{"kod":"abc","device_id":"xyz","avtopodklyuch":true,"obnovlyat_min":30}`
+	if err := os.MkdirAll(Papka(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(putNastroek(), []byte(staryy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := Zagruzit()
+	if err != nil {
+		t.Fatalf("Zagruzit на старом файле без поля prava_zaprosheny упал: %v", err)
+	}
+	if !n.UzheSprosiliPrava() {
+		t.Fatal("старый файл без prava_zaprosheny обязан читаться как «уже спрашивали» — иначе незваный UAC-попап на существующей установке")
+	}
+}
+
+// TestZagruzitBezFaylaDayotEshcheNeSprosheno — противоположный случай: файла
+// нет вовсе, значит инсталл подлинно чистый, и права ПОКА не спрашивали —
+// первое успешное подключение обязано спросить их само.
+func TestZagruzitBezFaylaDayotEshcheNeSprosheno(t *testing.T) {
+	t.Setenv("KELEVRA_DIR", t.TempDir())
+
+	n, err := Zagruzit()
+	if err != nil {
+		t.Fatalf("Zagruzit на чистом инсталле упал: %v", err)
+	}
+	if n.UzheSprosiliPrava() {
+		t.Fatal("на чистом инсталле (файла не было) UzheSprosiliPrava не должен быть true — иначе автозапрос прав никогда не сработает")
+	}
+}
