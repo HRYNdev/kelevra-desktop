@@ -118,24 +118,65 @@ var (
 // появиться) — возвращает false, и вызывающий код обязан откатиться на
 // pokazatOkno, как было раньше.
 func podnyatChuzheeOkno() bool {
-	classPtr, err := syscall.UTF16PtrFromString(classWebview)
-	if err != nil {
-		log.Printf("поднятие чужого окна: не собрал имя класса: %v", err)
+	hwnd, est := naytiOkno()
+	if !est {
 		return false
 	}
-	titlePtr, err := syscall.UTF16PtrFromString(titleOkna)
-	if err != nil {
-		log.Printf("поднятие чужого окна: не собрал заголовок: %v", err)
-		return false
-	}
-	hwndR, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(classPtr)), uintptr(unsafe.Pointer(titlePtr)))
-	if hwndR == 0 {
-		log.Printf("поднятие чужого окна: FindWindowW не нашёл окно (класс %q, заголовок %q)", classWebview, titleOkna)
-		return false
-	}
-	hwnd := syscall.Handle(hwndR)
 	procShowWindow.Call(uintptr(hwnd), swRestore)
 	procSetForegroundWindow.Call(uintptr(hwnd))
 	log.Printf("поднятие чужого окна: нашёл hwnd=%#x, развернул и вывел на передний план", hwnd)
+	return true
+}
+
+// wmClose — Win32 WM_CLOSE: то же сообщение, что система шлёт окну по
+// нажатию крестика. UIPI (User Interface Privilege Isolation) пускает
+// сообщение от процесса С правами к окну БЕЗ прав (обратное запрещено), а
+// смена режима всегда идёт именно в эту сторону — от уже повышенной копии к
+// ещё не повышенному окну старой, — так что послать его отсюда можно всегда.
+// wmClose использует procPostMessageW — тот же прок, что уже объявлен в
+// trey_windows.go (общий на пакет, тот же build-тег windows).
+const wmClose = 0x0010
+
+// naytiOkno ищет HWND окна Kelevra по классу и заголовку — общий поиск для
+// podnyatChuzheeOkno (поднять чужое окно на передний план) и
+// zakrytStaroeOkno (закрыть его). Оба ищут один и тот же (и единственный по
+// конструкции приложения — см. kopiya.Vzyat) экземпляр окна, отличается
+// только то, что с ним делают дальше.
+func naytiOkno() (syscall.Handle, bool) {
+	classPtr, err := syscall.UTF16PtrFromString(classWebview)
+	if err != nil {
+		log.Printf("поиск окна: не собрал имя класса: %v", err)
+		return 0, false
+	}
+	titlePtr, err := syscall.UTF16PtrFromString(titleOkna)
+	if err != nil {
+		log.Printf("поиск окна: не собрал заголовок: %v", err)
+		return 0, false
+	}
+	hwndR, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(classPtr)), uintptr(unsafe.Pointer(titlePtr)))
+	if hwndR == 0 {
+		log.Printf("поиск окна: FindWindowW не нашёл окно (класс %q, заголовок %q)", classWebview, titleOkna)
+		return 0, false
+	}
+	return syscall.Handle(hwndR), true
+}
+
+// zakrytStaroeOkno закрывает окно ПРЕДЫДУЩЕЙ копии сразу после смены режима
+// (--smena, см. main.go: adresKopii), не дожидаясь, пока это заметит его
+// собственный сторож (storozh_okna.go: 3 промаха по 2с, ≈6с — нарочно
+// небыстро, чтобы не закрыть окно на разовую заминку ЖИВОЙ службы). К
+// моменту вызова этой функции старая служба уже подтверждённо мертва
+// (zhdatSmenu), поэтому ждать чужой таймаут незачем — не закрой мы его сами,
+// человек увидел бы старое (уже неживое) окно рядом с новым ещё несколько
+// секунд, ровно ту беду 25.08 «2 нахуй открыто», которую эта смена и обязана
+// не повторить.
+func zakrytStaroeOkno() bool {
+	hwnd, est := naytiOkno()
+	if !est {
+		// Окна не было (автозапуск, значок в трее без окна) — закрывать нечего.
+		return false
+	}
+	procPostMessageW.Call(uintptr(hwnd), wmClose, 0, 0)
+	log.Printf("смена режима: отправил WM_CLOSE окну прошлой копии (hwnd=%#x)", hwnd)
 	return true
 }
