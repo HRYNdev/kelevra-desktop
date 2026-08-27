@@ -218,8 +218,22 @@ SCENY = {
     # классов .uzel .signal стоят на экране разом, и щуп геометрии
     # (proverit_gradacii_signala) может их сравнить.
     "24_uzly_vse_gradacii": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
-                                 zametka=ZAMETKI["ZametkaVes"], uzly=UZLY_VSE_GRADACII),
+                                 zametka=ZAMETKI["ZametkaBezTunnelya"], uzly=UZLY_VSE_GRADACII),
 }
+
+# 27.08: сцена 24 несла rezhim="proksi" и при этом заметку ПОЛНОГО режима —
+# на снимке круг говорил «трафик браузеров», а блок под ним «Любая программа
+# идёт через Kelevra». Продукт так не умеет (konfig.Prigotovit пишет режим и
+# заметку одной веткой), врала только сцена — но врала МНЕ: я смотрю снимки
+# глазами и полез искать беду в продукте. Прибор, который сам себе
+# противоречит, дороже пропущенной беды. Держим класс, а не одно место.
+NESOVMESTIMO = [("proksi", "ZametkaVes"), ("tunnel", "ZametkaBezTunnelya")]
+for _imya, _s in SCENY.items():
+    for _rezhim, _klyuch in NESOVMESTIMO:
+        if _s.get("rezhim") == _rezhim and _s.get("zametka") == ZAMETKI[_klyuch]:
+            raise SystemExit(
+                f"сцена «{_imya}» сама себе противоречит: rezhim={_rezhim!r} "
+                f"с заметкой {_klyuch} — на снимке круг и блок скажут разное")
 
 # Автозапуск, смена кода и журнал переехали на вкладку «Настройки» (спека
 # 04.08: на «Сети» — только круг, заметка режима, кнопка полной защиты и
