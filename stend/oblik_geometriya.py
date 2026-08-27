@@ -46,6 +46,18 @@
       «он *** всё ещё стоит *** не по центру а слева», «закрывает обзор
       на надписи», «ездит *** квадратом». Прежняя (ж) мерила уезд за
       ВЕРХНИЙ край при прокрутке — мой неверный разбор его слов 25.08.
+  (з) ПОЛОСА ВЫБОРА РЕЖИМА (27.08, заказ хозяина: «должно быть тупо выбор авто
+      режим который сам все определяет, или ручной и там сам выбираешь» —
+      список узлов с «Нидерланды прямой, запасной, комната» его злил).
+      (з1) на главном экране РОВНО одна полоса `.rezhim-perekl`, и обе
+      половины несут дословный текст «Автоматически» / «Вручную» — не
+      перевод смысла, а те же слова, что на телефоне (HomeScreen.kt:464-465).
+      (з2) `#uzly` виден ТОЛЬКО когда `avtorezhim_vklyuchen=false` (ручной):
+      при авто он обязан быть скрыт целиком (сверено с полем сцены, а не с
+      порядком в HTML — иначе проверка судила бы себя саму).
+      (з3) полоса не смеет ни накрывать собой другой текст ленты, ни быть
+      накрытой — тот же приём, что и (ж2) у круга: сравниваем
+      getBoundingClientRect() полосы против всех остальных видимых узлов.
 
     python3 stend/oblik_geometriya.py
 """
@@ -200,6 +212,86 @@ def proverit_krug_os_x(str_, imya_sceny):
     return bedy
 
 
+REZHIM_JS = """() => {
+  // Полоса выбора режима — тот же приём измерения, что и у круга (ж2):
+  // getBoundingClientRect() полосы против ВСЕХ остальных видимых узлов ленты.
+  const r = (el) => {
+    if (!el) return null;
+    const rr = el.getBoundingClientRect();
+    return (rr.width > 0 || rr.height > 0) ? rr : null;
+  };
+  const bar = document.querySelector('.rezhim-perekl');
+  const avto = document.getElementById('rezhim-avto');
+  const ruchnoy = document.getElementById('rezhim-ruchnoy');
+  const uzly = document.getElementById('uzly');
+  const lenta = document.getElementById('lenta');
+  const barRect = r(bar);
+  // Есть ли вообще главный экран на этой сцене — своя примета (круг),
+  // независимая от полосы: иначе отсутствие `.rezhim-perekl` в разметке
+  // читалось бы прибором как «сцена без главного экрана» и молчало бы —
+  // ровно та ловушка «проверка с пустым входом зеленеет» (25.08).
+  const glavnyyEkranViden = !!r(document.querySelector('.krug-fon'));
+  const perekryto = [];
+  if (barRect && lenta) {
+    for (const el of lenta.querySelectorAll('*')) {
+      if (bar.contains(el) || el.contains(bar)) continue;
+      const rr = el.getBoundingClientRect();
+      if (rr.width < 4 || rr.height < 4) continue;
+      const dy = Math.min(rr.bottom, barRect.bottom) - Math.max(rr.top, barRect.top);
+      const dx = Math.min(rr.right, barRect.right) - Math.max(rr.left, barRect.left);
+      const svoy = [...el.childNodes].filter((n) => n.nodeType === 3)
+                     .map((n) => n.textContent.trim()).join(' ').trim();
+      if (dy > 2 && dx > 2 && svoy) perekryto.push({tekst: svoy.slice(0, 30), dy: Math.round(dy)});
+    }
+  }
+  return {
+    kolichestvo: document.querySelectorAll('.rezhim-perekl').length,
+    est_bar: !!barRect,
+    glavnyyEkranViden,
+    avtoText: avto ? avto.textContent.trim() : null,
+    ruchnoyText: ruchnoy ? ruchnoy.textContent.trim() : null,
+    uzlyVidno: !!(uzly && !uzly.hidden && r(uzly)),
+    uzlyHidden: !!(uzly && uzly.hidden),
+    perekryto: perekryto.slice(0, 4),
+  };
+}"""
+
+
+def proverit_rezhim_perekl(str_, imya_sceny, avtorezhim_vklyuchen_ozhidaem):
+    """(з) Полоса выбора режима на главном экране — заказ хозяина 27.08:
+    «должно быть тупо выбор авто режим который сам все определяет, или
+    ручной и там сам выбираешь» — список узлов до этого стоял голым текстом
+    и злил владельца («натыкал Нидерланды прямой, запасной, комната»).
+    """
+    d = str_.evaluate(REZHIM_JS)
+    bedy = []
+    if not d["glavnyyEkranViden"]:
+        # Сцена «1_kod» не рисует главный экран вовсе (карта-koda видна вместо
+        # karta-svyazi) — полосы там физически нет и не должно быть, это не
+        # беда (тот же приём, что и в proverit_glavnyy_ekran для круга/подсказки).
+        return bedy
+    if not d["est_bar"]:
+        bedy.append(f"{imya_sceny}: (з1) полосы выбора режима `.rezhim-perekl` нет на главном экране")
+        return bedy
+    if d["kolichestvo"] != 1:
+        bedy.append(f"{imya_sceny}: (з1) полос выбора режима {d['kolichestvo']}, а нужна РОВНО одна")
+    if d["avtoText"] != "Автоматически":
+        bedy.append(f"{imya_sceny}: (з1) подпись половины «{d['avtoText']}», а нужна дословно «Автоматически»")
+    if d["ruchnoyText"] != "Вручную":
+        bedy.append(f"{imya_sceny}: (з1) подпись половины «{d['ruchnoyText']}», а нужна дословно «Вручную»")
+    if avtorezhim_vklyuchen_ozhidaem:
+        if d["uzlyVidno"]:
+            bedy.append(f"{imya_sceny}: (з2) авторежим включён, а #uzly виден — список узлов должен быть скрыт")
+    else:
+        if not d["uzlyVidno"]:
+            bedy.append(f"{imya_sceny}: (з2) авторежим выключен (ручной), а #uzly скрыт "
+                        f"(hidden={d['uzlyHidden']}) — список узлов должен быть виден")
+    if d["perekryto"]:
+        chto = ", ".join(f"«{z['tekst']}» на {z['dy']}px" for z in d["perekryto"])
+        bedy.append(f"{imya_sceny}: (з3) полоса режима перекрывается с текстом ленты: {chto}")
+    return bedy
+
+
 SIGNAL_JS = """() => {
   const sostoyaniya = ["bystro", "sredne", "medlenno", "mertv"];
   const kakoe = (el) => sostoyaniya.find((s) => el.classList.contains(s)) || "bez_zamera";
@@ -260,6 +352,8 @@ def zamerit():
                 str_.wait_for_timeout(700)
                 bedy = proverit_glavnyy_ekran(str_, imya_sceny)
                 bedy += proverit_krug_os_x(str_, imya_sceny)
+                bedy += proverit_rezhim_perekl(
+                    str_, imya_sceny, bool(SCENY[imya_sceny].get("avtorezhim_vklyuchen")))
                 if imya_sceny == "24_uzly_vse_gradacii":
                     bedy += proverit_gradacii_signala(str_, imya_sceny)
                 znak = "🔴" if bedy else "🟢"
