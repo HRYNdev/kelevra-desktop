@@ -35,15 +35,17 @@
       попадали на экран НИ РАЗУ, и щуп это не заметил — вход был пуст).
       Смотрим только на сцене 24_uzly_vse_gradacii — единственной, где все
       пять состояний нарисованы разом.
-  (ж) ОСЬ ПРОКРУТКИ. Круг обязан оставаться в пределах окна (0…VYSOTA по
-      вертикали) не только сразу после goto() (scrollTop=0 — это уже смотрят
-      (а)/(б) выше), но и после прокрутки .lenta до самого конца. Единственный
-      скролл несёт круг+кнопку «Включить для всех программ»+список узлов
-      разом, и круг ничем не закреплён не был — при докрутке уезжал за
-      верхний край (хозяин, 25.08 19:31, дословно: «какого хуя *** у тебя
-      круг куда то съехал ***»). Ни одна проверка (а)-(е) этого не ловила:
-      все они читают rect сразу после goto(), то есть на scrollTop=0, и по
-      оси прокрутки слепы для всех 24 сцен разом.
+  (ж) ОСЬ X И ПЕРЕКРЫТИЕ. (ж1) центр круга обязан совпадать с центром ОКНА
+      (допуск 2px), а не с центром своего блока: <button> в Chromium держит
+      shrink-to-fit ширину даже при display:flex, и align-items:center молча
+      центровал круг внутри 210px, прижатых к левому краю (замер 27.08 —
+      87px влево). (ж2) блок круга не смеет накрывать собой ни одну надпись
+      ленты после прокрутки до конца — так ловится любое «приклеим круг»
+      (sticky/fixed): непрозрачный прямоугольник едет над списком и прячет
+      текст. Обе беды названы человеком, а не выведены мной: хозяин 27.08 10:29
+      «он *** всё ещё стоит *** не по центру а слева», «закрывает обзор
+      на надписи», «ездит *** квадратом». Прежняя (ж) мерила уезд за
+      ВЕРХНИЙ край при прокрутке — мой неверный разбор его слов 25.08.
 
     python3 stend/oblik_geometriya.py
 """
@@ -131,32 +133,71 @@ def proverit_glavnyy_ekran(str_, imya_sceny):
     return bedy
 
 
-KRUG_POSLE_PROKRUTKI_JS = """() => {
-  // Докручиваем ЕДИНСТВЕННЫЙ скролл экрана (.lenta несёт круг+кнопку+список
-  // разом) до самого конца и меряем круг ПОСЛЕ этого — ровно то положение,
-  // которого ни goto(), ни одна проверка (а)-(е) не трогают (те читают rect
-  // сразу после загрузки, на scrollTop=0).
+KRUG_OS_X_JS = """() => {
+  // Меряем ДВЕ вещи, обе — с натуры, а не с догадки.
+  // (ж1) центр круга против центра ОКНА. align-items:center у .krug-blok
+  //      центрует внутри БЛОКА, и если блок уже окна (<button> в Chromium
+  //      держит shrink-to-fit ширину даже при display:flex), круг честно
+  //      стоит по центру блока и криво по центру экрана.
+  // (ж2) что блок круга накрывает СОБОЙ после прокрутки ленты до конца.
+  //      Ловит любое лекарство вида «приклеим круг» (sticky/fixed): такой
+  //      блок непрозрачен и едет над списком, пряча текст под собой.
   const lenta = document.getElementById('lenta');
-  const el = document.querySelector('.krug-fon');
-  if (!lenta || !el) return null;
+  const krug = document.querySelector('.krug-fon');
+  const blok = document.querySelector('.krug-blok');
+  if (!lenta || !krug || !blok) return null;
+  const k = krug.getBoundingClientRect();
+  if (!(k.width > 0 || k.height > 0)) return null;  // сцена без круга (1_kod)
+  const out = {okno: window.innerWidth, centr: (k.left + k.right) / 2,
+               left: k.left, right: k.right};
   lenta.scrollTop = lenta.scrollHeight - lenta.clientHeight;
-  const rr = el.getBoundingClientRect();
-  if (!(rr.width > 0 || rr.height > 0)) return null;  // сцена без круга (1_kod)
-  return {top: rr.top, bottom: rr.bottom};
+  const b = blok.getBoundingClientRect();
+  const zakryto = [];
+  for (const el of lenta.querySelectorAll('*')) {
+    if (blok.contains(el) || el.contains(blok)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) continue;
+    const dy = Math.min(r.bottom, b.bottom) - Math.max(r.top, b.top);
+    const dx = Math.min(r.right, b.right) - Math.max(r.left, b.left);
+    // Только СВОЙ текст узла: у предка textContent несёт текст всех детей
+    // разом, и один накрытый пункт дал бы десяток одинаковых жалоб.
+    const svoy = [...el.childNodes].filter((n) => n.nodeType === 3)
+                   .map((n) => n.textContent.trim()).join(' ').trim();
+    if (dy > 2 && dx > 2 && svoy) zakryto.push({tekst: svoy.slice(0, 30), dy: Math.round(dy)});
+  }
+  out.zakryto = zakryto.slice(0, 4);
+  return out;
 }"""
 
 
-def proverit_krug_pri_prokrutke(str_, imya_sceny):
-    """(ж) Круг обязан целиком помещаться в окно (0…VYSOTA) и после прокрутки
-    .lenta до конца, не только на scrollTop=0. Допуск 1px на округление —
-    тот же, что и у остальных проверок этого забора."""
-    d = str_.evaluate(KRUG_POSLE_PROKRUTKI_JS)
+def proverit_krug_os_x(str_, imya_sceny):
+    """(ж) Круг стоит РОВНО по центру окна и ничего собой не закрывает.
+
+    Прежняя (ж) мерила «не уехал ли круг за верхний край при прокрутке» — это
+    был мой разбор слов хозяина 25.08 «круг куда то съехал», и разобрал я их
+    неверно. Его же слова 27.08 10:29, дословно: «он *** всё ещё стоит ***
+    не по центру а слева»; «при скролле ещё и *** то ездит дак ещё и криво
+    ездит так как закрывает обзор на надписи, а ещё он ездит *** квадратом».
+    То есть беда была по оси X (замер 27.08: 87px влево), а моё лекарство от
+    выдуманной вертикальной беды (position:sticky) добавило вторую — едущий
+    над списком непрозрачный прямоугольник 210x220. Прибор судит теперь то,
+    что назвал человек, а не то, что придумал я.
+    Порог 2px — округление разметки; 87px в него не влезает никак.
+    """
+    d = str_.evaluate(KRUG_OS_X_JS)
     if not d:
         return []
-    if d["top"] < -1 or d["bottom"] > VYSOTA + 1:
-        return [f"{imya_sceny}: (ж) круг после прокрутки ленты до конца "
-                f"{d['top']:.0f}…{d['bottom']:.0f}px, а окно 0…{VYSOTA}px — круг уехал за край"]
-    return []
+    bedy = []
+    sdvig = d["centr"] - d["okno"] / 2
+    if abs(sdvig) > 2:
+        storona = "ВЛЕВО" if sdvig < 0 else "ВПРАВО"
+        bedy.append(f"{imya_sceny}: (ж1) круг сдвинут {storona} на {abs(sdvig):.0f}px — "
+                    f"центр круга {d['centr']:.0f}px, центр окна {d['okno'] / 2:.0f}px "
+                    f"(круг {d['left']:.0f}…{d['right']:.0f})")
+    if d["zakryto"]:
+        chto = ", ".join(f"«{z['tekst']}» на {z['dy']}px" for z in d["zakryto"])
+        bedy.append(f"{imya_sceny}: (ж2) блок круга накрывает собой текст при прокрутке: {chto}")
+    return bedy
 
 
 SIGNAL_JS = """() => {
@@ -218,7 +259,7 @@ def zamerit():
                 str_.goto(f"http://127.0.0.1:{port}/index.html")
                 str_.wait_for_timeout(700)
                 bedy = proverit_glavnyy_ekran(str_, imya_sceny)
-                bedy += proverit_krug_pri_prokrutke(str_, imya_sceny)
+                bedy += proverit_krug_os_x(str_, imya_sceny)
                 if imya_sceny == "24_uzly_vse_gradacii":
                     bedy += proverit_gradacii_signala(str_, imya_sceny)
                 znak = "🔴" if bedy else "🟢"
