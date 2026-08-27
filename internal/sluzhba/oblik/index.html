@@ -1234,7 +1234,20 @@ function risovatUzly(gruppy) {
   // Сперва подгоняем высоту коробки под целое число узлов (см. функцию
   // выше) — иначе следующий шаг сам мог бы прокрутить список ровно на
   // огрызок узла.
-  podognatVysotuUzlov(vybranEl);
+  usadit(vybranEl);
+}
+
+// ПОСАДКА СПИСКА: подгонка высоты коробки + доводка выбранного узла в видимую
+// часть. Вынесено из risovatUzly, потому что зовётся ДВУМЯ путями: отрисовкой
+// списка и наблюдателем за высотой того, что стоит НАД списком (ниже).
+let vybranTekushchiy = null;
+function usadit(vybranEl) {
+  if (vybranEl !== undefined) vybranTekushchiy = vybranEl;
+  const v = vybranTekushchiy && vybranTekushchiy.isConnected ? vybranTekushchiy : null;
+  // Сперва подгоняем высоту коробки под целое число узлов (см. функцию
+  // выше) — иначе следующий шаг сам мог бы прокрутить список ровно на
+  // огрызок узла.
+  podognatVysotuUzlov(v);
   // Выбранный узел обязан быть виден ЦЕЛИКОМ, не только верхушкой букв:
   // #uzly клипает контент своей собственной границей (overflow-y:auto), и
   // текущий выбор мог оказаться ниже видимой области — например когда над
@@ -1246,7 +1259,33 @@ function risovatUzly(gruppy) {
   // скролл-контейнера (диагноз 27.08, забор oblik_obrezka_kadra.py: раньше
   // скроллилась вся .lenta целиком, и круг на первом кадре улетал за
   // верхнюю границу на 15 сценах из 26).
-  if (vybranEl) vybranEl.scrollIntoView({block: "nearest"});
+  if (v) v.scrollIntoView({block: "nearest"});
+}
+
+// Высота списка считается ОДНИМ замером — в момент его отрисовки. А всё, что
+// стоит над списком, приезжает своей ручкой API и своим временем: /api/uzly и
+// /api/sostoyanie идут врозь, и порядок их приезда не гарантирован ничем.
+// 27.08 состояние опоздало на полсекунды: список сел по экрану БЕЗ блока беды,
+// затем блок встал над ним и сдвинул список на 95px вниз — выбранный узел
+// уехал под панель вкладок и висел там до следующего опроса (до 2 секунд, см.
+// setInterval внизу). Человек в это время не видит, что у него выбрано, — та
+// же беда, что он назвал 24.08 на снимках 11_beda_port/12_beda_seti.
+// Поэтому следим за высотой СОСЕДЕЙ списка и пересаживаем его. За самим #uzly
+// не следим намеренно: усадка меняет его собственную высоту, это был бы цикл.
+function sleditZaVysotoyNadSpiskom() {
+  const uz = $("uzly");
+  if (!uz || !uz.parentElement || typeof ResizeObserver === "undefined") return;
+  const sosedi = [...uz.parentElement.children].filter((e) => e !== uz);
+  let bylo = null;
+  const nabl = new ResizeObserver(() => {
+    // Пересаживаем только когда высота НАД списком правда изменилась: без
+    // этого любая ответная перекладка соседей гоняла бы наблюдателя по кругу.
+    const stalo = sosedi.map((e) => Math.round(e.getBoundingClientRect().height)).join(",");
+    if (stalo === bylo) return;
+    bylo = stalo;
+    if ($("uzly")) usadit();
+  });
+  for (const sosed of sosedi) nabl.observe(sosed);
 }
 
 async function obnovitUzly() {
@@ -1383,6 +1422,7 @@ $("knopka-kopirovat").onclick = async () => {
   setTimeout(() => { knopka.textContent = "Скопировать журнал"; }, 2500);
 };
 
+sleditZaVysotoyNadSpiskom();
 obnovit();
 obnovitUzly();
 setInterval(() => { obnovit(); obnovitUzly(); }, 2000);
