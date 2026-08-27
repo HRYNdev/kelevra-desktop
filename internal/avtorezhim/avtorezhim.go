@@ -39,6 +39,7 @@ package avtorezhim
 import (
 	"context"
 	"net"
+	"sync"
 )
 
 // Sostoyanie — в какой сети сейчас ноутбук с точки зрения авторежима.
@@ -180,6 +181,13 @@ type Avtorezhim struct {
 	// на резолвер физического адаптера тесту не нужен.
 	DnsPryamoy func(adresResolvera, lokalnyAdres string) DnsProver
 
+	// mu защищает slepyhPodryad и poslednyayaPrichinaSlepoty ниже: Zahod
+	// пишет их из горутины Sluzhitel.Krutit (см. sluzhitel.go), а
+	// PrichinaSlepoty читает их же по вызову HTTP-ручки /api/sostoyanie
+	// (internal/sluzhba/sluzhba.go) на том же экземпляре — без замка это
+	// гонка на живых данных, не только в теории (см. race_repro_test.go).
+	mu sync.Mutex
+
 	// slepyhPodryad и poslednyayaPrichinaSlepoty — учёт подряд идущих
 	// слепых заходов (см. Nablyudeniye.ZondSlep) для PrichinaSlepoty:
 	// единичная слепота не повод тревожить человека, а вот PodryadDoPrichiny
@@ -190,11 +198,33 @@ type Avtorezhim struct {
 	poslednyayaPrichinaSlepoty string
 }
 
+// sbrositSlepotu — заход зрячий: счётчик подряд идущих слепых заходов и
+// причина обнуляются. Замок держится только вокруг присваивания (см.
+// предупреждение у mu) — Zahod вызывает это посреди своей логики, вложенной
+// блокировки здесь и в otmetitSlepotu быть не должно.
+func (a *Avtorezhim) sbrositSlepotu() {
+	a.mu.Lock()
+	a.slepyhPodryad = 0
+	a.poslednyayaPrichinaSlepoty = ""
+	a.mu.Unlock()
+}
+
+// otmetitSlepotu — заход слепой: счётчик подряд идущих слепых заходов растёт,
+// причина запоминается для PrichinaSlepoty.
+func (a *Avtorezhim) otmetitSlepotu(prichina string) {
+	a.mu.Lock()
+	a.slepyhPodryad++
+	a.poslednyayaPrichinaSlepoty = prichina
+	a.mu.Unlock()
+}
+
 // PrichinaSlepoty — человеческая причина того, что авторежим PodryadDoPrichiny
 // заходов подряд не может понять, дома ли ноутбук, поэтому не переключает
 // защиту сам. Пустая строка — рано (слепота ещё не длится достаточно) или
 // слепоты нет вовсе.
 func (a *Avtorezhim) PrichinaSlepoty() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.slepyhPodryad < PodryadDoPrichiny {
 		return ""
 	}
@@ -293,8 +323,7 @@ func prichinaDnsNePrivaten(dnsAdres string) string {
 // TCP-запрос платить незачем.
 func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nablyudeniye Nablyudeniye, izmenilos bool, tekushcheye Sostoyanie) {
 	if !estSet {
-		a.slepyhPodryad = 0
-		a.poslednyayaPrichinaSlepoty = ""
+		a.sbrositSlepotu()
 		n := Nablyudeniye{EstSet: false}
 		izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 		return n, izm, a.Zadvizhka.Tekushcheye()
@@ -316,8 +345,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 			// подряд идущих слепых заходов растёт, и после PodryadDoPrichiny
 			// причина становится видна человеку — до тех пор автоматический
 			// режим только выглядит работающим, а на деле ничего не решает.
-			a.slepyhPodryad++
-			a.poslednyayaPrichinaSlepoty = prichina
+			a.otmetitSlepotu(prichina)
 			return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
 		}
 		// Адрес физического адаптера известен — DnsZond спрашивает ЕГО
@@ -325,16 +353,14 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 		// не слепой, ZondSlep не ставится. Приватность адреса тут больше не
 		// условие (см. adresFizicheskogoAdaptera) — публичный резолвер
 		// честно ответит «не дома», если это не наш роутер.
-		a.slepyhPodryad = 0
-		a.poslednyayaPrichinaSlepoty = ""
+		a.sbrositSlepotu()
 		tvorec := a.DnsPryamoy
 		if tvorec == nil {
 			tvorec = novyyDnsZondPryamoy
 		}
 		dns = tvorec(dnsAdres, lokalnyIP)
 	} else {
-		a.slepyhPodryad = 0
-		a.poslednyayaPrichinaSlepoty = ""
+		a.sbrositSlepotu()
 	}
 
 	dnsDoma, err := dns.DomaPoDns(ctx)
