@@ -51,6 +51,27 @@
 # Этот случай покрыт go-тестами internal/sluzhba/polnaya_zashchita_test.go
 # (TestOtkazVPravahOstavlyaetMetkuNaMeste), которые гоняются в приёмке отдельно.
 set -u
+
+# schitat_kopii — сколько копий Kelevra.exe живо ПРЯМО СЕЙЧАС.
+#
+# Две грабли, из-за которых прежний однострочник врал молча (27.08):
+#  1) `pgrep -c` при нуле совпадений ПЕЧАТАЕТ «0» и возвращает rc=1 — то есть
+#     хвост `|| echo 0` дописывал ВТОРОЙ ноль, и переменная получала «0\n0».
+#     Дальше `[ "$final" -ne 1 ]` падал с «integer expression expected», а
+#     падение условия уводит в ветку else — щуп (d) печатал ЗЕЛЁНЫЙ на пустой
+#     площадке. Зелёный поверх пустоты; за весь срок жизни щуп не сработал ни разу.
+#  2) `-f` матчит ВСЮ командную строку, а значит и любую соседнюю оболочку, в
+#     чьей строке просто встретилось это имя (свой же grep, свой же pgrep, вызов
+#     стенда из скрипта). Считаем по ИМЕНИ процесса (-x, без -f): под wine оно
+#     ровно «Kelevra.exe» и в 15 символов /proc/comm влезает целиком.
+schitat_kopii() {
+  local n
+  n=$(pgrep -c -x "Kelevra.exe" 2>/dev/null)
+  # rc=1 (никого не нашёл) — не ошибка, это честный ноль.
+  [ -n "$n" ] || n=0
+  printf '%s' "$n"
+}
+
 KORFN=$(cd "$(dirname "$0")/.." && pwd)
 WINE=${WINE:-/usr/lib/wine/wine64}
 export WINEPREFIX=${WINEPREFIX:-$KORFN/.wine}
@@ -104,7 +125,7 @@ fi
 staryy_adres=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['url'])" "$METKA" 2>/dev/null)
 echo "  служба поднялась, адрес: $staryy_adres"
 
-bazovyy=$(pgrep -c -f "Kelevra\.exe" 2>/dev/null || echo 0)
+bazovyy=$(schitat_kopii)
 echo "  процессов Kelevra.exe до переключения режима: $bazovyy"
 if [ "$bazovyy" -ne 1 ]; then
   echo "  КРАСНЫЙ окружения: ожидали ровно 1 процесс до старта сценария, живо $bazovyy — площадка нечистая"
@@ -141,7 +162,7 @@ max_zhivyh_adresov=1
 streak_dvuh=0
 max_streak_dvuh=0
 for _ in $(seq 1 150); do
-  cnt=$(pgrep -c -f "Kelevra\.exe" 2>/dev/null || echo 0)
+  cnt=$(schitat_kopii)
   ryad="$ryad $cnt"
   [ "$cnt" -gt "$max_procs" ] && max_procs=$cnt
   if [ "$cnt" -gt 1 ]; then
@@ -171,7 +192,7 @@ hwnd_v_zhurnale=$(grep -oE 'hwnd=0x[0-9a-f]+' "$ZHURNAL" 2>/dev/null | sort -u |
 echo "  подсказка: разных адресов за весь прогон в журнале — $adresov_v_zhurnale (смена адреса при переключении режима ожидаема сама по себе)"
 echo "  подсказка: разных hwnd трея за весь прогон в журнале — $hwnd_v_zhurnale (новое окно трея при переключении режима ожидаемо само по себе)"
 
-final=$(pgrep -c -f "Kelevra\.exe" 2>/dev/null || echo 0)
+final=$(schitat_kopii)
 echo "  процессов Kelevra.exe после settle: $final"
 
 # Порог в 20 замеров (2с) отделяет ожидаемое короткое перекрытие «старая

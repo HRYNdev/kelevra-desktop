@@ -83,3 +83,47 @@ func podtolknutFonovuyuProverku(adres string) {
 		otvet.Body.Close()
 	}()
 }
+
+// srokVosstanovleniyaZashchity — щедрый таймаут: /api/podklyuchit внутри
+// себя может докачивать ядро (до 15 минут, см. Sluzhba.PodnyatZashchitu) и
+// только потом поднимать его (до 70с). Локальный HTTP, но сервер стороны
+// может реально столько работать — короткий таймаут просто оборвал бы её
+// на полпути и человек снова остался бы без защиты после «Включить для всех
+// программ», один в один та же жалоба, которую эта правка чинит.
+const srokVosstanovleniyaZashchity = 16 * time.Minute
+
+// vosstanovitPolnuyuZashchitu доводит до конца то, ради чего человек нажал
+// «Включить для всех программ» (index.html: knopka-polnaya, комментарий там
+// же — «Полная защита = туннель»). Кнопка просит права ИМЕННО затем, чтобы
+// поднять туннель (sluzhba.go: MozhnoTun = EstTunnel && !Prava) — сама смена
+// режима без этого шага была для человека просто перезапуском без защиты
+// (жалоба 27.08: «не включается»). Права к этому моменту уже есть
+// (prava.Est() внутри perestroit подхватит их сама), поэтому обычный
+// /api/podklyuchit (то же самое, что и ручное «Подключить») соберёт конфиг
+// уже в режиме Tunnel и поднимет его — по сути то же самое обычное
+// подключение, только без ожидания второго клика.
+//
+// Фоном: окно не должно ждать эту докачку/подъём, чтобы появиться — человек
+// увидит прогресс тем же способом, что и при обычном нажатии «Подключить»
+// (опрос /api/sostoyanie внутри уже открытого окна).
+func vosstanovitPolnuyuZashchitu(adres string) {
+	go func() {
+		klient := &http.Client{Timeout: srokVosstanovleniyaZashchity}
+		req, err := http.NewRequest(http.MethodPost, adres+"api/podklyuchit", nil)
+		if err != nil {
+			log.Printf("восстановление полной защиты после смены прав: не собрал запрос: %v", err)
+			return
+		}
+		otvet, err := klient.Do(req)
+		if err != nil {
+			log.Printf("восстановление полной защиты после смены прав не дошло (%v) — человеку придётся нажать «Подключить» самому", err)
+			return
+		}
+		defer otvet.Body.Close()
+		if otvet.StatusCode != http.StatusOK {
+			log.Printf("восстановление полной защиты после смены прав: служба ответила кодом %d", otvet.StatusCode)
+			return
+		}
+		log.Printf("восстановление полной защиты после смены прав: подключено")
+	}()
+}
