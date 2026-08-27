@@ -154,29 +154,61 @@ SCENA_DVA_UZLA = dict(
 SCENY_DLYA_ZABORA = dict(SCENY)
 SCENY_DLYA_ZABORA["25_dva_uzla_mozhno_tun"] = SCENA_DVA_UZLA
 
-# Порча для самоконтроля: сжимаем видимую высоту ленты так, чтобы её низ
-# гарантированно рассёк один из уже нарисованных узлов ровно посередине —
-# та же беда, что нашёл следователь, только вызванная нарочно. max-height
-# на `.lenta`, а не на `#vkladki` (как в oblik_snimok.PORCHA_CSS): `.lenta`
-# сама клипается через var(--taby-vysota), заданный в CSS один раз при
-# загрузке, а не живьём от текущей высоты соседа — рост `#vkladki` низ ленты
-# не двигает (проверено: 200px порчи по `#vkladki` не даёт ни одной обрезки).
-PORCHA_CSS = ".lenta { max-height: 520px !important; }"
+# Порча для самоконтроля — ДИАГНОЗ 27.08 (следователь, playwright-замер):
+# `.lenta { max-height: 400px !important; }` на 4_rabotaet НЕ режет ничего,
+# и дело не в тайминге (проверено паузами 200/750/900/2000/4100мс после
+# add_style_tag — рект #uzly не меняется ни на пиксель ни разу). Причина —
+# арифметика: 400px обрезает `.lenta` настолько, что верх `#uzly` (459.75px
+# сверху) целиком уезжает ЗА новую нижнюю границу `.lenta` (456px) — весь
+# список узлов пропадает под границей ЦЕЛИКОМ, а не разрезается пополам, и
+# «целиком за границей» — по договору щупа НЕ беда (см. шапку файла). Число
+# 400 было подобрано на глаз под старую вёрстку и умерло молча, когда
+# `#uzly` получил свой overflow-y:auto — это и есть тот самый класс беды,
+# который просил не повторять человек: эмпирический порог хрупок к любой
+# следующей правке пикселей.
+#
+# Порча ниже не подбирает число заранее, а вычисляет его из ЖИВОЙ геометрии
+# сцены прямо перед порчей: `#uzly` — контейнер, который реально клипает
+# список (index.html: `#uzly{overflow-y:auto}`), и его высота уже вычислена
+# JS-подгонкой (`podognatVysotuUzlov`) так, что НИЗ `#uzly` всегда совпадает
+# с НИЗОМ последнего целиком нарисованного узла (проверено замером: высота
+# без порчи оканчивается ровно на границе узла, ни разу не на середине —
+# в этом и состоит починка index.html). Порча вычитает из этой безопасной
+# высоты ровно половину высоты одного узла (`itemH/2`) — новая граница
+# ГАРАНТИРОВАННО попадает в середину того самого узла, на чьей нижней
+# границе раньше стояла безопасная высота, какими бы ни были itemH/stroka в
+# момент замера (другой шрифт, другой DPI, другая правка вёрстки). Это не
+# «подобрано и работает», а следствие инварианта: «низ #uzly = низ узла»
+# минус «половина узла» = «середина того же узла», всегда.
+KOEFF_SEREDINY_UZLA = 0.5  # доля высоты узла, вычитаемая из безопасной высоты
 
 
 def kontrol_shchupa(br, port):
     """Щуп обязан покраснеть на заведомо испорченной странице. Промолчал —
     он мёртв, и зелень остальных сцен ничего не доказывает (тот же приём,
-    что kontrol_shchupa в oblik_snimok.py и kontrol_geometrii рядом)."""
+    что kontrol_shchupa в oblik_snimok.py и kontrol_geometrii рядом).
+
+    Возвращает (bedy, porcha_css) — второе нужно снаружи, чтобы сообщение
+    об ошибке всегда цитировало РЕАЛЬНО применённую порчу, а не текст,
+    который может разойтись с кодом (как расходился раньше: сообщение
+    говорило «520px», хотя порчено было уже 400px)."""
     sostoyanie["tek"] = SCENY["4_rabotaet"]
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
-    str_.add_style_tag(content=PORCHA_CSS)
+    # Живая геометрия ДО порчи: высота #uzly (JS уже подогнал её под целые
+    # узлы) и высота одного узла — из них, а не с потолка, строится порча.
+    h0, item_h = str_.evaluate(
+        "() => { const uz = document.getElementById('uzly');"
+        " const u = uz.querySelector('.uzel');"
+        " return [uz.getBoundingClientRect().height, u.getBoundingClientRect().height]; }"
+    )
+    porcha_css = f"#uzly {{ max-height: {h0 - item_h * KOEFF_SEREDINY_UZLA:.3f}px !important; }}"
+    str_.add_style_tag(content=porcha_css)
     str_.wait_for_timeout(200)
     bedy, _ = proverit_obrezku_kadra(str_, "контроль-обрезка")
     str_.close()
-    return bedy
+    return bedy, porcha_css
 
 
 def zamerit():
@@ -204,17 +236,17 @@ def zamerit():
                     print(f"      {b}")
                 vse_bedy.extend(bedy)
                 str_.close()
-            kontrol = kontrol_shchupa(br, port)
+            kontrol, porcha_css = kontrol_shchupa(br, port)
             br.close()
         srv.shutdown()
-    return vse_bedy, vsego_provereno, kontrol
+    return vse_bedy, vsego_provereno, kontrol, porcha_css
 
 
 if __name__ == "__main__":
-    bedy, vsego_provereno, kontrol = zamerit()
+    bedy, vsego_provereno, kontrol, porcha_css = zamerit()
     if not kontrol:
         print("\n🔴 ЩУП ОБРЕЗКИ ПЕРВОГО КАДРА МЁРТВ: на заведомо испорченной "
-              "странице (лента сжата до 520px) он не нашёл ни одной обрезки. "
+              f"странице (порча: {porcha_css!r}) он не нашёл ни одной обрезки. "
               "Зелень остальных сцен ничего не доказывает.")
         sys.exit(2)
     print(f"\n  🧪 контроль обрезки: щуп видит порчу ({len(kontrol)}):")
