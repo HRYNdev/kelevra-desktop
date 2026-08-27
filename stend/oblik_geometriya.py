@@ -235,6 +235,17 @@ REZHIM_JS = """() => {
   if (barRect && lenta) {
     for (const el of lenta.querySelectorAll('*')) {
       if (bar.contains(el) || el.contains(bar)) continue;
+      // #uzly — с 27.08 свой скролл-контейнер (index.html, забор
+      // oblik_obrezka_kadra.py): его дети позиционируются ОТНОСИТЕЛЬНО его
+      // собственной внутренней прокрутки и могут иметь «сырой» getBoundingClientRect
+      // ГЕОМЕТРИЧЕСКИ над полосой режима, оставаясь при этом обрезанными
+      // (невидимыми) собственным overflow #uzly — не .lenta. Раньше весь
+      // .lenta скроллился ОДНИМ куском, и сырое пересечение rect'ов было
+      // надёжной приметой реального наложения; теперь для потомков #uzly
+      // это больше не так — сама коробка #uzly с полосой никогда не
+      // перекрывается (соседи в одной flex-колонке), проверять их детей тут
+      // незачем.
+      if (uzly && uzly.contains(el)) continue;
       const rr = el.getBoundingClientRect();
       if (rr.width < 4 || rr.height < 4) continue;
       const dy = Math.min(rr.bottom, barRect.bottom) - Math.max(rr.top, barRect.top);

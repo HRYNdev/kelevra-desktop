@@ -101,7 +101,25 @@
   /* Верхний отступ живёт здесь, а не на .lenta: у скроллящегося контейнера
      top-padding даёт спорную полосу над содержимым при долгой прокрутке.
      Обычный padding на нескроллящемся предке — просто часть потока. */
-  #karta-svyazi { padding-top:16px; }
+  /* height — не косметика, лечит вторую беду забора oblik_obrezka_kadra.py
+     (27.08): scrollIntoView на выбранном узле раньше скроллил .lenta ЦЕЛИКОМ
+     (общий скролл-контейнер круга и списка), и круг на первом кадре улетал
+     под верхнюю границу — 15 сцен из 26 (5_slomalos: видно 108px из 220).
+     calc(100% + var(--nizhnyaya)) — не 100%: 100% давало бы высоту .lenta БЕЗ
+     её нижнего padding (84px, --nizhnyaya, зарезервирован под нижнюю панель
+     вкладок), и на сценах с длинной бедой («ядро не ответило…») список узлов
+     упирался в этот искусственный потолок раньше времени, раздувая #uzly за
+     пределы реального окна и вытягивая скролл самой .lenta — круг снова ехал
+     вверх, только по новой причине. +var(--nizhnyaya) возвращает эти 84px
+     колонке #tab-set; тот же отступ теперь живёт как padding-bottom у #uzly
+     ниже — тот же зазор перед нижней панелью, просто внутри своего скролла,
+     а не пустым полем ПЕРЕД ним. */
+  #karta-svyazi { padding-top:16px; height:calc(100% + var(--nizhnyaya)); }
+  /* Сеть — единственная вкладка с этим приёмом: .tab-set становится колонкой
+     фиксированной высоты, #tab-nastroyki (настройки) ниже её не трогает —
+     остаётся обычным потоком и скроллится через .lenta, как раньше (список
+     настроек может быть длиннее окна, ему это можно). */
+  #tab-set { height:100%; display:flex; flex-direction:column; }
 
   .karta { background:var(--karta); border:1px solid var(--gran); border-radius:var(--r-m); padding:16px; }
   .karta + .karta, .karta + .polosa, .polosa + .karta { margin-top:12px; }
@@ -299,17 +317,40 @@
      (391-467): одна полоса, две половины, активная получает акцентный фон.
      Свои цвета не заводим — те же переменные, что и у остальных карточек
      этого окна (--karta/--gran/--akcent/--akcent-tem/--r-m/--r-s). */
+  /* margin-top 16→8→4 — тот же запас, что и у .podpiska/.beda (см. их
+     комментарии): список узлов ниже теснит нижнюю границу .lenta ещё до
+     прокрутки, а на сценах с длинной бедой над списком (27.08) не хватало
+     даже высоты одного узла. Кнопки переключателя не мельчают — трогаем
+     только внешний зазор, не их padding. */
   .rezhim-perekl {
-    display:flex; gap:4px; width:100%; margin-top:16px; padding:4px;
+    display:flex; gap:4px; width:100%; margin-top:4px; padding:4px;
     border:1px solid var(--gran); border-radius:var(--r-m); background:var(--karta);
   }
+  /* padding 10→8→6 — тот же запас вертикали, что и margin-top выше (27.08:
+     6px всё ещё оставляет кнопке ~30px высоты тапа, «Автоматически»/
+     «Вручную» не мельчают на глаз). */
   .rezhim-pol {
-    flex:1; padding:10px; border-radius:var(--r-s); background:none;
+    flex:1; padding:6px; border-radius:var(--r-s); background:none;
     color:var(--tihiy); font-size:13.5px; font-weight:500; transition:background .15s, color .15s;
   }
   .rezhim-pol.aktivna { background:var(--akcent); color:var(--akcent-tem); font-weight:650; cursor:default; }
   .rezhim-pol:disabled { cursor:default; }
 
+  /* flex:1 + min-height:0 — берёт весь остаток колонки #tab-set (см. правило
+     #tab-set выше) и становится СВОИМ скролл-контейнером: без min-height:0
+     flex-элемент не сжимается ниже содержимого (спец-поведение auto-минимума
+     у flex), и overflow-y:auto никогда бы не включился. */
+  /* НЕ flex:1 — flex-grow игнорирует явный height у элемента (flex-basis у
+     сокращения flex:1 равен 0%, а не auto, и по спеке при этом width/height
+     для расчёта размера не смотрят вовсе — JS ниже мог бы выставлять
+     style.height хоть кол-во раз, итоговая высота коробки всё равно была бы
+     «весь остаток колонки», проверено на живой странице 27.08). flex:0 0
+     auto отдаёт размер целиком нам: JS (podognatVysotuUzlov) сам меряет,
+     сколько места осталось до низа #tab-set, и выставляет точную высоту,
+     кратную «шапка + N целых узлов» — без этого случайный остаток пикселей
+     то и дело попадал точно на середину узла (сцена 24_uzly_vse_gradacii:
+     97px резал второй узел на 2px). */
+  #uzly { flex:0 0 auto; overflow-y:auto; overflow-x:hidden; padding-bottom:var(--nizhnyaya); }
   .uzel {
     display:flex; align-items:center; gap:11px; width:100%; padding:11px 13px;
     margin-top:8px; border-radius:var(--r-m); border:1px solid var(--gran); background:var(--karta);
@@ -428,8 +469,16 @@
   }
   input::placeholder { letter-spacing:.5px; color:var(--slabyy); }
 
+  /* margin-top 12→6, padding 11px→7px (только вертикаль), .beda-zagolovok
+     margin-bottom 5→3, .beda-podrobnosti margin-top 9→6 (забор
+     oblik_snimok.py «достижимости» + oblik_geometriya.py (д), 27.08): у
+     длинных советов («Windows не дал создать сетевой адаптер» — два
+     предложения) эта карточка одна съедала 146px из 538, списку узлов ниже
+     оставалось 19px — меньше высоты одного узла (44.3px). Экономия ложится
+     на карточку беды, а не на .podpiska/.rezhim-perekl ниже: их уже ужимали
+     раньше, и здесь была резервная высота больше всего. */
   .beda {
-    display:none; margin-top:12px; padding:11px 13px; border-radius:var(--r-m);
+    display:none; margin-top:6px; padding:7px 13px; border-radius:var(--r-m);
     background:rgba(240,131,121,.08); border:1px solid rgba(240,131,121,.28);
     color:var(--beda); font-size:12.5px; line-height:1.45;
     white-space:pre-wrap; word-break:break-word; user-select:text;
@@ -437,10 +486,10 @@
   .beda.vidno { display:block; }
   .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
   .beda.vnimanie { background:rgba(224,163,74,.09); border-color:rgba(224,163,74,.3); color:var(--zhdem); }
-  .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:5px; }
+  .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:3px; }
   .beda-sovet { color:var(--tihiy); }
   .beda-podrobnosti {
-    display:block; margin-top:9px; padding:0; border:0; background:none;
+    display:block; margin-top:6px; padding:0; border:0; background:none;
     color:var(--tihiy); font:inherit; font-size:11.5px; text-decoration:underline;
     text-underline-offset:2px; cursor:pointer;
   }
@@ -453,7 +502,16 @@
      карточка — подпись, поэтому без рамки и фона. Рамку и фон возвращаем
      только когда срок на исходе: там строка обязана ловить глаз. */
   .podpiska {
-    display:flex; align-items:center; gap:8px; margin:22px 0 10px; padding:2px 13px;
+    /* margin 22/10 → 20/6 (забор oblik_obrezka_kadra.py, 27.08): узел списка
+       ниже упирался в нижнюю границу .lenta, видна была половина строки
+       («Германия 1—» 22.5px из 44.3). Отступ ужат, а не смысл строки. Верх
+       не ниже 20px — ПРОВЕРЕНО повторно 27.08 при поиске места для
+       oblik_snimok.py «достижимости»: круг→подсказка держит РОВНО 18px на
+       всех сценах (не 6, как казалось по грубому замеру), и margin-top<19
+       ломает oblik_geometriya.py (б) — подсказка визуально отрывается от
+       круга и читается как заголовок к строке ключа доступа (диагноз
+       24.08). Место под список нашлось не здесь, а в карточке беды ниже. */
+    display:flex; align-items:center; gap:8px; margin:20px 0 6px; padding:2px 13px;
     border:1px solid transparent; border-radius:var(--r-m);
     font-size:12.5px; color:var(--tihiy);
   }
@@ -997,6 +1055,102 @@ function signalKlass(u) {
   return "medlenno";
 }
 
+// #uzly — свой скролл-контейнер (flex:0 0 auto в колонке #tab-set, CSS
+// выше, высоту выставляет эта функция), остаток пикселей над ним каждый раз
+// разный (короткая заметка/беда — много места, длинная — мало). Резиновая
+// высота то и дело попадает серединой узла — CSS не умеет округлить «до
+// целого узла», а JS, зная реальный размер шапки и строки на этой самой
+// странице, умеет.
+//
+// Мало округлить высоту под то, что видно БЕЗ прокрутки: если выбранный
+// узел (vybranEl) в эту высоту не попадает, дальше risovatUzly всё равно
+// зовёт scrollIntoView — а прокрутка внутри уже подогнанной коробки СНОВА
+// может выровнять выбранный узел серединой соседа (та же беда, только после
+// скролла, а не до). Первая попытка функции — раздать ровно столько узлов,
+// чтобы выбранный вошёл БЕЗ прокрутки вовсе: тогда scrollIntoView увидит
+// его уже видимым и не тронет #uzly. Не помещается (реально мало места,
+// длинная беда над списком) — тогда честная граница по максимуму доступного
+// места, прокрутка неизбежна, но остаётся кратной целому узлу.
+function podognatVysotuUzlov(vybranEl) {
+  const uz = $("uzly");
+  const zag = uz.querySelector(".zagolovok-bloka");
+  const uzly_knopki = [...uz.querySelectorAll(".uzel")];
+  zag && (zag.style.marginBottom = ""); // сброс более ранней подгонки перед новым замером
+  uz.style.paddingBottom = ""; // сброс скрытия отступа с прошлого вызова (см. конец функции)
+  if (!zag || uzly_knopki.length === 0) { uz.style.height = ""; return; } // пустой список — округлять нечего
+  uz.style.height = "auto";
+  const uzTop = uz.getBoundingClientRect().top;
+  const itemH = uzly_knopki[0].getBoundingClientRect().height;
+  const stroka = uzly_knopki.length > 1
+      ? uzly_knopki[1].getBoundingClientRect().top - uzly_knopki[0].getBoundingClientRect().top
+      : itemH + 8; // запасной шаг, если узел всего один (margin-top .uzel — 8px)
+  const gap = stroka - itemH;
+  // Шапка «Выбор узла» — свой, отдельный от узлов кусок высоты (заметно
+  // короче шага строки). Это раскалывает «безопасные» границы на ДВА разных
+  // набора: один — если коробку не прокручивали (виден верх с шапкой),
+  // другой — если scrollIntoView прокрутил список к выбранному узлу ниже
+  // (тогда верх коробки садится на верх какого-то УЗЛА, не шапки). Высота,
+  // безопасная для первого набора, резала узел пополам во втором (диагноз
+  // 27.08: «Нидерланды 178 мс» — сосед выбранного — резалась ВЕРХНЕЙ
+  // границей после прокрутки). Растягиваем нижний отступ шапки, пока она не
+  // займёт РОВНО один шаг строки — тогда оба набора границ совпадают, и
+  // единая арифметика ниже безопасна для обоих случаев сразу.
+  const shapkaSeychas = uzly_knopki[0].getBoundingClientRect().top - uzTop;
+  const dobavit = stroka - shapkaSeychas;
+  if (dobavit > 0) {
+    const tekMargin = parseFloat(getComputedStyle(zag).marginBottom) || 0;
+    zag.style.marginBottom = (tekMargin + dobavit) + "px";
+  }
+  // Доступное место — не собственная (только что растянутая) высота #uzly,
+  // а низ #tab-set (фиксирован высотой 100% колонки, CSS выше) минус верх
+  // #uzly: сам #uzly — последний ребёнок колонки, его позиция top не
+  // зависит от его же height, а низ #tab-set не меняется от того, что мы
+  // сейчас временно раздули список на всю длину.
+  const dostupno = $("tab-set").getBoundingClientRect().bottom - uzTop;
+  // Шапка теперь — ровно один «слот» (stroka), каждый узел — тоже один
+  // слот. slots «целых слотов» = N*stroka - gap ещё умещается в доступное.
+  // Формула одна и та же что для «шапка+узлы», что для «узлы без шапки» —
+  // растянутая шапка занимает ровно stroka, как и любой узел, поэтому
+  // slotsMax можно раздать любому из двух режимов ниже.
+  let slotsMax = Math.max(0, Math.floor((dostupno + gap) / stroka));
+  const idxVybran = vybranEl ? uzly_knopki.indexOf(vybranEl) : -1;
+  // Вова 27.08: «ноль хуже узла, обрезанного пополам» — человек читает
+  // пустой список как «настройки потерялись». Раньше при slotsMax<2 функция
+  // прятала список ЦЕЛИКОМ (height:0) — на 5 штатных сценах («сломалось»,
+  // «занят порт», «нет сети», «битый конфиг», «ручной прокси» — не
+  // редкость) человек не видел НИ ОДНОГО узла. slotsMax===1 — ровно один
+  // «слот» помещается: отдаём его узлу, а не шапке (без подписи «Выбор
+  // узла» список всё ещё узнаваем и кликабелен, без единого узла — нет).
+  // Прячем шапку (display:none, не просто схлопнутый marginBottom — иначе
+  // её пустое место всё равно съедало бы часть узкого запаса) и показываем
+  // ОДИН узел; коробка теперь РОВНО его высоты (itemH), scrollIntoView ниже
+  // сам донесёт до него прокрутку без остатка серёдки.
+  const bezShapki = slotsMax < 2;
+  zag.style.display = bezShapki ? "none" : "";
+  let slots;
+  if (bezShapki) {
+    slots = 1; // хотя бы один узел — ноль запрещён, пока список не пуст
+  } else {
+    // +1 слот на саму шапку, +1 на сам выбранный узел (его индекс 0-based).
+    const slotsNado = idxVybran >= 0 ? idxVybran + 2 : 1;
+    slots = Math.min(slotsMax, Math.max(Math.min(slotsNado, slotsMax), Math.min(slotsMax, 2)));
+  }
+  // dostupno < itemH (совсем крайний случай, экрана честно не хватает даже
+  // на один узел без шапки) — коробке отдаём весь доступный остаток, а не
+  // мнимую «безопасную» высоту: узел покажется чуть обрезанным, но список
+  // не исчезнет (правило 27.08: ноль — только если узлов в DOM нет вовсе).
+  const bezopasno = bezShapki ? itemH : slots * stroka - gap;
+  uz.style.height = Math.max(0, Math.min(dostupno, bezopasno)) + "px";
+  // padding-bottom (var(--nizhnyaya), 84px, зазор перед нижней панелью —
+  // см. CSS #uzly) у border-box считается ЧАСТЬЮ height: height:0 его не
+  // убирает, коробка всё равно рисовалась 84px пустого места, и в эти
+  // «пустые» 84px всё ещё падал прокрученный узел (диагноз 27.08, сцены с
+  // длинной бедой над списком — 5_slomalos/7_ruchnoy_proksi и другие: узел
+  // резался ровно в этом «невидимом» паддинге). В тесной коробке без шапки
+  // запас нужен ещё сильнее — прячем паддинг ровно тем же условием.
+  uz.style.paddingBottom = bezShapki ? "0px" : "";
+}
+
 // Задержки берёт только живое ядро (замер — запрос ЧЕРЕЗ него). Пока ядро
 // стоит, список узлов уже виден (та же конфигурация, что и в подключённом
 // состоянии — Вова, снимок 21.08: список пустовал, хотя показывать было что),
@@ -1077,13 +1231,21 @@ function risovatUzly(gruppy) {
       koren2.appendChild(ryad);
     }
   }
-  // Выбранный узел обязан быть виден ЦЕЛИКОМ, не только верхушкой букв: .lenta
-  // клипает контент своей границей (overflow-y:auto), и текущий выбор мог
-  // оказаться ниже видимой области — например когда над списком встаёт
-  // длинная беда (диагноз 24.08, снимки 11_beda_port.png/12_beda_seti.png:
-  // «Нидерланды 2» обрезана ровно посередине текста). block:"nearest" не
-  // дёргает список, если узел и так виден целиком — прокрутка случается
-  // только когда он правда обрезан.
+  // Сперва подгоняем высоту коробки под целое число узлов (см. функцию
+  // выше) — иначе следующий шаг сам мог бы прокрутить список ровно на
+  // огрызок узла.
+  podognatVysotuUzlov(vybranEl);
+  // Выбранный узел обязан быть виден ЦЕЛИКОМ, не только верхушкой букв:
+  // #uzly клипает контент своей собственной границей (overflow-y:auto), и
+  // текущий выбор мог оказаться ниже видимой области — например когда над
+  // списком встаёт длинная беда (диагноз 24.08, снимки
+  // 11_beda_port.png/12_beda_seti.png: «Нидерланды 2» обрезана ровно
+  // посередине текста). block:"nearest" не дёргает список, если узел и так
+  // виден целиком — прокрутка случается только когда он правда обрезан.
+  // Круг/подсказка/подписка выше #uzly не двигаются никогда — они вне этого
+  // скролл-контейнера (диагноз 27.08, забор oblik_obrezka_kadra.py: раньше
+  // скроллилась вся .lenta целиком, и круг на первом кадре улетал за
+  // верхнюю границу на 15 сценах из 26).
   if (vybranEl) vybranEl.scrollIntoView({block: "nearest"});
 }
 
