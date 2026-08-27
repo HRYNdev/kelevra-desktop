@@ -26,3 +26,9 @@ func podnyatChuzheeOkno() bool {
 	log.Printf("поднятие чужого окна не поддерживается вне Windows, открываю своё")
 	return false
 }
+
+// zakrytStaroeOkno вне Windows не делает ничего — там нет ни HWND, ни
+// самого окна (см. pokazatOkno выше).
+func zakrytStaroeOkno() bool {
+	return false
+}
