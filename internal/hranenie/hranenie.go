@@ -109,8 +109,31 @@ type Nastroyki struct {
 // nil — то же, что и false, но такого после Zagruzit не остаётся: миграция
 // разводит nil на true (старый файл) или false (чистый инсталл) сама. Метод
 // нужен, чтобы вызывающий код не разыменовывал указатель сам.
+//
+// Берёт тот же zamok, что Zagruzit/Sohranit: указатель PravaZaprosheny читает
+// HTTP-обработчик sostoyanie, а пишет фоновая горутина
+// internal/sluzhba.zaprositPravaAvtomaticheskiEsliNado — без общего замка это
+// гонка данных на самом указателе (go test -race валил
+// TestPervoePodklyuchenieSamoSprashivaetPrava). zamok уже существует и уже
+// охраняет весь Nastroyki целиком на файловых путях — переиспользуем его для
+// поля, а не заводим второй мьютекс: будущим полям Nastroyki с тем же риском
+// достаточно писать через такой же метод-сеттер.
 func (n *Nastroyki) UzheSprosiliPrava() bool {
+	zamok.Lock()
+	defer zamok.Unlock()
 	return n.PravaZaprosheny != nil && *n.PravaZaprosheny
+}
+
+// OtmetitPravaZaprosheny помечает «права уже спрашивали» — и то, что человек
+// согласился, и то, что отказал: поле значит сам факт вопроса, а не его
+// исход (Prava/prava.Est() отдельно отвечает на «есть ли права сейчас»).
+// Пишет под тем же zamok, что и чтение в UzheSprosiliPrava — см. комментарий
+// там же.
+func (n *Nastroyki) OtmetitPravaZaprosheny() {
+	zamok.Lock()
+	defer zamok.Unlock()
+	zaprosheno := true
+	n.PravaZaprosheny = &zaprosheno
 }
 
 var zamok sync.Mutex
