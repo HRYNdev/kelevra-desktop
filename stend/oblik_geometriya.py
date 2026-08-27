@@ -61,9 +61,10 @@
 
     python3 stend/oblik_geometriya.py
 """
-import socketserver, sys, threading
+import json, socketserver, sys, threading
 from pathlib import Path
 
+KOREN = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from oblik_snimok import Ruchki, SCENY, sostoyanie, SHIRINA, VYSOTA  # noqa: E402
 
@@ -339,6 +340,71 @@ def proverit_gradacii_signala(str_, imya_sceny):
     return bedy
 
 
+ULIKA_JS = """() => {
+  const r = (el) => { if (!el) return null; const q = el.getBoundingClientRect();
+    return {top: +q.top.toFixed(1), bottom: +q.bottom.toFixed(1),
+            left: +q.left.toFixed(1), right: +q.right.toFixed(1)}; };
+  const uz = document.getElementById('uzly');
+  const lenta = document.getElementById('lenta');
+  const korobka = (el) => el ? {rect: r(el), scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight, clientHeight: el.clientHeight,
+      styleHeight: el.style.height || '(не задана)',
+      overflowY: getComputedStyle(el).overflowY} : null;
+  return {
+    okno: {w: window.innerWidth, h: window.innerHeight},
+    readyState: document.readyState,
+    shrifty: document.fonts ? document.fonts.status : '(нет API)',
+    listov_css: [...document.styleSheets].length,
+    uzly: korobka(uz),
+    lenta: korobka(lenta),
+    // Всё, что стоит НАД списком в той же колонке: если список уехал вниз,
+    // виноват кто-то из них, и высота виновника видна прямо здесь.
+    nad_spiskom: uz && uz.parentElement
+      ? [...uz.parentElement.children].filter((e) => e !== uz).map((e) => ({
+          tag: e.tagName + (e.id ? '#' + e.id : '') + (e.className ? '.' + String(e.className).split(' ').join('.') : ''),
+          rect: r(e), tekst: (e.textContent || '').trim().slice(0, 60)}))
+      : [],
+    stroki: uz ? [...uz.querySelectorAll('.uzel')].map((e) => ({
+        imya: (e.textContent || '').trim().slice(0, 30), vybran: e.classList.contains('vybran'),
+        rect: r(e), display: getComputedStyle(e).display})) : [],
+  };
+}"""
+
+
+def ulika(str_, imya_sceny, bedy):
+    """Красный обязан оставить УЛИКУ, иначе следующий разбор — гадание.
+
+    27.08 `oblik_geometriya.py` покраснел ВНУТРИ приёмки и был зелёным в
+    одиночку три раза подряд («выбранный узел „Нидерланды 2" обрезан лентой,
+    узел 643…687, лента 56…594»). Одних этих двух чисел мало, чтобы отличить
+    брак вёрстки от недосмотренного кадра: неизвестно, что стояло НАД списком,
+    какой у коробки был scrollTop и доехали ли шрифты. Восстановить это потом
+    нечем — сцена живёт только внутри прогона. Поэтому каждый красный кладёт
+    рядом снимок и полный слепок геометрии.
+
+    Второй замер через 2с НЕ меняет вердикт (иначе прибор ослепнет ровно на
+    том браке, который проявляется медленно) — он лишь пишет в улику
+    `ustoyalos`: беда та же и через две секунды или рассосалась сама.
+    """
+    kuda = KOREN / ".stend" / "geom_ulika"
+    kuda.mkdir(parents=True, exist_ok=True)
+    try:
+        d = str_.evaluate(ULIKA_JS)
+        str_.screenshot(path=str(kuda / f"{imya_sceny}.png"))
+        str_.wait_for_timeout(2000)
+        povtor = proverit_glavnyy_ekran(str_, imya_sceny)
+        d["bedy"] = bedy
+        d["bedy_cherez_2s"] = povtor
+        d["ustoyalos"] = sorted(povtor) == sorted(bedy)
+        (kuda / f"{imya_sceny}.json").write_text(
+            json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"      🔎 улика: {kuda}/{imya_sceny}.json + .png; "
+              f"через 2с бед {len(povtor)} (было {len(bedy)}) — "
+              f"{'та же беда, кадр ни при чём' if d['ustoyalos'] else 'ИНАЯ картина: кадр был недосмотрен'}")
+    except Exception as e:  # улика — подспорье, а не приговор: её отказ не красит стенд
+        print(f"      ⚠ улику снять не удалось: {e}")
+
+
 def zamerit():
     vse_bedy = []
     with socketserver.TCPServer(("127.0.0.1", 0), Ruchki) as srv:
@@ -371,6 +437,8 @@ def zamerit():
                 print(f"  {znak} {imya_sceny}")
                 for b in bedy:
                     print(f"      {b}")
+                if bedy:
+                    ulika(str_, imya_sceny, bedy)
                 vse_bedy.extend(bedy)
                 str_.close()
             br.close()
