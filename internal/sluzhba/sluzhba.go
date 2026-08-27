@@ -58,6 +58,24 @@ type Sluzhba struct {
 	// процесс, а тест должен управлять числом попыток и их исходом без
 	// живого ядра. По умолчанию nil — PodnyatZashchitu зовёт s.Yadro.Zapustit.
 	zapustitYadro func(context.Context) error
+	// posleAvtozaprosaPrav — сигнал стенду, что zaprositPravaAvtomaticheskiEsliNado
+	// дописала отметку на диск (успех или отказ — не важно). Фоновая
+	// горутина не отдаёт своего результата вызвавшему, а тест не должен
+	// узнавать о её завершении опросом незащищённого поля (так и была
+	// поймана гонка 27.08 — busy-poll по s.Nastroyki.UzheSprosiliPrava() без
+	// синхронизации). nil в бою — ничего не подмешивает.
+	posleAvtozaprosaPrav func()
+	// sohranitNastroyki и priUhode — две точки подмены ТОЛЬКО для доказательства
+	// ПОРЯДКА в zaprositPravaAvtomaticheskiEsliNado (правка 27.08: сохранение
+	// отметки обязано случиться раньше ухода). Временем этот порядок не
+	// поймать: настоящий os.Exit откладывается на 300 мс в uydiPosleSoglasiyaNaPrava,
+	// а Sohranit на t.TempDir() исполняется за микросекунды что до, что после
+	// спавна той горутины — обе версии кода одинаково «успевают» с большим
+	// запасом. Метки пишутся синхронно в момент вызова, отдельно от времени.
+	// По умолчанию nil — sohranitNastroyki вызывает hranenie.Sohranit(s.Nastroyki)
+	// напрямую, priUhode ничего не делает.
+	sohranitNastroyki func() error
+	priUhode          func()
 
 	// OblachkoObnovleniya — как сказать о находке пузырём в трее (cmd/kelevra/
 	// trey_windows.go: pokazatOblachkoObnovleniya), подключается снаружи из
@@ -1206,6 +1224,9 @@ func (s *Sluzhba) sprositPrava() error {
 // это сделал), а эта, старая, обязана погасить своё ядро и уйти, иначе на
 // машине останутся две живые копии (беда 25.08).
 func (s *Sluzhba) uydiPosleSoglasiyaNaPrava() {
+	if s.priUhode != nil {
+		s.priUhode() // синхронная метка для теста: момент решения уйти, ДО 300-мс паузы
+	}
 	go func() {
 		time.Sleep(300 * time.Millisecond) // дать ответу/сохранению уйти
 		_ = s.Yadro.Ostanovit()            // ядро старой копии гасим сами
@@ -1239,16 +1260,32 @@ func (s *Sluzhba) zaprositPravaAvtomaticheskiEsliNado() {
 	if !estTunnel || s.Nastroyki.UzheSprosiliPrava() || prava.Est() {
 		return
 	}
-	if err := s.sprositPrava(); err != nil {
-		log.Printf("автозапрос прав администратора при первом подключении: отказ или ошибка: %v", err)
+	oshibka := s.sprositPrava()
+	if oshibka != nil {
+		log.Printf("автозапрос прав администратора при первом подключении: отказ или ошибка: %v", oshibka)
 	} else {
 		log.Printf("человек согласился на права администратора при первом подключении, перезапускаюсь")
+	}
+	// Отметку пишем ДО ухода, а не после (как было раньше): при согласии
+	// uydiPosleSoglasiyaNaPrava гасит эту копию из фоновой горутины через
+	// 300 мс, и если Sohranit не успеет долететь до диска раньше выхода
+	// процесса, следующий (уже обычный, НЕ повышенный) запуск увидит файл
+	// без отметки и спросит права ЕЩЁ РАЗ — а человек просил ровно один раз
+	// при старте. Флаг ставим и при отказе тоже: он значит «спрашивали», а
+	// не «дали» — Prava/prava.Est() отдельно отвечает на «есть ли они».
+	s.Nastroyki.OtmetitPravaZaprosheny()
+	sohranit := s.sohranitNastroyki
+	if sohranit == nil {
+		sohranit = func() error { return hranenie.Sohranit(s.Nastroyki) }
+	}
+	if err := sohranit(); err != nil {
+		log.Printf("не сохранил отметку об автозапросе прав администратора: %v", err)
+	}
+	if oshibka == nil {
 		s.uydiPosleSoglasiyaNaPrava()
 	}
-	zaprosheno := true
-	s.Nastroyki.PravaZaprosheny = &zaprosheno
-	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
-		log.Printf("не сохранил отметку об автозапросе прав администратора: %v", err)
+	if s.posleAvtozaprosaPrav != nil {
+		s.posleAvtozaprosaPrav()
 	}
 }
 
