@@ -1053,15 +1053,31 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// подстраховка на Windows молча простаивала: вместо половинной защиты с
 	// запиской «пропишите прокси руками» человек получал «ядро упало при
 	// старте» и связь никакую. Сверяем по общей части — «system proxy».
-	if err != nil && strings.Contains(err.Error(), "system proxy") {
-		log.Printf("система не дала настроить прокси, поднимаю ядро без этой просьбы")
-		vybor.BezSistemnogoProksi = true
-		if e := s.perestroit(vybor); e == nil {
-			zctx2, otmena2 := context.WithTimeout(ctx, 70*time.Second)
-			defer otmena2()
-			err = zapustit(zctx2)
+	//
+	// bezProksiEsliNado — та же проверка, но названная функцией, а не
+	// разовым if: 28.08 приёмка выпуска 0.6.32 нашла, что подстраховка
+	// молчала, когда «system proxy» падает НЕ на первой попытке, а внутри
+	// лестницы правил ниже (embed или BezSetevyhPravil) — тогда err на
+	// входе в лестницу был «initialize rule-set», разовая проверка это
+	// пропускала, а после лестницы её никто не повторял. Человек получал
+	// «ядро упало при старте» и не подключённую защиту целиком, хотя обе
+	// подстраховки по отдельности рабочие — их просто не сложили. Зовём
+	// после КАЖДОЙ попытки поднять ядро (исходной и обеих ступеней
+	// лестницы), а не только после первой.
+	bezProksiEsliNado := func(v *konfig.Vybor, popytkaErr error) error {
+		if popytkaErr == nil || v.BezSistemnogoProksi || !strings.Contains(popytkaErr.Error(), "system proxy") {
+			return popytkaErr
 		}
+		log.Printf("система не дала настроить прокси, поднимаю ядро без этой просьбы")
+		v.BezSistemnogoProksi = true
+		if e := s.perestroit(*v); e != nil {
+			return popytkaErr
+		}
+		zctxSP, otmenaSP := context.WithTimeout(ctx, 70*time.Second)
+		defer otmenaSP()
+		return zapustit(zctxSP)
 	}
+	err = bezProksiEsliNado(&vybor, err)
 	// Второй такой же отказ, найден 23.08 замером настоящего ядра
 	// (.stend/sing-box-linux) на боевом профиле (22 route.rule_set, качаются
 	// с subkv.chickenkiller.com detour:"direct" — мимо туннеля). Источник
@@ -1099,6 +1115,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 				zctx3, otmena3 := context.WithTimeout(ctx, 70*time.Second)
 				defer otmena3()
 				errKomplekt := zapustit(zctx3)
+				errKomplekt = bezProksiEsliNado(&vyborKomplekt, errKomplekt)
 				if errKomplekt == nil {
 					err = nil
 					vybor = vyborKomplekt
@@ -1117,6 +1134,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 				zctx4, otmena4 := context.WithTimeout(ctx, 70*time.Second)
 				defer otmena4()
 				err = zapustit(zctx4)
+				err = bezProksiEsliNado(&vybor, err)
 			}
 		}
 	}
