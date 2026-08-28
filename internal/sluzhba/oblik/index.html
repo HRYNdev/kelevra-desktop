@@ -1100,7 +1100,14 @@ async function obnovit() {
   $("rezhim-ruchnoy").classList.toggle("aktivna", !rezhimAvto);
   $("uzly").hidden = rezhimAvto;
   const zametkaAvtorezhim = $("zametka-avtorezhim");
-  if (s.avtorezhim_vklyuchen && s.avtorezhim_obstanovka) {
+  // Про обстановку говорит ОДНО место, а не два. Большая заметка #zametka
+  // (zametkaAvtorezhima выше) уже называет обстановку словами — «Вы дома —
+  // обход блокировок уже делает роутер…». Тихая строка «сейчас: дома» под
+  // ней в этот момент повторяет то же самое: Вова 28.08 голосом — «под
+  // сообщением дважды пишется вы дома, обход работает». Поэтому строка
+  // остаётся только там, где большая заметка молчит (например «дома» при
+  // поднятой защите или «вне дома» без неё) — иначе обстановка сказана дважды.
+  if (s.avtorezhim_vklyuchen && s.avtorezhim_obstanovka && !zametkaAvtorezhima(s)) {
     zametkaAvtorezhim.textContent = "сейчас: " + s.avtorezhim_obstanovka;
     zametkaAvtorezhim.className = "beda spokoyno vidno";
   } else {
