@@ -83,6 +83,10 @@ func TestPodklyuchitSPodmenoyDnsChestnoReshaetVneDoma(t *testing.T) {
 	// gotovStendLestnicy сам подставляет avtorezhimDlyaKnopki — тут нужен
 	// именно ДЕФОЛТНЫЙ (nil) путь, чтобы проверить настоящий avtorezhimBoevoy.
 	s.avtorezhimDlyaKnopki = nil
+	// «Подключиться» с 28.08 сама включает фоновый авторежим (см.
+	// podklyuchit, sluzhba.go) — гасим его в конце, как и
+	// TestAvtorezhimRuchkaVklyuchaetIVyklyuchaet.
+	t.Cleanup(s.OstanovitAvtorezhim)
 	popytok := 0
 	s.zapustitYadro = func(ctx context.Context) error {
 		popytok++
