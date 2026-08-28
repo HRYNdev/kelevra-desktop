@@ -11,13 +11,21 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
 
-// Заказ Вовы (28.08): «нажимаю подключиться, он сука не определяет дома или
-// нет». Кнопка «Подключиться» (podklyuchit, sluzhba.go) обязана сама одним
-// доверенным заходом авторежима (domaSeychas) спросить обстановку и решить,
-// поднимать ли защиту — а не делать это безусловно. Эти тесты проверяют
-// РОВНО эту развилку через настоящую HTTP-ручку /api/podklyuchit, считая
-// вызовы PodnyatZashchitu через s.zapustitYadro — тем же приёмом, что уже
-// использует TestPervoePodklyuchenieSamoSprashivaetPrava (prava_avto_test.go).
+// Заказ Вовы (28.08, первая беда): «нажимаю подключиться, он сука не
+// определяет дома или нет». Кнопка «Подключиться» (podklyuchit, sluzhba.go)
+// обязана сама одним доверенным заходом авторежима (domaSeychas) спросить
+// обстановку и решить, поднимать ли защиту — а не делать это безусловно, но
+// ТОЛЬКО пока человек уже выбрал авторежим (тумблер /api/avtorezhim
+// включён). Эти тесты проверяют РОВНО эту развилку через настоящую
+// HTTP-ручку /api/podklyuchit на включённом тумблере (podklyuchitStend),
+// считая вызовы PodnyatZashchitu через s.zapustitYadro — тем же приёмом, что
+// уже использует TestPervoePodklyuchenieSamoSprashivaetPrava
+// (prava_avto_test.go).
+//
+// Вторая беда (28.08, тот же день): «когда программа определила что я дома,
+// она не даёт включить защиту вручную» — ручной режим (тумблер выключен)
+// вообще не спрашивает обстановку и подключает безусловно, см.
+// TestPodklyuchitRuchnojRezhimPodnimaetBezuslovnoDazheDoma в конце файла.
 
 // fakeDnsKnopka — подставной DNS-зонд для одиночного захода кнопки: тот же
 // приём, что fakeDns в internal/avtorezhim/avtorezhim_test.go, но заведён
@@ -47,6 +55,14 @@ func (visjachiyDnsKnopka) DomaPoDns(ctx context.Context) (bool, error) {
 // podklyuchitStend поднимает Sluzhba со стендовым ядром (как gotovStendLestnicy,
 // без реальной сети), подменяет одиночный заход авторежима кнопки на a и
 // считает через zapustitYadro, сколько раз реально позвана PodnyatZashchitu.
+//
+// Тумблер авторежима (s.Nastroyki.Avtorezhim) стенд ставит ВКЛЮЧЁННЫМ ещё до
+// нажатия: с 28.08 (беда «когда программа определила что я дома, она не
+// даёт включить защиту вручную») развилка «спросить обстановку или
+// подключить безусловно» смотрит именно на этот тумблер, а весь этот файл
+// проверяет путь, где человек авторежим уже выбрал — см.
+// TestPodklyuchitRuchnojRezhimPodnimaetBezuslovno (manual-режим, тумблер
+// выключен) отдельно.
 func podklyuchitStend(t *testing.T, a *avtorezhim.Avtorezhim, taimaut time.Duration) (s *Sluzhba, popytok *int) {
 	t.Helper()
 	s = gotovStendLestnicy(t)
@@ -58,6 +74,7 @@ func podklyuchitStend(t *testing.T, a *avtorezhim.Avtorezhim, taimaut time.Durat
 	}
 	s.avtorezhimDlyaKnopki = func() *avtorezhim.Avtorezhim { return a }
 	s.avtorezhimKnopkaTaimaut = taimaut
+	s.Nastroyki.Avtorezhim = true
 	// «Подключиться» с 28.08 сама включает фоновый авторежим (Вова, 27.08:
 	// «тыкаю на него и тогда он определяет... и так же когда я вернусь
 	// домой он тоже сука вернётся в положения дома») — гасим служителя в
@@ -213,5 +230,50 @@ func TestPodklyuchitVneDomaVklyuchaetAvtorezhim(t *testing.T) {
 	}
 	if !n.Avtorezhim {
 		t.Fatal("настройка авторежима не долетела до диска — перезапуск потерял бы выбор")
+	}
+}
+
+// TestPodklyuchitRuchnojRezhimPodnimaetBezuslovnoDazheDoma — вторая беда
+// Вовы (28.08): «когда программа определила что я дома, она не даёт
+// включить защиту вручную». Тумблер авторежима ВЫКЛЮЧЕН (ручной режим,
+// нулевое значение Nastroyki.Avtorezhim, как у свежего gotovStendLestnicy) —
+// «Подключиться» обязана поднять защиту безусловно, не спрашивая обстановку
+// (эталон — мобильный AutoMode.kt.chooseManually, который обстановку не
+// спрашивает вовсе) и не включая авторежим сам.
+//
+// Зонд заведён на «дома», но НАРОЧНО не даёт Zahod завершиться раньше
+// таймаута заведомо долгим — если бы правка регрессировала и код всё ещё
+// звал domaSeychas, тест поймал бы это как через popytok=0, так и через
+// зависший ответ. На старом коде (домашняя обстановка → gotovo без
+// PodnyatZashchitu) этот тест красный — см. отчёт правки, откат условия
+// подтверждён вручную.
+func TestPodklyuchitRuchnojRezhimPodnimaetBezuslovnoDazheDoma(t *testing.T) {
+	a := &avtorezhim.Avtorezhim{
+		Dns:       fakeDnsKnopka{doma: true},
+		Trafik:    fakeTrafikKnopka{proshel: true},
+		Zadvizhka: avtorezhim.NovayaZadvizhka(avtorezhim.Neizvestno),
+	}
+	s := gotovStendLestnicy(t)
+	popytok := 0
+	s.zapustitYadro = func(ctx context.Context) error {
+		popytok++
+		return nil
+	}
+	s.avtorezhimDlyaKnopki = func() *avtorezhim.Avtorezhim { return a }
+	s.avtorezhimKnopkaTaimaut = time.Second
+	// Тумблер оставлен выключенным — это и есть ручной режим под проверкой
+	// (gotovStendLestnicy его не трогает, нулевое значение false).
+	if s.Nastroyki.Avtorezhim {
+		t.Fatal("стенд обязан стартовать с выключенным авторежимом (ручной режим)")
+	}
+	t.Cleanup(s.OstanovitAvtorezhim)
+
+	postPodklyuchitIProverit(t, s)
+
+	if popytok != 1 {
+		t.Fatalf("ручной режим, обстановка «дома» — PodnyatZashchitu обязана быть позвана ровно 1 раз, а позвана %d раз(а)", popytok)
+	}
+	if s.Nastroyki.Avtorezhim {
+		t.Fatal("ручной режим: «Подключиться» не должна была включить авторежим сама")
 	}
 }
