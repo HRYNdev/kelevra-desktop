@@ -125,7 +125,13 @@ ln -sf "$LZHE" "$DOM/yadro/sing-box"
 pishi_scenariy '{}'
 
 rm -f "$STEND/sluzhba.log"
+# KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" — см. пояснение в stend/proksi.sh:
+# контейнер сам отвечает fake-ip подменой, без неё domaSeychas (#78) честно,
+# но ложно решает «дома» и podklyuchit не поднимает защиту. Здесь это выглядело
+# не красным, а ⚫ «ПРИБОР МЁРТВ» (sost=stoit после podklyuchit) — та же беда,
+# что красила пять стендов, просто в другой одежде.
 KELEVRA_DIR="$DOM" KELEVRA_PRAVA=net KELEVRA_BEZ_OBNOVLENIYA=1 \
+  KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" \
   "$BIN" --sluzhba > "$STEND/sluzhba.log" 2>&1 &
 SLUZHBA_PID=$!
 
