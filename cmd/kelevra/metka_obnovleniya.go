@@ -66,7 +66,7 @@ func zhdushcheeObnovlenie() string {
 // проверке, а не только на новой находке: после перезапуска копии пузырь
 // про уже названную версию молчит навсегда (povestitEsliNovaya), и без
 // этого вызова значок выглядел бы так, будто обновления нет.
-// obnovitPodskazkuTreya живёт в trey_windows.go и trey_other.go — тут про
+// obnovitZnachokTreya живёт в trey_windows.go и trey_other.go — тут про
 // платформу знать нечего.
 func pometitObnovlenie(versiya string) {
 	if versiya == "" {
@@ -74,7 +74,7 @@ func pometitObnovlenie(versiya string) {
 	} else {
 		zapomnitObnovlenie(versiya)
 	}
-	obnovitPodskazkuTreya()
+	obnovitZnachokTreya()
 }
 
 // podskazkaTreya — текст всплывающей подсказки значка (szTip). Пока

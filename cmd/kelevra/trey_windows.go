@@ -35,6 +35,15 @@ import (
 //go:embed znachok.ico
 var znachokIco []byte
 
+// znachokMetkaIco — тот же значок со светлой точкой в правом нижнем углу
+// (кадр-в-кадр с znachok.ico: 48/32/16, 32bpp, DIB), собран заранее и не
+// генерируется рантаймом. Это и есть недостающая половина метки обновления
+// (см. metka_obnovleniya.go): раньше значок в трее выглядел ОДИНАКОВО что с
+// обновлением, что без него — менялись только подсказка и пункт меню,
+// которые не видны, пока не наведёшь мышь или не кликнешь правой кнопкой.
+//go:embed znachok_metka.ico
+var znachokMetkaIco []byte
+
 var (
 	user32TreyDLL   = syscall.NewLazyDLL("user32.dll")
 	shell32TreyDLL  = syscall.NewLazyDLL("shell32.dll")
@@ -116,9 +125,17 @@ const (
 // звать с чужого потока можно — она не рисует ничего сама, а лишь пересылает
 // данные оболочке, вся синхронизация внутри неё самой (см. MSDN). 0 — трей
 // ещё не поднялся или уже погас; тогда пузырю показывать некуда.
+// treyHIconObychnyy/treyHIconMetka — оба HICON собраны ОДИН раз при подъёме
+// трея (zapustitTrey) и живут тут под тем же treyZamok, что и treyHwnd:
+// dobavitZnachokTreya (первый показ) и obnovitZnachokTreya (перерисовка на
+// находку/снятие метки) оба лишь выбирают между ними — не то, что зовёт
+// CreateIconFromResourceEx на каждую перерисовку заново. 0 — сборка ещё не
+// случилась или отказала (см. vybratZnachokTreya).
 var (
-	treyZamok sync.Mutex
-	treyHwnd  syscall.Handle
+	treyZamok         sync.Mutex
+	treyHwnd          syscall.Handle
+	treyHIconObychnyy syscall.Handle
+	treyHIconMetka    syscall.Handle
 )
 
 // hwndMessage — HWND_MESSAGE, псевдо-родитель для окна, которое не рисуется
@@ -328,8 +345,14 @@ func zapustitTrey(vyhod chan<- struct{}) {
 	hwnd := syscall.Handle(hwndR)
 	log.Printf("трей: поток встал, окно трея создано (HWND_MESSAGE), hwnd=%#x", hwnd)
 
-	hIcon := sobratZnachokTreya()
-	dobavitZnachokTreya(hwnd, hIcon)
+	// Оба HICON — один раз тут, не на каждую перерисовку: CreateIconFromResourceEx
+	// не бесплатна, а меняется в жизни трея только то, КАКОЙ из двух готовых
+	// значков сейчас показан (см. vybratZnachokTreya).
+	treyZamok.Lock()
+	treyHIconObychnyy = sobratZnachokTreya(znachokIco, "znachok.ico")
+	treyHIconMetka = sobratZnachokTreya(znachokMetkaIco, "znachok_metka.ico")
+	treyZamok.Unlock()
+	dobavitZnachokTreya(hwnd)
 	nastroitVersiyuTreya(hwnd)
 
 	// Окно готово принимать Shell_NotifyIconW(NIM_MODIFY) — публикуем hwnd
@@ -409,7 +432,7 @@ func pokazatOblachkoObnovleniya(versiya string) {
 	// где хук не подключён: пузырь без метки оставил бы человека без
 	// второго пути тычка.
 	zapomnitObnovlenie(versiya)
-	obnovitPodskazkuTreya()
+	obnovitZnachokTreya()
 	d.uFlags = nifInfo
 	d.dwInfoFlags = niifInfo
 	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra: доступно обновление")
@@ -419,26 +442,31 @@ func pokazatOblachkoObnovleniya(versiya string) {
 	log.Printf("трей: пузырь про версию %s -> Shell_NotifyIconW(NIM_MODIFY) = %v", versiya, r != 0)
 }
 
-// obnovitPodskazkuTreya перерисовывает szTip значка под нынешнюю метку
-// (NIM_MODIFY с одним NIF_TIP — сам значок и обработчик не трогаем).
-// Это то, что человек видит, наведя мышь: пузыря на экране уже нет, а
-// подсказка говорит и про версию, и про то, чем её ставить.
-func obnovitPodskazkuTreya() {
+// obnovitZnachokTreya перерисовывает и значок, и szTip под нынешнюю метку
+// (NIM_MODIFY с NIF_TIP|NIF_ICON). До этой правки перерисовывался только
+// szTip (NIF_TIP один) — подсказка и пункт меню знали про находку, а сам
+// значок в трее выглядел ОДИНАКОВО что с обновлением, что без него; человек
+// отходил от компьютера, пузырь гасал — и на экране ничего не говорило, что
+// обновление ждёт тычка (три версии подряд так и уехали в пустоту). Имя
+// функции было про подсказку — теперь она про значок в первую очередь.
+func obnovitZnachokTreya() {
 	treyZamok.Lock()
 	hwnd := treyHwnd
 	treyZamok.Unlock()
 	if hwnd == 0 {
 		return // трей ещё не поднялся или уже погас — рисовать негде
 	}
+	hIcon, vid := vybratZnachokTreya()
 	var d notifyIconDataW
 	d.cbSize = uint32(unsafe.Sizeof(d))
 	d.hWnd = hwnd
 	d.uID = trayIconID
-	d.uFlags = nifTip
+	d.uFlags = nifTip | nifIcon
+	d.hIcon = hIcon
 	podskazka := podskazkaTreya()
 	kopirovatStrokuUTF16(d.szTip[:], podskazka)
 	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
-	log.Printf("трей: подсказка значка -> %q, Shell_NotifyIconW(NIM_MODIFY) = %v", podskazka, r != 0)
+	log.Printf("трей: значок %s, подсказка %q, Shell_NotifyIconW(NIM_MODIFY) = %v", vid, podskazka, r != 0)
 }
 
 // tychokVPuzyr — реакция на клик по самому пузырю (NIN_BALLOONUSERCLICK):
@@ -495,24 +523,24 @@ func pokazatOblachkoBedyUstanovki() {
 	log.Printf("трей: пузырь о неудачной установке -> Shell_NotifyIconW(NIM_MODIFY) = %v", r != 0)
 }
 
-// sobratZnachokTreya делает HICON из znachok.ico настоящим
+// sobratZnachokTreya делает HICON из байт .ico (znachok.ico или
+// znachok_metka.ico — imyaFayla только для честного журнала) настоящим
 // CreateIconFromResourceEx. Если не получилось (битый/пустой файл значка) —
 // честно логирует и возвращает системный IDI_APPLICATION: отказ трея не
 // имеет права утащить за собой службу.
-func sobratZnachokTreya() syscall.Handle {
-	return sobratZnachokRazmera(zhelaemyyRazmerZnachka())
+func sobratZnachokTreya(data []byte, imyaFayla string) syscall.Handle {
+	return sobratZnachokRazmera(data, imyaFayla, zhelaemyyRazmerZnachka())
 }
 
 // sobratZnachokRazmera — то же самое, что sobratZnachokTreya, но под
-// произвольный желаемый размер образа. Вынесена отдельно, потому что тем же
-// znachok.ico и той же CreateIconFromResourceEx пользуется ещё окно
-// WebView2 (см. ustanovitZnachokOkna в okno_windows.go) — там нужны сразу
-// два размера (ICON_SMALL и ICON_BIG), а не один, как в трее.
-func sobratZnachokRazmera(zhelaemyy int) syscall.Handle {
-	data := znachokIco
+// произвольный желаемый размер образа. Вынесена отдельно, потому что той же
+// CreateIconFromResourceEx пользуется ещё окно WebView2 (см.
+// ustanovitZnachokOkna в okno_windows.go, всегда с znachok.ico) — там нужны
+// сразу два размера (ICON_SMALL и ICON_BIG), а не один, как в трее.
+func sobratZnachokRazmera(data []byte, imyaFayla string, zhelaemyy int) syscall.Handle {
 	obraz, err := vybratObrazIzIco(data, zhelaemyy)
 	if err != nil {
-		log.Printf("значок: не удалось собрать значок из znachok.ico (%v), беру системный значок", err)
+		log.Printf("значок: не удалось собрать значок из %s (%v), беру системный значок", imyaFayla, err)
 		return sistemnyyZnachokTreya()
 	}
 	presbits := data[obraz.smeshchenie : obraz.smeshchenie+obraz.razmer]
@@ -526,12 +554,33 @@ func sobratZnachokRazmera(zhelaemyy int) syscall.Handle {
 		0, // LR_DEFAULTCOLOR
 	)
 	if r == 0 {
-		log.Printf("значок: CreateIconFromResourceEx вернул 0 для образа %dx%d (%v), беру системный значок", obraz.shirina, obraz.vysota, err)
+		log.Printf("значок: CreateIconFromResourceEx вернул 0 для образа %dx%d из %s (%v), беру системный значок", obraz.shirina, obraz.vysota, imyaFayla, err)
 		return sistemnyyZnachokTreya()
 	}
 	hIcon := syscall.Handle(r)
-	log.Printf("значок: собран из znachok.ico (%dx%d, %d байт образа) под желаемый размер %d, HICON=%#x", obraz.shirina, obraz.vysota, len(presbits), zhelaemyy, hIcon)
+	log.Printf("значок: собран из %s (%dx%d, %d байт образа) под желаемый размер %d, HICON=%#x", imyaFayla, obraz.shirina, obraz.vysota, len(presbits), zhelaemyy, hIcon)
 	return hIcon
+}
+
+// vybratZnachokTreya решает, какой из двух заранее собранных HICON сейчас
+// показывать, и как назвать выбор в журнале — общий код для dobavitZnachokTreya
+// (первый показ, NIM_ADD) и obnovitZnachokTreya (перерисовка на находку или
+// снятие метки, NIM_MODIFY), чтобы выбор не разъезжался в двух местах, как
+// раньше szTip и меню жили порознь от значка. Метку показываем, только пока
+// zhdushcheeObnovlenie() не пуста И сборка значка с меткой удалась
+// (treyHIconMetka != 0) — отказ сборки не имеет права оставить трей без
+// значка вовсе, честно откатываемся на обычный и пишем это в журнал.
+func vybratZnachokTreya() (hIcon syscall.Handle, vid string) {
+	treyZamok.Lock()
+	obychnyy, metka := treyHIconObychnyy, treyHIconMetka
+	treyZamok.Unlock()
+	if zhdushcheeObnovlenie() != "" {
+		if metka != 0 {
+			return metka, "с меткой обновления"
+		}
+		log.Printf("значок: HICON метки обновления не собран (0) — остаюсь на обычном")
+	}
+	return obychnyy, "обычный"
 }
 
 func sistemnyyZnachokTreya() syscall.Handle {
@@ -622,10 +671,17 @@ func abs(v int) int {
 	return v
 }
 
-// dobavitZnachokTreya вешает значок (NIM_ADD). Результат Shell_NotifyIconW
-// логируется честно: под wine без explorer.exe он законно может быть 0 —
-// это не значит, что вызов не случился.
-func dobavitZnachokTreya(hwnd syscall.Handle, hIcon syscall.Handle) {
+// dobavitZnachokTreya вешает значок (NIM_ADD), выбирая между обычным и
+// значком с меткой ТЕМ ЖЕ кодом (vybratZnachokTreya), что и obnovitZnachokTreya
+// — на холодном старте метка уже может ждать (перезапуск копии, отметка на
+// диске пережила его, см. metka_obnovleniya.go), и трей не имеет права
+// поднять «обычный» значок, пока правда — «с меткой». Результат
+// Shell_NotifyIconW логируется честно: под wine без explorer.exe он законно
+// может быть 0 — это не значит, что вызов не случился; префикс строки
+// («трей: Shell_NotifyIconW(NIM_ADD) -> …») нарочно не сдвинут — по нему
+// живой wine-стенд (stend/trey.sh, stend/trey_zhivoy.sh) ловит готовность.
+func dobavitZnachokTreya(hwnd syscall.Handle) {
+	hIcon, vid := vybratZnachokTreya()
 	var d notifyIconDataW
 	d.cbSize = uint32(unsafe.Sizeof(d))
 	d.hWnd = hwnd
@@ -633,9 +689,10 @@ func dobavitZnachokTreya(hwnd syscall.Handle, hIcon syscall.Handle) {
 	d.uFlags = nifMessage | nifIcon | nifTip
 	d.uCallbackMessage = wmTreyIkonka
 	d.hIcon = hIcon
-	kopirovatStrokuUTF16(d.szTip[:], podskazkaTreya())
+	podskazka := podskazkaTreya()
+	kopirovatStrokuUTF16(d.szTip[:], podskazka)
 	r, _, _ := procShellNotifyIconW.Call(uintptr(nimAdd), uintptr(unsafe.Pointer(&d)))
-	log.Printf("трей: Shell_NotifyIconW(NIM_ADD) -> %v", r != 0)
+	log.Printf("трей: Shell_NotifyIconW(NIM_ADD) -> %v, значок %s, подсказка %q", r != 0, vid, podskazka)
 }
 
 func snyatZnachokTreya(hwnd syscall.Handle) {
