@@ -185,11 +185,66 @@ func razobrat(v string) [3]int {
 	return r
 }
 
+// popytokPereimenovaniya — сколько раз пробуем переименовать файл, если он
+// занят: на Windows свежескачанный .exe (или отодвигаемый .old) секунду-другую
+// может держать антивирус, и первая попытка штатно проваливается.
+const popytokPereimenovaniya = 5
+
+// pauzaPereimenovaniya — шаг паузы между попытками; растёт линейно
+// (200,400,600,800 мс), суммарно укладываясь в ~2 секунды при 5 попытках —
+// замок антивируса живёт секунды, не часы.
+const pauzaPereimenovaniya = 200 * time.Millisecond
+
+// pereimenovat и spat — переменные уровня пакета, а не прямые вызовы
+// os.Rename/time.Sleep: тесты пакета подменяют их, чтобы на линуксе
+// воспроизвести windows-специфичный отказ переименования занятого файла без
+// настоящего антивируса, и чтобы не ждать реальные секунды пауз.
+var (
+	pereimenovat = os.Rename
+	spat         = time.Sleep
+)
+
+// pereimenovatSPovtorami пробует переименовать файл несколько раз подряд —
+// см. popytokPereimenovaniya.
+func pereimenovatSPovtorami(ot, kuda string) error {
+	var poslednyaya error
+	for i := 0; i < popytokPereimenovaniya; i++ {
+		if i > 0 {
+			spat(time.Duration(i) * pauzaPereimenovaniya)
+		}
+		if err := pereimenovat(ot, kuda); err != nil {
+			poslednyaya = err
+			continue
+		}
+		return nil
+	}
+	return poslednyaya
+}
+
+// kopirovatFayl копирует содержимое (не переименовывает — на переименование
+// уже не хватило попыток дважды) как последний шанс вернуть putExe в рабочее
+// состояние, если ни новый файл, ни отодвинутая копия старого не встают на
+// место через os.Rename.
+func kopirovatFayl(otkuda, kuda string) error {
+	dannye, err := os.ReadFile(otkuda)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(kuda, dannye, 0o755)
+}
+
 // Postavit кладёт новую сборку на место текущей и возвращает путь к ней.
 //
 // Windows не даёт затереть запущенный .exe, но даёт его ПЕРЕИМЕНОВАТЬ: старый
 // файл уезжает в <имя>.old, новый встаёт на его место. Хвост убирается при
 // следующем запуске (UbratHvost), потому что прямо сейчас он ещё занят.
+//
+// ЖЕЛЕЗНОЕ ОБЕЩАНИЕ: после любого исхода (nil или ошибка) по пути putExe
+// обязан лежать РАБОТАЮЩИЙ файл — либо новая версия, либо вернувшаяся
+// старая. 28.08.2026 живьём случился ровно провал этого обещания: второе
+// переименование упало (антивирус держал свежий .exe), а неприкрытая ошибка
+// отката оставила владельца вовсе без .exe — на диске лежали только
+// два файла с хвостом .old.
 func Postavit(ctx context.Context, klient *http.Client, n Novaya, putExe string) error {
 	if klient == nil {
 		klient = &http.Client{Timeout: 5 * time.Minute}
@@ -264,18 +319,40 @@ func Postavit(ctx context.Context, klient *http.Client, n Novaya, putExe string)
 	if err := os.Rename(putExe, staryy); err != nil {
 		return fmt.Errorf("не могу отодвинуть текущее приложение: %w", err)
 	}
-	if err := os.Rename(vremennyy, putExe); err != nil {
-		// Возврат на исходное: без этого человек остаётся вообще без .exe.
-		os.Rename(staryy, putExe)
-		return fmt.Errorf("не могу поставить новое приложение: %w", err)
+	if err := pereimenovatSPovtorami(vremennyy, putExe); err != nil {
+		// Второе переименование не встало (обычно антивирус ещё держит
+		// свежий .exe) — обязаны вернуть putExe в рабочее состояние: сперва
+		// откатом старого файла обратно, а если и откат не встаёт через
+		// os.Rename — его копией. Ошибку отката ПРОВЕРЯЕМ: непроверенный
+		// откат ровно и есть причина беды 28.08 (человек остался без .exe).
+		if otkat := pereimenovatSPovtorami(staryy, putExe); otkat == nil {
+			return fmt.Errorf("не могу поставить новое приложение (%v), вернул прежнее", err)
+		} else if kop := kopirovatFayl(staryy, putExe); kop == nil {
+			return fmt.Errorf("не могу поставить новое приложение (%v), откат переименованием не удался (%v), вернул прежнее копией из %s", err, otkat, staryy)
+		} else {
+			return fmt.Errorf("не могу поставить новое приложение (%v), откат тоже не удался (%v), и копия не удалась (%v): приложение осталось в файле %s, переименуйте его вручную обратно в %s", err, otkat, kop, staryy, putExe)
+		}
 	}
 	uspeshno = true
 	return nil
 }
 
-// UbratHvost удаляет <имя>.old, оставшийся от прошлого обновления.
+// UbratHvost удаляет мусор прошлых обновлений рядом с putExe: сам putExe и
+// прочие файлы в папке не трогает.
+//   - <имя>.old — штатный хвост честной замены (см. Postavit);
+//   - <имя без .exe>.old — след уже исправленного бага, когда хвост получал
+//     имя без расширения .exe;
+//   - .kelevra-*.new — забытые временные файлы недокачанных или не вставших
+//     на место попыток обновления.
 func UbratHvost(putExe string) {
 	os.Remove(putExe + ".old")
+	bezRasshireniya := strings.TrimSuffix(putExe, filepath.Ext(putExe))
+	os.Remove(bezRasshireniya + ".old")
+	if musor, err := filepath.Glob(filepath.Join(filepath.Dir(putExe), ".kelevra-*.new")); err == nil {
+		for _, m := range musor {
+			os.Remove(m)
+		}
+	}
 }
 
 // PutSebya — путь к самому себе, разрешённый до настоящего файла.

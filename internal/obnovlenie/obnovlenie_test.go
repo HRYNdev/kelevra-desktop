@@ -295,3 +295,148 @@ func TestPostavitMezhprocessnayaGonkaNePortitFayl(t *testing.T) {
 		t.Fatalf("ни один процесс ни в одной из %d попыток не поставил обновление", Popytok)
 	}
 }
+
+// podmenitPovtory подменяет pereimenovat/spat на время теста и возвращает
+// функцию восстановления исходных (реальных) значений.
+func podmenitPovtory(t *testing.T, pereimen func(ot, kuda string) error) {
+	t.Helper()
+	staryyPereimenovat, staryySpat := pereimenovat, spat
+	pereimenovat = pereimen
+	spat = func(time.Duration) {} // тест не обязан ждать настоящие паузы антивируса
+	t.Cleanup(func() {
+		pereimenovat = staryyPereimenovat
+		spat = staryySpat
+	})
+}
+
+// TestPostavitVtoroePereimenovanieProhoditSoVtoroyPopytki — антивирус держит
+// свежескачанный .exe первые два переименования, отпускает на третьем: живой
+// симптом 28.08 не должен возникать из-за КАЖДОЙ мимолётной занятости файла.
+func TestPostavitVtoroePereimenovanieProhoditSoVtoroyPopytki(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	novoe := "NOVYY-KELEVRA"
+	s := server(t, novoe)
+
+	popytok := 0
+	podmenitPovtory(t, func(ot, kuda string) error {
+		popytok++
+		if kuda == put && popytok <= 2 {
+			return fmt.Errorf("занято антивирусом (попытка %d)", popytok)
+		}
+		return os.Rename(ot, kuda)
+	})
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put)
+	if err != nil {
+		t.Fatalf("с третьей попытки переименование должно было пройти, а Postavit вернул: %v", err)
+	}
+	if b, _ := os.ReadFile(put); string(b) != novoe {
+		t.Fatalf("на месте putExe не новое содержимое: %q", b)
+	}
+	if b, _ := os.ReadFile(put + ".old"); string(b) != "STARYY" {
+		t.Fatalf("хвост .old не сохранил старое содержимое: %q", b)
+	}
+}
+
+// TestPostavitOtkatVozvrashchaetStaroe — второе переименование не встаёт
+// НИКОГДА, но откат (staryy -> putExe) проходит: человек обязан остаться с
+// работающей (пусть и старой) программой, а Postavit — вернуть ошибку.
+func TestPostavitOtkatVozvrashchaetStaroe(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	novoe := "NOVYY-KELEVRA"
+	s := server(t, novoe)
+
+	// Откат (ot==staryy, kuda==put) должен пройти, а вот именно ПОСТАНОВКА
+	// нового (ot==vremennyy, kuda==put) — падать всегда. Различаем по имени
+	// ot: новый временный файл — это .kelevra-*.new.
+	podmenitPovtory(t, func(ot, kuda string) error {
+		if kuda == put && strings.Contains(filepath.Base(ot), ".kelevra-") {
+			return fmt.Errorf("занято антивирусом навсегда")
+		}
+		return os.Rename(ot, kuda)
+	})
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put)
+	if err == nil {
+		t.Fatal("постоянный отказ второго переименования должен вернуть ошибку")
+	}
+	if b, _ := os.ReadFile(put); string(b) != "STARYY" {
+		t.Fatalf("человек остался без рабочей программы: putExe=%q, ждал откат к STARYY", b)
+	}
+}
+
+// TestPostavitKopiyaKogdaOtkatNeVstal — самый тяжёлый случай 28.08: и
+// постановка нового, и откат старого через os.Rename проваливаются всегда.
+// Последний рубеж — копия содержимого staryy в putExe: человек всё равно
+// обязан остаться с рабочей программой, а текст ошибки — подсказать про .old.
+func TestPostavitKopiyaKogdaOtkatNeVstal(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	novoe := "NOVYY-KELEVRA"
+	s := server(t, novoe)
+
+	podmenitPovtory(t, func(ot, kuda string) error {
+		if kuda == put {
+			// И постановка нового, и откат старого — оба переименования в
+			// putExe — не встают НИКОГДА.
+			return fmt.Errorf("putExe занято навсегда")
+		}
+		return os.Rename(ot, kuda)
+	})
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put)
+	if err == nil {
+		t.Fatal("постоянный отказ и постановки, и отката должен вернуть ошибку")
+	}
+	if b, _ := os.ReadFile(put); string(b) != "STARYY" {
+		t.Fatalf("человек остался без рабочей программы: putExe=%q, ждал STARYY через копию", b)
+	}
+	if !strings.Contains(err.Error(), ".old") {
+		t.Fatalf("ошибка обязана подсказать про файл .old, получил: %v", err)
+	}
+}
+
+// TestUbratHvostChistitOboiHvostaIMusor — UbratHvost сносит и штатный .old, и
+// след уже исправленного бага (имя без .exe), и забытые временные файлы, но
+// не трогает сам putExe и посторонний файл рядом.
+func TestUbratHvostChistitOboiHvostaIMusor(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	staryyOld := put + ".old"                                                 // Kelevra.exe.old
+	bezRasshireniyaOld := strings.TrimSuffix(put, filepath.Ext(put)) + ".old" // Kelevra.old
+	musor := filepath.Join(papka, ".kelevra-abc123.new")
+	postoronniy := filepath.Join(papka, "chuzhoy-fayl.txt")
+
+	for _, p := range []string{put, staryyOld, bezRasshireniyaOld, musor, postoronniy} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	UbratHvost(put)
+
+	for _, p := range []string{staryyOld, bezRasshireniyaOld, musor} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("хвост %s не убран", p)
+		}
+	}
+	for _, p := range []string{put, postoronniy} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("UbratHvost тронул чужое: %s пропал (%v)", p, err)
+		}
+	}
+}
