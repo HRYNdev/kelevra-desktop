@@ -655,13 +655,18 @@
         </button>
       </div>
       <div class="beda" id="beda-avtozapusk"></div>
-      <!-- Обновление приходит само и молча (internal/obnovlenie) — человеку
-           нужен способ спросить прямо сейчас, свежая у него версия или нет,
-           так же как на телефоне (SimpleSettingsScreen.kt: «Проверить
-           обновление»). -->
+      <!-- Автоустановка на холодном старте убрана сознательно
+           (cmd/kelevra/main.go) — единственная дверь к установке была тычок
+           в пузырь трея (trey_windows.go: tychokVPuzyr). 28.08: у этой кнопки
+           появилась вторая дверь к ТОЙ ЖЕ ручке (/api/obnovlenie_postavit):
+           пока обновления нет — кнопка спрашивает GitHub прямо сейчас (эталон
+           телефона: SimpleSettingsScreen.kt, «Проверить обновление»); когда
+           фоновая проверка (SleditZaObnovleniem) уже нашла версию новее
+           (s.novaya_versiya_dostupna) — та же кнопка ставит именно её, не
+           заставляя ждать пузырь, который показывается один раз. -->
       <button class="tihaya" id="knopka-obnovlenie">
         <span class="tihaya-tekst">
-          <span class="tihaya-zagolovok">Проверить обновление</span>
+          <span class="tihaya-zagolovok" id="zagolovok-obnovlenie">Проверить обновление</span>
           <span class="tihaya-podpis" id="podpis-obnovlenie">Версия —</span>
         </span>
       </button>
@@ -867,16 +872,44 @@ function pokazatBedu(uzel, tekst, spokoyno) {
 // бы «Проверяем…» или уже показанный итог раньше, чем человек его прочитал.
 let obnovlenieItog = null;
 
+// Состояние УСТАНОВКИ найденного обновления (вторая дверь к тому же
+// /api/obnovlenie_postavit, что и тычок в пузырь трея): null — ничего не
+// нажимали, "idet" — запрос в полёте, иначе {beda:true} | {gotovo, versiya}.
+let ustanovkaItog = null;
+
+// vRezhimeUstanovki — кнопка сейчас СТАВИТ найденную версию, а не проверяет:
+// либо фоновая проверка уже нашла что ставить (s.novaya_versiya_dostupna),
+// либо человек только что сам запустил установку (ustanovkaItog) — это
+// состояние держим и после того, как находка исчезнет из /api/sostoyanie
+// (см. её сброс в obnovit ниже), иначе «Готово, перезапускаю…» мигнуло бы и
+// тут же пропало, не успев прочитаться.
+function vRezhimeUstanovki(s) {
+  return !!(s && s.novaya_versiya_dostupna) || ustanovkaItog !== null;
+}
+
+function zagolovokObnovleniya(s) {
+  if (vRezhimeUstanovki(s)) {
+    const versiya = (s && s.novaya_versiya_dostupna) || (ustanovkaItog && ustanovkaItog.versiya) || "";
+    return "Установить" + (versiya ? " версию " + versiya : "");
+  }
+  return "Проверить обновление";
+}
+
 function podpisObnovleniya(s) {
+  if (vRezhimeUstanovki(s)) {
+    if (ustanovkaItog === "idet") return "Устанавливаем…";
+    if (ustanovkaItog && ustanovkaItog.beda) return "Не удалось поставить, нажмите ещё раз";
+    // Тот же путь ухода, что и у тычка в пузырь (trey_windows.go:
+    // tychokVObnovlenie → PostavitNaydennoe): служба гасит своё ядро и
+    // поднимает смену сама — окну остаётся только сказать человеку, что не
+    // молчать, а ждать.
+    if (ustanovkaItog && ustanovkaItog.gotovo) return "Готово, Kelevra перезапускается…";
+    return "Доступна версия " + s.novaya_versiya_dostupna + " — нажмите, чтобы поставить";
+  }
   if (obnovlenieItog === "idet") return "Проверяем…";
   if (obnovlenieItog && obnovlenieItog.beda) return "Не удалось проверить";
   if (obnovlenieItog && obnovlenieItog.novaya) return "Доступна версия " + obnovlenieItog.novaya;
   if (obnovlenieItog && obnovlenieItog.svezhaya) return "Установлена свежая версия";
-  // Находка ФОНОВОЙ проверки (internal/sluzhba.SleditZaObnovleniem) — та
-  // спрашивает GitHub сама, без нажатия кнопки, пока копия просто висит в
-  // трее. Молчащая в логе находка человеку не видна вообще — показываем её
-  // тем же путём, каким видна ручная проверка чуть выше.
-  if (s.novaya_versiya_dostupna) return "Доступна версия " + s.novaya_versiya_dostupna;
   return "Версия " + (s.versiya || "—");
 }
 
@@ -928,7 +961,16 @@ async function obnovit() {
   // (эталон SimpleSettingsScreen.kt), а версию теперь видно в настройках
   // (подвал «KELEVRA <версия>» ниже, и подпись пункта «Проверить обновление»).
   $("podval-versiya").textContent = "KELEVRA " + (s.versiya || "");
+  // Готовая установка гасит себя сама, как только фон перестал видеть
+  // находку (обычно — потому что новая копия уже поднялась): держать
+  // «Готово, перезапускается…» дольше этого значило бы врать о состоянии,
+  // которого уже нет.
+  if (ustanovkaItog && ustanovkaItog.gotovo && !s.novaya_versiya_dostupna) {
+    ustanovkaItog = null;
+  }
+  $("zagolovok-obnovlenie").textContent = zagolovokObnovleniya(s);
   $("podpis-obnovlenie").textContent = podpisObnovleniya(s);
+  $("knopka-obnovlenie").disabled = ustanovkaItog === "idet";
 
   // Круг сам кнопка (см. index: #krug-blok — <button>): подпись под ним
   // говорит, что сделает нажатие, а не дублирует его текстом внутри круга.
@@ -1373,12 +1415,40 @@ $("rezhim-ruchnoy").onclick = () => vybratRezhim(false);
 
 $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
 
-// «Проверить обновление» — обновление и так приходит само и молча
-// (cmd/kelevra/obnovlenie.go), но без этой кнопки человеку негде спросить
-// прямо сейчас, свежая у него версия или нет (эталон телефона:
-// SimpleSettingsScreen.kt). Сеть на стенде недоступна нарочно — эндпойнт
-// обязан ответить понятной подписью, а не повесить экран (stend/oblik_snimok.py).
+// «Проверить обновление» / «Установить версию X» — одна кнопка, две двери
+// на одну ручку каждая. Пока фон (SleditZaObnovleniem) ничего не нашёл,
+// клик спрашивает GitHub прямо сейчас (эталон телефона: SimpleSettingsScreen.kt).
+// Сеть на стенде недоступна нарочно — эндпойнт обязан ответить понятной
+// подписью, а не повесить экран (stend/oblik_snimok.py).
+//
+// Когда фон уже нашёл версию новее (s.novaya_versiya_dostupna), та же кнопка
+// зовёт /api/obnovlenie_postavit — ту же ручку, что и тычок в пузырь трея
+// (cmd/kelevra/trey_windows.go: tychokVObnovlenie → sluzhba.PostavitNaydennoe).
+// Двойной клик не шлёт вторую установку: кнопку блокируем на время запроса
+// (см. её disabled в obnovit), а сама ручка держит свой замок
+// (idetUstanovkaObnovleniya, sluzhba.go) и на повторный тычок отвечает
+// понятной бедой, а не молчанием — так что даже если оба клика успели уйти
+// до того, как disabled применился, второй не потеряется без ответа.
 $("knopka-obnovlenie").onclick = async () => {
+  if (poslednee && poslednee.novaya_versiya_dostupna) {
+    if (ustanovkaItog === "idet") return;
+    ustanovkaItog = "idet";
+    $("knopka-obnovlenie").disabled = true;
+    $("zagolovok-obnovlenie").textContent = zagolovokObnovleniya(poslednee);
+    $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
+    try {
+      const d = await api("obnovlenie_postavit", {});
+      ustanovkaItog = {gotovo: true, versiya: d.versiya};
+    } catch (e) {
+      ustanovkaItog = {beda: true};
+    }
+    $("knopka-obnovlenie").disabled = ustanovkaItog === "idet";
+    if (poslednee) {
+      $("zagolovok-obnovlenie").textContent = zagolovokObnovleniya(poslednee);
+      $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
+    }
+    return;
+  }
   obnovlenieItog = "idet";
   if (poslednee) $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
   try {
