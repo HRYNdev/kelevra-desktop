@@ -12,6 +12,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -288,7 +289,9 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 // srokProverkiObnovleniya — сколько ждём ответа GitHub на нажатие «Проверить
 // обновление» в окне. Короче обычного (obnovlenie идёт в фоне при старте) —
 // тут человек стоит и смотрит на подпись «Проверяем…».
-const srokProverkiObnovleniya = 6 * time.Second
+// var, а не const: тест на таймаут (obnovlenie_test.go) сокращает срок,
+// иначе пришлось бы ждать настоящие 6 секунд на каждый прогон.
+var srokProverkiObnovleniya = 6 * time.Second
 
 // srokUstanovkiObnovleniya — сколько ждём скачивание найденной сборки по
 // тычку в пузырь (та же величина, что и у холодного обновления в
@@ -300,6 +303,29 @@ type otvetObnovleniya struct {
 	Tekushchaya string `json:"tekushchaya"`
 	Novaya      string `json:"novaya,omitempty"`
 	Beda        string `json:"beda,omitempty"`
+}
+
+// prichinaBedyObnovleniya переводит ошибку obnovlenie.Proverit в русскую
+// фразу без жаргона: человек за компьютером (хозяин) не программист, «не
+// удалось проверить» на любую беду молчит о причине — нет сети у него дома,
+// GitHub лёг или просто долго думает, это три разных «что делать».
+func prichinaBedyObnovleniya(err error) string {
+	var oshibkaStatusa *obnovlenie.OshibkaStatusa
+	if errors.As(err, &oshibkaStatusa) {
+		return fmt.Sprintf("GitHub ответил ошибкой %d", oshibkaStatusa.Kod)
+	}
+	var oshibkaRazbora *obnovlenie.OshibkaRazbora
+	if errors.As(err, &oshibkaRazbora) {
+		return "GitHub ответил непонятным"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Sprintf("GitHub не ответил за %d секунд", int(srokProverkiObnovleniya/time.Second))
+	}
+	var setevaya net.Error
+	if errors.As(err, &setevaya) && setevaya.Timeout() {
+		return fmt.Sprintf("GitHub не ответил за %d секунд", int(srokProverkiObnovleniya/time.Second))
+	}
+	return "нет интернета, проверить не у кого"
 }
 
 // obnovlenieRuchka — «Проверить обновление» в настройках. Обновление и так
@@ -320,7 +346,7 @@ func (s *Sluzhba) obnovlenieRuchka(w http.ResponseWriter, r *http.Request) {
 	n, err := obnovlenie.Proverit(ctx, &http.Client{Timeout: srokProverkiObnovleniya}, adres, podpiska.Versiya)
 	if err != nil {
 		log.Printf("проверка обновления по нажатию: %v", err)
-		o.Beda = "не удалось проверить"
+		o.Beda = prichinaBedyObnovleniya(err)
 	} else if n != nil {
 		o.Novaya = n.Versiya
 	}
