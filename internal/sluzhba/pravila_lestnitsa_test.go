@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
 )
 
 // oshibkaIstochnikaPravil — ровно то, что sing-box печатает, когда источник
@@ -14,13 +16,33 @@ import (
 // rule-set"), поэтому важна только эта подстрока, а не текст целиком.
 const oshibkaIstochnikaPravil = `initialize rule-set[11]: initial rule-set: cloudflare: Get "https://subkv.chickenkiller.com/rules/cloudflare.srs": connect: connection refused`
 
+// dnsFunc — DnsProver из голой функции: удобно завести подставной зонд
+// одной строкой, не заводя именованный тип.
+type dnsFunc func(ctx context.Context) (bool, error)
+
+func (f dnsFunc) DomaPoDns(ctx context.Context) (bool, error) { return f(ctx) }
+
 // gotovStendLestnicy поднимает Sluzhba на изолированном каталоге с боевым
 // профилем (22 remote rule_set) и подложным бинарём ядра — иначе
 // PodnyatZashchitu уйдёт качать настоящее ядро из сети.
+//
+// avtorezhimDlyaKnopki тоже подменён на «не дома» без единого сетевого
+// запроса: с 28.08 podklyuchit (POST /api/podklyuchit) перед подъёмом
+// защиты сам спрашивает обстановку (domaSeychas) — без подмены настоящий
+// заход бил бы по настоящей сети стенда (см. канон памяти «fake-ip отвечает
+// любой записи») и на некоторых сетях (в т.ч. в этой песочнице) ложно решал
+// бы «дома», молча пропуская PodnyatZashchitu и роняя все тесты этого
+// файла и prava_avto_test.go, которые проверяют совсем другое.
 func gotovStendLestnicy(t *testing.T) *Sluzhba {
 	t.Helper()
 	t.Setenv("KELEVRA_PRAVA", "net") // как на стенде: тут нет /dev/net/tun
 	s := stend(t)
+	s.avtorezhimDlyaKnopki = func() *avtorezhim.Avtorezhim {
+		return &avtorezhim.Avtorezhim{
+			Dns:       dnsFunc(func(ctx context.Context) (bool, error) { return false, nil }),
+			Zadvizhka: avtorezhim.NovayaZadvizhka(avtorezhim.Neizvestno),
+		}
+	}
 	profil, err := os.ReadFile("../konfig/testdata/profil_telefona.json")
 	if err != nil {
 		t.Fatal(err)

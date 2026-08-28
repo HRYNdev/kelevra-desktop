@@ -49,15 +49,23 @@
   (з) ПОЛОСА ВЫБОРА РЕЖИМА (27.08, заказ Вовы: «должно быть тупо выбор авто
       режим который сам все определяет, или ручной и там сам выбираешь» —
       список узлов с «Нидерланды прямой, запасной, комната» его злил).
-      (з1) на главном экране РОВНО одна полоса `.rezhim-perekl`, и обе
+      28.08 Вова, впервые открыв программу: «настройки из отдельной вкладки
+      нахуя то переехали вниз основной, это ваще не удобно» — коммит #66
+      унёс полосу на главный экран, теперь она вернулась на вкладку
+      «Настройки», проверка перенастроена под НОВОЕ место, а не выброшена.
+      (з0) на главном экране (вкладка «Сеть») полосы `.rezhim-perekl` НЕТ
+      вовсе — там нет настроек, только круг/заметка/список узлов.
+      (з1) на вкладке «Настройки» РОВНО одна полоса `.rezhim-perekl`, и обе
       половины несут дословный текст «Автоматически» / «Вручную» — не
       перевод смысла, а те же слова, что на телефоне (HomeScreen.kt:464-465).
-      (з2) `#uzly` виден ТОЛЬКО когда `avtorezhim_vklyuchen=false` (ручной):
-      при авто он обязан быть скрыт целиком (сверено с полем сцены, а не с
-      порядком в HTML — иначе проверка судила бы себя саму).
-      (з3) полоса не смеет ни накрывать собой другой текст ленты, ни быть
-      накрытой — тот же приём, что и (ж2) у круга: сравниваем
-      getBoundingClientRect() полосы против всех остальных видимых узлов.
+      (з2) `#uzly` (список узлов на главном экране) виден ТОЛЬКО когда
+      `avtorezhim_vklyuchen=false` (ручной): при авто он обязан быть скрыт
+      целиком (сверено с полем сцены, а не с порядком в HTML — иначе
+      проверка судила бы себя саму).
+      (з3) полоса на вкладке «Настройки» не смеет ни накрывать собой другой
+      текст этой же вкладки, ни быть накрытой — тот же приём, что и (ж2) у
+      круга: сравниваем getBoundingClientRect() полосы против всех
+      остальных видимых узлов вкладки.
 
     python3 stend/oblik_geometriya.py
 """
@@ -213,40 +221,48 @@ def proverit_krug_os_x(str_, imya_sceny):
     return bedy
 
 
-REZHIM_JS = """() => {
-  // Полоса выбора режима — тот же приём измерения, что и у круга (ж2):
-  // getBoundingClientRect() полосы против ВСЕХ остальных видимых узлов ленты.
+REZHIM_GLAVNYY_JS = """() => {
+  // Проход №1 — вкладка «Сеть» ещё активна (страница только что открыта,
+  // клика по табам не было). (з0) полосы тут быть не должно, (з2) список
+  // узлов должен слушаться режима так же, как и раньше.
   const r = (el) => {
     if (!el) return null;
     const rr = el.getBoundingClientRect();
     return (rr.width > 0 || rr.height > 0) ? rr : null;
   };
-  const bar = document.querySelector('.rezhim-perekl');
-  const avto = document.getElementById('rezhim-avto');
-  const ruchnoy = document.getElementById('rezhim-ruchnoy');
   const uzly = document.getElementById('uzly');
-  const lenta = document.getElementById('lenta');
-  const barRect = r(bar);
   // Есть ли вообще главный экран на этой сцене — своя примета (круг),
   // независимая от полосы: иначе отсутствие `.rezhim-perekl` в разметке
   // читалось бы прибором как «сцена без главного экрана» и молчало бы —
   // ровно та ловушка «проверка с пустым входом зеленеет» (25.08).
   const glavnyyEkranViden = !!r(document.querySelector('.krug-fon'));
+  return {
+    glavnyyEkranViden,
+    barNaGlavnom: document.querySelectorAll('#tab-set .rezhim-perekl').length,
+    uzlyVidno: !!(uzly && !uzly.hidden && r(uzly)),
+    uzlyHidden: !!(uzly && uzly.hidden),
+  };
+}"""
+
+REZHIM_NASTROYKI_JS = """() => {
+  // Проход №2 — после клика по вкладке «Настройки». Тот же приём измерения,
+  // что и у круга (ж2): getBoundingClientRect() полосы против ВСЕХ остальных
+  // видимых узлов ленты (на этой вкладке — #tab-set скрыт целиком, его дети
+  // дают нулевой rect и в перекрытие не попадают сами).
+  const r = (el) => {
+    if (!el) return null;
+    const rr = el.getBoundingClientRect();
+    return (rr.width > 0 || rr.height > 0) ? rr : null;
+  };
+  const bar = document.querySelector('#tab-nastroyki .rezhim-perekl');
+  const avto = document.getElementById('rezhim-avto');
+  const ruchnoy = document.getElementById('rezhim-ruchnoy');
+  const lenta = document.getElementById('lenta');
+  const barRect = r(bar);
   const perekryto = [];
   if (barRect && lenta) {
     for (const el of lenta.querySelectorAll('*')) {
       if (bar.contains(el) || el.contains(bar)) continue;
-      // #uzly — с 27.08 свой скролл-контейнер (index.html, забор
-      // oblik_obrezka_kadra.py): его дети позиционируются ОТНОСИТЕЛЬНО его
-      // собственной внутренней прокрутки и могут иметь «сырой» getBoundingClientRect
-      // ГЕОМЕТРИЧЕСКИ над полосой режима, оставаясь при этом обрезанными
-      // (невидимыми) собственным overflow #uzly — не .lenta. Раньше весь
-      // .lenta скроллился ОДНИМ куском, и сырое пересечение rect'ов было
-      // надёжной приметой реального наложения; теперь для потомков #uzly
-      // это больше не так — сама коробка #uzly с полосой никогда не
-      // перекрывается (соседи в одной flex-колонке), проверять их детей тут
-      // незачем.
-      if (uzly && uzly.contains(el)) continue;
       const rr = el.getBoundingClientRect();
       if (rr.width < 4 || rr.height < 4) continue;
       const dy = Math.min(rr.bottom, barRect.bottom) - Math.max(rr.top, barRect.top);
@@ -257,40 +273,32 @@ REZHIM_JS = """() => {
     }
   }
   return {
-    kolichestvo: document.querySelectorAll('.rezhim-perekl').length,
+    kolichestvoVsego: document.querySelectorAll('.rezhim-perekl').length,
     est_bar: !!barRect,
-    glavnyyEkranViden,
     avtoText: avto ? avto.textContent.trim() : null,
     ruchnoyText: ruchnoy ? ruchnoy.textContent.trim() : null,
-    uzlyVidno: !!(uzly && !uzly.hidden && r(uzly)),
-    uzlyHidden: !!(uzly && uzly.hidden),
     perekryto: perekryto.slice(0, 4),
   };
 }"""
 
 
 def proverit_rezhim_perekl(str_, imya_sceny, avtorezhim_vklyuchen_ozhidaem):
-    """(з) Полоса выбора режима на главном экране — заказ Вовы 27.08:
-    «должно быть тупо выбор авто режим который сам все определяет, или
-    ручной и там сам выбираешь» — список узлов до этого стоял голым текстом
-    и злил владельца («натыкал Нидерланды прямой, запасной, комната»).
+    """(з) Полоса выбора режима — вернулась 28.08 на вкладку «Настройки»
+    (Вова, впервые открыв программу: «настройки из отдельной вкладки нахуя
+    то переехали вниз основной, это ваще не удобно»). Заказ 27.08 на саму
+    форму («тупо выбор авто режим который сам все определяет, или ручной и
+    там сам выбираешь») никуда не делся — сменилось только МЕСТО.
     """
-    d = str_.evaluate(REZHIM_JS)
     bedy = []
+    d = str_.evaluate(REZHIM_GLAVNYY_JS)
     if not d["glavnyyEkranViden"]:
         # Сцена «1_kod» не рисует главный экран вовсе (карта-koda видна вместо
-        # karta-svyazi) — полосы там физически нет и не должно быть, это не
-        # беда (тот же приём, что и в proverit_glavnyy_ekran для круга/подсказки).
+        # karta-svyazi) — ни полосы, ни списка узлов там нет и не должно
+        # быть, это не беда (тот же приём, что и в proverit_glavnyy_ekran).
         return bedy
-    if not d["est_bar"]:
-        bedy.append(f"{imya_sceny}: (з1) полосы выбора режима `.rezhim-perekl` нет на главном экране")
-        return bedy
-    if d["kolichestvo"] != 1:
-        bedy.append(f"{imya_sceny}: (з1) полос выбора режима {d['kolichestvo']}, а нужна РОВНО одна")
-    if d["avtoText"] != "Автоматически":
-        bedy.append(f"{imya_sceny}: (з1) подпись половины «{d['avtoText']}», а нужна дословно «Автоматически»")
-    if d["ruchnoyText"] != "Вручную":
-        bedy.append(f"{imya_sceny}: (з1) подпись половины «{d['ruchnoyText']}», а нужна дословно «Вручную»")
+    if d["barNaGlavnom"] != 0:
+        bedy.append(f"{imya_sceny}: (з0) полоса выбора режима стоит на главном экране "
+                     f"(вкладка «Сеть») — она обязана жить на вкладке «Настройки»")
     if avtorezhim_vklyuchen_ozhidaem:
         if d["uzlyVidno"]:
             bedy.append(f"{imya_sceny}: (з2) авторежим включён, а #uzly виден — список узлов должен быть скрыт")
@@ -298,9 +306,27 @@ def proverit_rezhim_perekl(str_, imya_sceny, avtorezhim_vklyuchen_ozhidaem):
         if not d["uzlyVidno"]:
             bedy.append(f"{imya_sceny}: (з2) авторежим выключен (ручной), а #uzly скрыт "
                         f"(hidden={d['uzlyHidden']}) — список узлов должен быть виден")
-    if d["perekryto"]:
-        chto = ", ".join(f"«{z['tekst']}» на {z['dy']}px" for z in d["perekryto"])
-        bedy.append(f"{imya_sceny}: (з3) полоса режима перекрывается с текстом ленты: {chto}")
+
+    str_.click("#vkladka-nastroyki")
+    str_.wait_for_timeout(200)
+    dn = str_.evaluate(REZHIM_NASTROYKI_JS)
+    if not dn["est_bar"]:
+        bedy.append(f"{imya_sceny}: (з1) полосы выбора режима `.rezhim-perekl` нет на вкладке «Настройки»")
+    else:
+        if dn["kolichestvoVsego"] != 1:
+            bedy.append(f"{imya_sceny}: (з1) полос выбора режима {dn['kolichestvoVsego']}, а нужна РОВНО одна")
+        if dn["avtoText"] != "Автоматически":
+            bedy.append(f"{imya_sceny}: (з1) подпись половины «{dn['avtoText']}», а нужна дословно «Автоматически»")
+        if dn["ruchnoyText"] != "Вручную":
+            bedy.append(f"{imya_sceny}: (з1) подпись половины «{dn['ruchnoyText']}», а нужна дословно «Вручную»")
+        if dn["perekryto"]:
+            chto = ", ".join(f"«{z['tekst']}» на {z['dy']}px" for z in dn["perekryto"])
+            bedy.append(f"{imya_sceny}: (з3) полоса режима перекрывается с текстом вкладки «Настройки»: {chto}")
+    # Возвращаем сцену на вкладку «Сеть» — иначе следующая проверка в этой же
+    # sтранице (proverit_gradacii_signala на 24_uzly_vse_gradacii) искала бы
+    # .uzel .signal на скрытой сейчас вкладке и молчала бы вместо суждения.
+    str_.click("#vkladka-set")
+    str_.wait_for_timeout(200)
     return bedy
 
 
