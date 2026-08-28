@@ -34,6 +34,27 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
   echo "✗ main разъехался с origin/main: сперва подтяни"; exit 1
 fi
 
+# Сироты прошлого выпуска. Заход, из которого идёт выпуск, может умереть в любую
+# минуту (обрыв, потолок подписки) — и тогда стенды остаются брошенными процессами
+# под wine. Следующий выпуск они валят как «площадка нечистая»: стенд ждёт ровно
+# один Kelevra.exe, видит два и краснеет. 28.08 ровно так: 29🟢/2🔴, и оба красных
+# были от вчерашних сирот, а не от продукта — перегон на чистой площадке дал rc=0
+# обоим. Бьём по pid, а не шаблоном по дереву: шаблон видит и свою же оболочку.
+siroty=$(pgrep -f 'Kelevra\.exe' 2>/dev/null | grep -vx -e "$$" -e "$PPID" || true)
+if [ -n "$siroty" ]; then
+  echo "── сироты прошлого выпуска (Kelevra.exe): $(echo "$siroty" | tr '\n' ' ') — убираю"
+  # shellcheck disable=SC2086
+  kill $siroty 2>/dev/null || true
+  for _ in 1 2 3 4 5; do
+    sleep 1
+    ostalis=$(pgrep -f 'Kelevra\.exe' 2>/dev/null | grep -vx -e "$$" -e "$PPID" || true)
+    [ -z "$ostalis" ] && break
+  done
+  # shellcheck disable=SC2086
+  [ -n "${ostalis:-}" ] && kill -9 $ostalis 2>/dev/null || true
+  echo "── площадка очищена"
+fi
+
 if [ "${BEZ_PRIYOMKI:-0}" = "1" ]; then
   echo "⚠ приёмка ПРОПУЩЕНА по BEZ_PRIYOMKI=1 — это уедет на машину человека как есть"
 else
