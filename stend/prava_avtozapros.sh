@@ -72,6 +72,13 @@ STEND=$KORFN/.stend_prava_avto
 mkdir -p "$STEND" "$WINEPREFIX"
 . "$KORFN/stend/obshchee.sh"
 
+# AVTOREZHIM_DNS_PODMENA — см. пояснение в stend/proksi.sh: этот контейнер
+# сам отвечает fake-ip подменой на контрольные домены, поэтому domaSeychas
+# (podklyuchit, #78) без подмены честно, но ложно решает «дома» и защиту не
+# поднимает. 127.0.0.1:1 никто не слушает — мгновенный ECONNREFUSED, зонд
+# честно решает «не дома».
+AVTOREZHIM_DNS_PODMENA="127.0.0.1:1"
+
 command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
 
 if [ ! -x "$WINE" ]; then
@@ -120,7 +127,8 @@ cp "$YADRO_ISTOCHNIK" "$YADRO_PAPKA/sing-box.exe"
 
 echo "── поднимаю --tiho (служба живёт отдельным процессом, окна нет — под wine WebView2 недоступен) ──"
 wine_zapusti "$STEND/start.log" "$ZHURNAL" "служба слушает" 20 -- \
-  env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 60 "$WINE" "$STEND/Kelevra.exe" --tiho
+  env KELEVRA_BEZ_OBNOVLENIYA=1 KELEVRA_AVTOREZHIM_DNS="$AVTOREZHIM_DNS_PODMENA" \
+  timeout 60 "$WINE" "$STEND/Kelevra.exe" --tiho
 mertv=$?
 if [ "$mertv" -eq 77 ]; then
   echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
