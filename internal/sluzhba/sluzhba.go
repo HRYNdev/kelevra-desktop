@@ -58,6 +58,15 @@ type Sluzhba struct {
 	// процесс, а тест должен управлять числом попыток и их исходом без
 	// живого ядра. По умолчанию nil — PodnyatZashchitu зовёт s.Yadro.Zapustit.
 	zapustitYadro func(context.Context) error
+	// avtorezhimDlyaKnopki — точка подмены для тестов domaSeychas/podklyuchit:
+	// собирает *avtorezhim.Avtorezhim для одиночного доверенного захода
+	// кнопки «Подключиться» на подставных зондах, без настоящей сети. nil —
+	// domaSeychas собирает боевой avtorezhim.Novyy() с s.tunnelPodnyat.
+	avtorezhimDlyaKnopki func() *avtorezhim.Avtorezhim
+	// avtorezhimKnopkaTaimaut — таймаут одиночного захода кнопки
+	// «Подключиться» (domaSeychas). <=0 значит 5 секунд — своё поле только
+	// ради теста «заход завис», чтобы не ждать боевые 5с на каждый прогон.
+	avtorezhimKnopkaTaimaut time.Duration
 	// posleAvtozaprosaPrav — сигнал стенду, что zaprositPravaAvtomaticheskiEsliNado
 	// дописала отметку на диск (успех или отказ — не важно). Фоновая
 	// горутина не отдаёт своего результата вызвавшему, а тест не должен
@@ -148,6 +157,14 @@ type Sluzhba struct {
 	avtorezhimZamok  sync.Mutex
 	avtorezhimOtmena context.CancelFunc     // не nil, пока служитель крутится
 	avtorezhimEkz    *avtorezhim.Avtorezhim // тот же экземпляр — источник обстановки для /api/sostoyanie
+
+	// avtorezhimKnopkaObstanovka — обстановка, увиденная последним заходом
+	// domaSeychas (кнопка «Подключиться»). Отдельно от avtorezhimEkz: тот
+	// живёт, только пока фоновый служитель поднят тумблером
+	// Nastroyki.Avtorezhim, а кнопка обязана спрашивать обстановку всегда,
+	// тумблера не касаясь (заказ хозяина 28.08). /api/sostoyanie берёт отсюда,
+	// когда фонового служителя нет.
+	avtorezhimKnopkaObstanovka avtorezhim.Sostoyanie
 }
 
 // Novaya собирает службу на настоящих путях приложения.
@@ -768,6 +785,13 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	if s.avtorezhimEkz != nil {
 		o.AvtorezhimObstanovka = s.avtorezhimEkz.Zadvizhka.Tekushcheye().String()
 		o.AvtorezhimSlepPrichina = s.avtorezhimEkz.PrichinaSlepoty()
+	} else if s.avtorezhimKnopkaObstanovka != avtorezhim.Neizvestno {
+		// Фоновый служитель не крутится (тумблер выключен) — обстановка,
+		// увиденная последним нажатием «Подключиться» (domaSeychas), это
+		// единственное, что вообще известно; человек обязан её видеть (см.
+		// zametkaAvtorezhima, oblik/index.html — Правка 2 сняла там условие
+		// на тумблер).
+		o.AvtorezhimObstanovka = s.avtorezhimKnopkaObstanovka.String()
 	}
 	s.avtorezhimZamok.Unlock()
 	otdat(w, o, nil)
@@ -1124,7 +1148,55 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	return err
 }
 
+// domaSeychas — один доверенный заход авторежима перед подъёмом защиты
+// (podklyuchit): кнопка «Подключиться» обязана сама решить, дома человек
+// или нет, а не поднимать VPN безусловно (хозяин, 28.08: «нажимаю
+// подключиться, он не определяет дома или нет, а когда выключен —
+// определяет ИНОГДА»). Нарочно НЕ зависит от тумблера Nastroyki.Avtorezhim —
+// тот управляет только фоновым автопереключением (avtorezhimKolbek); кнопка
+// спрашивает обстановку всегда, своим собственным заходом.
+//
+// dovereno=true у Zahod: решение принимается по ПЕРВОМУ наблюдению, не
+// дожидаясь Podtverzhdeniy заходов подряд (см. Zadvizhka.Predlozhit) — кнопку
+// нажали один раз, набирать гистерезис для неё бессмысленно.
+//
+// Заход ограничен собственным таймаутом (по умолчанию 5с,
+// avtorezhimKnopkaTaimaut): не ответили зонды — ctx истекает, DomaPoDns
+// вернёт ошибку, а Avtorezhim.Zahod уже трактует её как «не дома»
+// (безопасный дефолт) — неизвестность не должна оставлять человека без VPN,
+// это дороже лишнего VPN дома.
+//
+// Увиденная обстановка запоминается в avtorezhimKnopkaObstanovka —
+// /api/sostoyanie показывает её человеку тем же полем, что и фоновый
+// авторежим, даже если тумблер выключен (zametkaAvtorezhima, oblik/index.html).
+func (s *Sluzhba) domaSeychas(roditelskiy context.Context) avtorezhim.Sostoyanie {
+	sobrat := s.avtorezhimDlyaKnopki
+	if sobrat == nil {
+		sobrat = func() *avtorezhim.Avtorezhim {
+			a := avtorezhim.Novyy()
+			a.TunnelPodnyat = s.tunnelPodnyat
+			return a
+		}
+	}
+	taimaut := s.avtorezhimKnopkaTaimaut
+	if taimaut <= 0 {
+		taimaut = 5 * time.Second
+	}
+	ctx, otmena := context.WithTimeout(roditelskiy, taimaut)
+	defer otmena()
+	_, _, tekushcheye := sobrat().Zahod(ctx, true, true)
+	s.avtorezhimZamok.Lock()
+	s.avtorezhimKnopkaObstanovka = tekushcheye
+	s.avtorezhimZamok.Unlock()
+	return tekushcheye
+}
+
 func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
+	if s.domaSeychas(context.Background()) == avtorezhim.Doma {
+		log.Printf("«Подключиться»: обстановка «дома» — защиту не поднимаю, обход блокировок уже делает роутер")
+		otdat(w, map[string]any{"gotovo": true}, nil)
+		return
+	}
 	err := s.PodnyatZashchitu(context.Background())
 	if err == nil {
 		// В фоне и после ответа: сам запрос прав (окно UAC) не должен
