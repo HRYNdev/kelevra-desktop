@@ -241,8 +241,12 @@ shag "сервер подписки" "127.0.0.1:$PORT_SUB отдаёт на /k/<
 # сервера подписки, который и так весь на 127.0.0.1.
 ln -sf "$BIN_YADRO" "$DOM/yadro/sing-box"
 rm -f "$STEND/sluzhba.log"
+# KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" — см. пояснение в stend/proksi.sh:
+# контейнер сам отвечает fake-ip подменой, без неё domaSeychas (#78) честно,
+# но ложно решает «дома» и podklyuchit не поднимает защиту.
 KELEVRA_DIR="$DOM" KELEVRA_PODPISKA="127.0.0.1:$PORT_SUB" KELEVRA_SHEMA="http" \
   KELEVRA_PRAVA=net KELEVRA_BEZ_OBNOVLENIYA=1 \
+  KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" \
   "$BIN" --sluzhba > "$STEND/sluzhba.log" 2>&1 &
 SLUZHBA_PID=$!
 
