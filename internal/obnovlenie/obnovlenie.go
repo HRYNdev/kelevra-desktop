@@ -68,8 +68,37 @@ type relizJSON struct {
 	} `json:"assets"`
 }
 
+// OshibkaStatusa — GitHub ответил, но не 200 (сервер жив, но отказал: лимит
+// запросов, авария, битый адрес). Код нужен отдельным полем, а не только в
+// тексте: вызывающему (кнопка «Проверить обновление» в internal/sluzhba) он
+// нужен, чтобы показать человеку «GitHub ответил ошибкой 503», а не парсить
+// строку регуляркой.
+type OshibkaStatusa struct {
+	Kod int
+}
+
+func (o *OshibkaStatusa) Error() string {
+	return fmt.Sprintf("список релизов: ответ %d", o.Kod)
+}
+
+// OshibkaRazbora — тело ответа получено целиком, но это не тот JSON, который
+// мы ждём (прокси подсунул страницу-заглушку, GitHub вернул html и т.п.).
+type OshibkaRazbora struct {
+	Prichina error
+}
+
+func (o *OshibkaRazbora) Error() string {
+	return fmt.Sprintf("список релизов не разобрать: %v", o.Prichina)
+}
+
+func (o *OshibkaRazbora) Unwrap() error { return o.Prichina }
+
 // Proverit возвращает сборку новее текущей или nil, если обновляться не на что.
 // Ошибка сети — это не беда приложения: обновление не состоялось, работаем дальше.
+// Ошибка сети/DNS/таймаута возвращается КАК ЕСТЬ от http.Client (не
+// оборачивается): она уже несёт нужный тип (net.Error/url.Error), и
+// вызывающий различает её причину через errors.As/errors.Is, не теряя
+// исходную беду в тексте.
 func Proverit(ctx context.Context, klient *http.Client, adres, tekushchaya string) (*Novaya, error) {
 	if klient == nil {
 		klient = &http.Client{Timeout: 15 * time.Second}
@@ -85,11 +114,11 @@ func Proverit(ctx context.Context, klient *http.Client, adres, tekushchaya strin
 	}
 	defer otvet.Body.Close()
 	if otvet.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("список релизов: ответ %d", otvet.StatusCode)
+		return nil, &OshibkaStatusa{Kod: otvet.StatusCode}
 	}
 	var relizy []relizJSON
 	if err := json.NewDecoder(io.LimitReader(otvet.Body, 1<<20)).Decode(&relizy); err != nil {
-		return nil, fmt.Errorf("список релизов не разобрать: %w", err)
+		return nil, &OshibkaRazbora{Prichina: err}
 	}
 	// Берём МАКСИМУМ по версии, а не первый попавшийся в ответе.
 	// Порядок в ответе GitHub по версиям НЕ упорядочен: 24.08 в этом же

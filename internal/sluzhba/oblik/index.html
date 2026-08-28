@@ -929,7 +929,7 @@ function podpisObnovleniya(s) {
     return "Доступна версия " + s.novaya_versiya_dostupna + " — нажмите, чтобы поставить";
   }
   if (obnovlenieItog === "idet") return "Проверяем…";
-  if (obnovlenieItog && obnovlenieItog.beda) return "Не удалось проверить";
+  if (obnovlenieItog && obnovlenieItog.beda) return obnovlenieItog.beda;
   if (obnovlenieItog && obnovlenieItog.novaya) return "Доступна версия " + obnovlenieItog.novaya;
   if (obnovlenieItog && obnovlenieItog.svezhaya) return "Установлена свежая версия";
   return "Версия " + (s.versiya || "—");
@@ -1475,9 +1475,11 @@ $("knopka-obnovlenie").onclick = async () => {
   if (poslednee) $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
   try {
     const d = await api("obnovlenie");
-    obnovlenieItog = d.beda ? {beda: true} : d.novaya ? {novaya: d.novaya} : {svezhaya: true};
+    obnovlenieItog = d.beda ? {beda: d.beda} : d.novaya ? {novaya: d.novaya} : {svezhaya: true};
   } catch (e) {
-    obnovlenieItog = {beda: true};
+    // api() уже упала сама (сеть до СВОЕЙ службы, не до GitHub) — беда от
+    // /api/obnovlenie сюда бы дошла как d.beda выше, а не через catch.
+    obnovlenieItog = {beda: "не удалось проверить"};
   }
   if (poslednee) $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
 };
