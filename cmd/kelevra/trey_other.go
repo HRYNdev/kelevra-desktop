@@ -24,13 +24,16 @@ func pokazatOblachkoObnovleniya(versiya string) {
 	log.Printf("трей (не-Windows заглушка): пузырь про версию %s", versiya)
 }
 
-// obnovitPodskazkuTreya вне Windows рисовать негде — значка нет. Строка в
-// журнале не формальность: метка «обновление ждёт» (metka_obnovleniya.go)
-// сама по себе от платформы не зависит, и живой linux-стенд
-// (stend/trey_oblachko.sh) проверяет по этой строке главное свойство метки —
-// что она ПЕРЕЖИВАЕТ пузырь и перезапуск копии. Настоящую отрисовку значка
-// на Windows это не доказывает и не подменяет (там свой файл, свой вызов
-// Shell_NotifyIconW и свой след в журнале).
-func obnovitPodskazkuTreya() {
+// obnovitZnachokTreya вне Windows рисовать негде — значка нет (переименована
+// вслед за trey_windows.go: там теперь перерисовывается не только szTip, но
+// и сам HICON — то, чего не хватало заказу, см. shapku metka_obnovleniya.go).
+// Строка в журнале не формальность: метка «обновление ждёт»
+// (metka_obnovleniya.go) сама по себе от платформы не зависит, и живой
+// linux-стенд (stend/trey_oblachko.sh) проверяет по этой строке главное
+// свойство метки — что она ПЕРЕЖИВАЕТ пузырь и перезапуск копии. Настоящую
+// отрисовку значка на Windows это не доказывает и не подменяет (там свой
+// файл, свой вызов Shell_NotifyIconW и свой след в журнале, см.
+// stend/trey_zhivoy.sh).
+func obnovitZnachokTreya() {
 	log.Printf("трей (не-Windows заглушка): подсказка значка -> %q", podskazkaTreya())
 }

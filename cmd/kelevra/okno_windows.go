@@ -79,14 +79,14 @@ func ustanovitZnachokOkna(hwnd syscall.Handle) {
 		log.Printf("значок окна: HWND нулевой, пропускаю")
 		return
 	}
-	hIconMalyy := sobratZnachokRazmera(zhelaemyyRazmerZnachka())
+	hIconMalyy := sobratZnachokRazmera(znachokIco, "znachok.ico", zhelaemyyRazmerZnachka())
 	procSendMessageW.Call(uintptr(hwnd), wmSetIcon, iconSmall, uintptr(hIconMalyy))
 
 	razmerBolshoy := 32 // запасное значение, если GetSystemMetrics вернёт 0
 	if r, _, _ := procGetSystemMetrics.Call(smCxIcon); r > 0 {
 		razmerBolshoy = int(r)
 	}
-	hIconBolshoy := sobratZnachokRazmera(razmerBolshoy)
+	hIconBolshoy := sobratZnachokRazmera(znachokIco, "znachok.ico", razmerBolshoy)
 	procSendMessageW.Call(uintptr(hwnd), wmSetIcon, iconBig, uintptr(hIconBolshoy))
 
 	log.Printf("значок окна: WM_SETICON отправлен (small HICON=%#x, big HICON=%#x)", hIconMalyy, hIconBolshoy)
