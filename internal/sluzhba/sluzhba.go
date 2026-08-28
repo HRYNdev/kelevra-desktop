@@ -61,8 +61,19 @@ type Sluzhba struct {
 	// avtorezhimDlyaKnopki — точка подмены для тестов domaSeychas/podklyuchit:
 	// собирает *avtorezhim.Avtorezhim для одиночного доверенного захода
 	// кнопки «Подключиться» на подставных зондах, без настоящей сети. nil —
-	// domaSeychas собирает боевой avtorezhim.Novyy() с s.tunnelPodnyat.
+	// domaSeychas собирает боевой avtorezhim.Novyy() с s.tunnelPodnyat (см.
+	// avtorezhimBoevoy).
 	avtorezhimDlyaKnopki func() *avtorezhim.Avtorezhim
+	// avtorezhimDnsAdres — из KELEVRA_AVTOREZHIM_DNS (Novaya): "ip:port"
+	// резолвера, которого DNS-зонд обязан спрашивать НАПРЯМУЮ вместо
+	// системного пути, и в domaSeychas, и в фоновом авторежиме
+	// (ZapustitAvtorezhim). Пусто в бою — поведение прежнее (см.
+	// avtorezhimBoevoy). Нужно исключительно площадке стендов: сам контейнер,
+	// в котором они гоняются, живёт за резолвером, отвечающим на контрольные
+	// домены fake-ip подменой (тот же диапазон 198.18.0.0/15, что и у
+	// нашего ядра) — без этой настройки зонд честно, но ложно решает «дома»
+	// и «Подключиться» молча не поднимает защиту (см. stend/zond_doma.sh).
+	avtorezhimDnsAdres string
 	// avtorezhimKnopkaTaimaut — таймаут одиночного захода кнопки
 	// «Подключиться» (domaSeychas). <=0 значит 5 секунд — своё поле только
 	// ради теста «заход завис», чтобы не ждать боевые 5с на каждый прогон.
@@ -168,8 +179,9 @@ type Sluzhba struct {
 }
 
 // Novaya собирает службу на настоящих путях приложения.
-// KELEVRA_PODPISKA и KELEVRA_SHEMA переопределяют сервер подписки — это нужно
-// только для проверки приложения на стенде, у пользователя они не заданы.
+// KELEVRA_PODPISKA и KELEVRA_SHEMA переопределяют сервер подписки, а
+// KELEVRA_AVTOREZHIM_DNS — резолвер авторежима (см. avtorezhimDnsAdres) —
+// это нужно только для проверки приложения на стенде, у пользователя они не заданы.
 func Novaya() (*Sluzhba, error) {
 	n, err := hranenie.Zagruzit()
 	if err != nil {
@@ -179,10 +191,11 @@ func Novaya() (*Sluzhba, error) {
 		return nil, err
 	}
 	s := &Sluzhba{
-		Nastroyki: n,
-		Yadro:     &yadro.Yadro{Bin: hranenie.PutYadra(), Papka: hranenie.PapkaYadra()},
-		Podpiska:  &podpiska.Klient{DeviceID: n.DeviceID, Host: os.Getenv("KELEVRA_PODPISKA"), Shema: os.Getenv("KELEVRA_SHEMA")},
-		klyuch:    sluchaynyy(),
+		Nastroyki:          n,
+		Yadro:              &yadro.Yadro{Bin: hranenie.PutYadra(), Papka: hranenie.PapkaYadra()},
+		Podpiska:           &podpiska.Klient{DeviceID: n.DeviceID, Host: os.Getenv("KELEVRA_PODPISKA"), Shema: os.Getenv("KELEVRA_SHEMA")},
+		klyuch:             sluchaynyy(),
+		avtorezhimDnsAdres: os.Getenv("KELEVRA_AVTOREZHIM_DNS"),
 	}
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
@@ -853,8 +866,7 @@ func (s *Sluzhba) ZapustitAvtorezhim(roditelskiy context.Context) {
 	}
 	ctx, otmena := context.WithCancel(roditelskiy)
 	s.avtorezhimOtmena = otmena
-	s.avtorezhimEkz = avtorezhim.Novyy()
-	s.avtorezhimEkz.TunnelPodnyat = s.tunnelPodnyat
+	s.avtorezhimEkz = s.avtorezhimBoevoy()
 	sluzh := &avtorezhim.Sluzhitel{
 		Avtorezhim: s.avtorezhimEkz,
 		Sledchik:   avtorezhim.NovySledchik(),
@@ -1169,14 +1181,27 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 // Увиденная обстановка запоминается в avtorezhimKnopkaObstanovka —
 // /api/sostoyanie показывает её человеку тем же полем, что и фоновый
 // авторежим, даже если тумблер выключен (zametkaAvtorezhima, oblik/index.html).
+// avtorezhimBoevoy собирает боевой avtorezhim.Novyy() с s.tunnelPodnyat —
+// общая точка для domaSeychas (кнопка «Подключиться») и ZapustitAvtorezhim
+// (фоновое слежение), чтобы KELEVRA_AVTOREZHIM_DNS (см. avtorezhimDnsAdres)
+// подменяла резолвер одинаково в обоих путях, а не только в одном из них.
+func (s *Sluzhba) avtorezhimBoevoy() *avtorezhim.Avtorezhim {
+	a := avtorezhim.Novyy()
+	a.TunnelPodnyat = s.tunnelPodnyat
+	if s.avtorezhimDnsAdres != "" {
+		podmena := func() avtorezhim.DnsProver {
+			return &avtorezhim.DnsZond{AdresResolvera: s.avtorezhimDnsAdres}
+		}
+		a.Dns = podmena()
+		a.DnsPryamoy = func(_, _ string) avtorezhim.DnsProver { return podmena() }
+	}
+	return a
+}
+
 func (s *Sluzhba) domaSeychas(roditelskiy context.Context) avtorezhim.Sostoyanie {
 	sobrat := s.avtorezhimDlyaKnopki
 	if sobrat == nil {
-		sobrat = func() *avtorezhim.Avtorezhim {
-			a := avtorezhim.Novyy()
-			a.TunnelPodnyat = s.tunnelPodnyat
-			return a
-		}
+		sobrat = s.avtorezhimBoevoy
 	}
 	taimaut := s.avtorezhimKnopkaTaimaut
 	if taimaut <= 0 {

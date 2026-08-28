@@ -28,6 +28,16 @@ mkdir -p "$STEND" "$WINEPREFIX"
 
 command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
 
+# AVTOREZHIM_DNS_PODMENA (28.08, #78): «Подключиться» с 988e419 сам решает,
+# дома человек или нет (domaSeychas), а этот контейнер живёт за резолвером,
+# который на контрольные домены отвечает fake-ip подменой (тот же диапазон
+# 198.18.0.0/15, что и у нашего ядра) — ровно как настоящий дом, см.
+# stend/zond_doma.sh. Без подмены зонд честно, но ложно решает «дома»,
+# podklyuchit молча не поднимает защиту, и все сценарии этого стенда бьют
+# мимо продукта. 127.0.0.1:1 никто не слушает — DomaPoDns получает мгновенный
+# ECONNREFUSED и честно решает «не дома» (безопасный дефолт, см. Avtorezhim.Zahod).
+AVTOREZHIM_DNS_PODMENA="127.0.0.1:1"
+
 if [ ! -x "$WINE" ]; then
   echo "нет wine ($WINE): apt-get install -y --no-install-recommends wine64" >&2
   exit 2
@@ -61,7 +71,8 @@ zapustit_i_vzyat_url() { # $1 = файл для журнала запуска
   # перезапускается ИМ: стенд честно проверял бы чужой бинарь без нашей правки
   # (поймано 20.08: журнал показал "обновление: вышла версия 0.5.1, ставлю").
   wine_zapusti "$1" "$ZHURNAL" "служба слушает" 20 -- \
-    env KELEVRA_BEZ_OKNA=1 KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe"
+    env KELEVRA_BEZ_OKNA=1 KELEVRA_BEZ_OBNOVLENIYA=1 KELEVRA_AVTOREZHIM_DNS="$AVTOREZHIM_DNS_PODMENA" \
+    timeout 30 "$WINE" "$STEND/Kelevra.exe"
   local rc=$?
   grep -o 'http://[^ ]*' "$ZHURNAL" 2>/dev/null | tail -1
   return "$rc"
@@ -399,7 +410,8 @@ else
       echo "  подтверждено: ProxyEnable=0x1 висит без службы за ним — беда 20.08 без закрытия окна воспроизведена"
       echo "  запускаю Kelevra.exe СНОВА, в режиме окна (--tiho, без --sluzhba)"
       wine_zapusti "$STEND/proksi_zapusk6_okno.log" "$ZHURNAL" "прошлый запуск умер жёстко" 25 -- \
-        env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
+        env KELEVRA_BEZ_OBNOVLENIYA=1 KELEVRA_AVTOREZHIM_DNS="$AVTOREZHIM_DNS_PODMENA" \
+        timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
       rc=$?
       if [ "$rc" -eq 77 ]; then
         echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
@@ -434,7 +446,8 @@ rm -f "$METKA"
 reg_set 1 10.0.0.9:9999
 echo "  до: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer) (чужой ВКЛЮЧЁННЫЙ прокси, метки точно нет)"
 wine_zapusti "$STEND/proksi_zapusk7_okno.log" "$ZHURNAL" "--- запуск Kelevra" 15 -- \
-  env KELEVRA_BEZ_OBNOVLENIYA=1 timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
+  env KELEVRA_BEZ_OBNOVLENIYA=1 KELEVRA_AVTOREZHIM_DNS="$AVTOREZHIM_DNS_PODMENA" \
+  timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
 rc=$?
 if [ "$rc" -eq 77 ]; then
   echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
