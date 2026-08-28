@@ -124,15 +124,44 @@ fi
 
 echo "── тег и релиз $TEG"
 git tag -f "$TEG" && git push -q "https://x-access-token:$GITHUB_TOKEN@github.com/$REPO.git" "$TEG"
-TELO=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":"Kelevra "+sys.argv[2],"body":sys.argv[3]}))' \
+
+# ЧЕРНОВИК, а не сразу публикация. Обновление у человека берёт ПОСЛЕДНИЙ релиз и
+# качает из него Kelevra.exe. Значит опубликованный релиз без файла — это не
+# «полвыпуска», а поломка прямо у него: 28.08 выгрузка файла отдала пустой ответ,
+# и на GitHub полминуты висела версия 0.6.33 вообще без .exe. Публикуем только
+# после того, как файл лёг и виден снаружи.
+TELO=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":"Kelevra "+sys.argv[2],"body":sys.argv[3],"draft":True}))' \
        "$TEG" "$VERSIYA" "$OPISANIE")
 ID=$(api -X POST "https://api.github.com/repos/$REPO/releases" -d "$TELO" \
      | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 
-curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @"$VYHOD/Kelevra.exe" \
-  "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=Kelevra.exe" \
-  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   выложено:", d.get("name"), d.get("size"), "байт")'
+SHA_MOY=$(sha256sum "$VYHOD/Kelevra.exe" | cut -d' ' -f1)
+for popytka in 1 2 3; do
+  OTVET=$(curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
+    -H "Content-Type: application/octet-stream" \
+    --data-binary @"$VYHOD/Kelevra.exe" \
+    "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=Kelevra.exe" || true)
+  if echo "$OTVET" | grep -q '"state":"uploaded"'; then break; fi
+  echo "   ✗ выгрузка $popytka/3 не удалась: $(echo "$OTVET" | head -c 200)"
+  # недовыгруженный огрызок мешает повтору тем же именем — снимаем
+  api "https://api.github.com/repos/$REPO/releases/$ID/assets" \
+    | python3 -c 'import json,sys; [print(a["id"]) for a in json.load(sys.stdin) if a["name"]=="Kelevra.exe"]' \
+    | while read -r aid; do api -X DELETE "https://api.github.com/repos/$REPO/releases/assets/$aid" >/dev/null; done
+  if [ "$popytka" = 3 ]; then
+    echo "✗ файл не выложился — релиз остаётся ЧЕРНОВИКОМ, к человеку ничего не уехало"; exit 1
+  fi
+  sleep 3
+done
+echo "   выложено: $(echo "$OTVET" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["size"], "байт")')"
+
+echo "── публикация после проверки, что файл виден снаружи"
+api -X PATCH "https://api.github.com/repos/$REPO/releases/$ID" -d '{"draft":false}' >/dev/null
+SKACHANO=$(mktemp)
+curl -sSL -o "$SKACHANO" "https://github.com/$REPO/releases/download/$TEG/Kelevra.exe" || true
+SHA_TAM=$(sha256sum "$SKACHANO" | cut -d' ' -f1); rm -f "$SKACHANO"
+if [ "$SHA_MOY" != "$SHA_TAM" ]; then
+  echo "✗ скачанное снаружи не совпало со сборкой ($SHA_MOY против $SHA_TAM)"; exit 1
+fi
+echo "   скачал как посторонний: sha256 совпал со сборкой"
 
 echo "✓ https://github.com/$REPO/releases/tag/$TEG"
