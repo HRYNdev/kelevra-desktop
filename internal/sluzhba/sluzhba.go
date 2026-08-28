@@ -867,17 +867,46 @@ func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
 		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
 		return
 	}
-	s.Nastroyki.Avtorezhim = vhod.Vklyuchit
-	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
-		otdat(w, nil, err)
-		return
-	}
 	if vhod.Vklyuchit {
-		s.ZapustitAvtorezhim(context.Background())
+		// Neizvestno — ручка /api/avtorezhim, в отличие от кнопки
+		// «Подключиться», не делает своего захода прямо сейчас: пусть
+		// свежий служитель узнает обстановку сам, спешить некуда.
+		if err := s.vklyuchitAvtorezhim(avtorezhim.Neizvestno); err != nil {
+			otdat(w, nil, err)
+			return
+		}
 	} else {
+		s.Nastroyki.Avtorezhim = false
+		if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+			otdat(w, nil, err)
+			return
+		}
 		s.OstanovitAvtorezhim()
 	}
 	otdat(w, map[string]any{"gotovo": true}, nil)
+}
+
+// vklyuchitAvtorezhim — общее тело «включить автомат»: сохранить выбор на
+// диск (переживёт перезапуск) и поднять фонового служителя. Используется и
+// ручкой /api/avtorezhim, и кнопкой «Подключиться» (podklyuchit) — хозяин
+// (27.08): «я включаю впн включаю *** его, тыкаю на него и тогда он
+// определяет... и так же когда я вернусь домой он тоже *** вернётся в
+// положения дома» — нажатие кнопки обязано включать автомат навсегда, а не
+// один раз спросить обстановку и забыть про неё.
+//
+// nachalo — обстановка, уже доказанная отдельным заходом ДО этого вызова
+// (domaSeychas кнопки), или Neizvestno, если такого захода не было. Свежий
+// служитель заводится сразу на неё, а не с нуля: без этого /api/sostoyanie
+// после нажатия кнопки на секунды показал бы «неизвестно» вместо только что
+// доказанной обстановки, пока фоновый служитель не проведёт свой первый
+// заход — см. TestPodklyuchitDomaNePodnimaetZashchitu.
+func (s *Sluzhba) vklyuchitAvtorezhim(nachalo avtorezhim.Sostoyanie) error {
+	s.Nastroyki.Avtorezhim = true
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		return err
+	}
+	s.zapustitAvtorezhimSNachala(context.Background(), nachalo)
+	return nil
 }
 
 // ZapustitAvtorezhim поднимает фонового служителя авторежима (see
@@ -886,6 +915,15 @@ func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
 // вызвать можно и из ручки /api/avtorezhim, и один раз при старте службы
 // (cmd/kelevra/main.go), не заботясь, кто из них подоспел первым.
 func (s *Sluzhba) ZapustitAvtorezhim(roditelskiy context.Context) {
+	s.zapustitAvtorezhimSNachala(roditelskiy, avtorezhim.Neizvestno)
+}
+
+// zapustitAvtorezhimSNachala — тело ZapustitAvtorezhim, которому можно
+// задать стартовую обстановку задвижки (см. vklyuchitAvtorezhim). Идемпотентно
+// так же, как ZapustitAvtorezhim: если служитель уже крутится, nachalo
+// молча игнорируется — второй заход кнопки не должен дёргать задвижку уже
+// работающего служителя.
+func (s *Sluzhba) zapustitAvtorezhimSNachala(roditelskiy context.Context, nachalo avtorezhim.Sostoyanie) {
 	s.avtorezhimZamok.Lock()
 	defer s.avtorezhimZamok.Unlock()
 	if s.avtorezhimOtmena != nil {
@@ -894,6 +932,9 @@ func (s *Sluzhba) ZapustitAvtorezhim(roditelskiy context.Context) {
 	ctx, otmena := context.WithCancel(roditelskiy)
 	s.avtorezhimOtmena = otmena
 	s.avtorezhimEkz = s.avtorezhimBoevoy()
+	if nachalo != avtorezhim.Neizvestno {
+		s.avtorezhimEkz.Zadvizhka = avtorezhim.NovayaZadvizhka(nachalo)
+	}
 	sluzh := &avtorezhim.Sluzhitel{
 		Avtorezhim: s.avtorezhimEkz,
 		Sledchik:   avtorezhim.NovySledchik(),
@@ -1278,8 +1319,17 @@ func (s *Sluzhba) domaSeychas(roditelskiy context.Context) avtorezhim.Sostoyanie
 }
 
 func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
-	if s.domaSeychas(context.Background()) == avtorezhim.Doma {
-		log.Printf("«Подключиться»: обстановка «дома» — защиту не поднимаю, обход блокировок уже делает роутер")
+	tekushcheye := s.domaSeychas(context.Background())
+	// Нажатие «Подключиться» включает автомат НАВСЕГДА (а не разово решает
+	// текущую обстановку) — см. комментарий у vklyuchitAvtorezhim выше.
+	// Ошибку сохранения настройки только логируем: сам факт подключения
+	// (или ожидания дома) важнее для человека, чем то, переживёт ли автомат
+	// перезапуск — но молчать про беду тоже нельзя.
+	if err := s.vklyuchitAvtorezhim(tekushcheye); err != nil {
+		log.Printf("«Подключиться»: не включил автоматический авторежим: %v", err)
+	}
+	if tekushcheye == avtorezhim.Doma {
+		log.Printf("«Подключиться»: обстановка «дома» — защиту не поднимаю, обход блокировок уже делает роутер; автомат включён и сам поднимет её, когда обстановка сменится")
 		otdat(w, map[string]any{"gotovo": true}, nil)
 		return
 	}

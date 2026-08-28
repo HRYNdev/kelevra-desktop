@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
 
 // Заказ хозяина (28.08): «нажимаю подключиться, он *** не определяет дома или
@@ -57,6 +58,11 @@ func podklyuchitStend(t *testing.T, a *avtorezhim.Avtorezhim, taimaut time.Durat
 	}
 	s.avtorezhimDlyaKnopki = func() *avtorezhim.Avtorezhim { return a }
 	s.avtorezhimKnopkaTaimaut = taimaut
+	// «Подключиться» с 28.08 сама включает фоновый авторежим (хозяин, 27.08:
+	// «тыкаю на него и тогда он определяет... и так же когда я вернусь
+	// домой он тоже *** вернётся в положения дома») — гасим служителя в
+	// конце теста, как и TestAvtorezhimRuchkaVklyuchaetIVyklyuchaet.
+	t.Cleanup(s.OstanovitAvtorezhim)
 	return s, popytok
 }
 
@@ -126,5 +132,86 @@ func TestPodklyuchitTaimautVsyoRavnoPodnimaetZashchitu(t *testing.T) {
 	postPodklyuchitIProverit(t, s)
 	if *popytok != 1 {
 		t.Fatalf("заход авторежима повис, а PodnyatZashchitu позвана %d раз(а), хочу ровно 1", *popytok)
+	}
+}
+
+// avtorezhimVklyuchenPoSostoyaniyu — читает /api/sostoyanie и возвращает
+// avtorezhim_vklyuchen, тем же путём, что видит окно.
+func avtorezhimVklyuchenPoSostoyaniyu(t *testing.T, s *Sluzhba) bool {
+	t.Helper()
+	m := s.Obsluzhit()
+	r := httptest.NewRequest("GET", "/"+s.klyuch+"/api/sostoyanie", nil)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	var o otvetSostoyaniya
+	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+		t.Fatalf("не разобрал /api/sostoyanie: %v", err)
+	}
+	return o.AvtorezhimVklyuchen
+}
+
+// Заказ хозяина (27.08): «я включаю впн включаю *** его, тыкаю на него и
+// тогда он определяет... и так же когда я вернусь домой он тоже ***
+// вернётся в положения дома» — нажатие «Подключиться» обязано включить
+// автомат НАВСЕГДА, а не один раз спросить обстановку и забыть про неё.
+// Ниже — доказательство ровно этого требования: тумблер, увиденный
+// службой (s.Nastroyki.Avtorezhim), тот же тумблер по HTTP
+// (/api/sostoyanie) и настройка, реально долетевшая до диска (переживёт
+// перезапуск — hranenie.Zagruzit читает тот же KELEVRA_DIR).
+
+// TestPodklyuchitDomaVklyuchaetAvtorezhim — обстановка «дома»: защита не
+// поднимается (это и есть режим ожидания), но автомат обязан включиться, а
+// не остаться разовым определением.
+func TestPodklyuchitDomaVklyuchaetAvtorezhim(t *testing.T) {
+	a := &avtorezhim.Avtorezhim{
+		Dns:       fakeDnsKnopka{doma: true},
+		Trafik:    fakeTrafikKnopka{proshel: true},
+		Zadvizhka: avtorezhim.NovayaZadvizhka(avtorezhim.Neizvestno),
+	}
+	s, popytok := podklyuchitStend(t, a, time.Second)
+	postPodklyuchitIProverit(t, s)
+	if *popytok != 0 {
+		t.Fatalf("обстановка «дома», а PodnyatZashchitu всё равно позвана %d раз(а)", *popytok)
+	}
+	if !s.Nastroyki.Avtorezhim {
+		t.Fatal("после «Подключиться» дома автомат не включился (s.Nastroyki.Avtorezhim=false)")
+	}
+	if !avtorezhimVklyuchenPoSostoyaniyu(t, s) {
+		t.Fatal("/api/sostoyanie не показал авторежим включённым после «Подключиться» дома")
+	}
+	n, err := hranenie.Zagruzit()
+	if err != nil {
+		t.Fatalf("не перечитал настройки с диска: %v", err)
+	}
+	if !n.Avtorezhim {
+		t.Fatal("настройка авторежима не долетела до диска — перезапуск потерял бы выбор (хозяин, 27.08: «вернётся в положения дома»)")
+	}
+}
+
+// TestPodklyuchitVneDomaVklyuchaetAvtorezhim — обстановка «не дома»: защита
+// поднимается как обычно, и автомат ТОЖЕ включается — тот же автомат потом
+// сам опустит защиту, когда человек вернётся домой.
+func TestPodklyuchitVneDomaVklyuchaetAvtorezhim(t *testing.T) {
+	a := &avtorezhim.Avtorezhim{
+		Dns:       fakeDnsKnopka{doma: false},
+		Zadvizhka: avtorezhim.NovayaZadvizhka(avtorezhim.Neizvestno),
+	}
+	s, popytok := podklyuchitStend(t, a, time.Second)
+	postPodklyuchitIProverit(t, s)
+	if *popytok != 1 {
+		t.Fatalf("обстановка «не дома», а PodnyatZashchitu позвана %d раз(а), хочу ровно 1", *popytok)
+	}
+	if !s.Nastroyki.Avtorezhim {
+		t.Fatal("после «Подключиться» вне дома автомат не включился (s.Nastroyki.Avtorezhim=false)")
+	}
+	if !avtorezhimVklyuchenPoSostoyaniyu(t, s) {
+		t.Fatal("/api/sostoyanie не показал авторежим включённым после «Подключиться» вне дома")
+	}
+	n, err := hranenie.Zagruzit()
+	if err != nil {
+		t.Fatalf("не перечитал настройки с диска: %v", err)
+	}
+	if !n.Avtorezhim {
+		t.Fatal("настройка авторежима не долетела до диска — перезапуск потерял бы выбор")
 	}
 }
