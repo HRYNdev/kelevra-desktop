@@ -76,8 +76,9 @@ type Sluzhba struct {
 	// и «Подключиться» молча не поднимает защиту (см. stend/zond_doma.sh).
 	avtorezhimDnsAdres string
 	// avtorezhimKnopkaTaimaut — таймаут одиночного захода кнопки
-	// «Подключиться» (domaSeychas). <=0 значит 5 секунд — своё поле только
-	// ради теста «заход завис», чтобы не ждать боевые 5с на каждый прогон.
+	// «Подключиться» (domaSeychas). <=0 значит KnopkaTaimautPoUmolchaniyu
+	// (8с, см. там же, почему именно столько) — своё поле только ради
+	// теста «заход завис», чтобы не ждать боевые 8с на каждый прогон.
 	avtorezhimKnopkaTaimaut time.Duration
 	// posleAvtozaprosaPrav — сигнал стенду, что zaprositPravaAvtomaticheskiEsliNado
 	// дописала отметку на диск (успех или отказ — не важно). Фоновая
@@ -1216,15 +1217,31 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 // дожидаясь Podtverzhdeniy заходов подряд (см. Zadvizhka.Predlozhit) — кнопку
 // нажали один раз, набирать гистерезис для неё бессмысленно.
 //
-// Заход ограничен собственным таймаутом (по умолчанию 5с,
+// Заход ограничен собственным таймаутом (по умолчанию 8с,
 // avtorezhimKnopkaTaimaut): не ответили зонды — ctx истекает, DomaPoDns
 // вернёт ошибку, а Avtorezhim.Zahod уже трактует её как «не дома»
 // (безопасный дефолт) — неизвестность не должна оставлять человека без VPN,
-// это дороже лишнего VPN дома.
+// это дороже лишнего VPN дома. 8с, а не 5 — потому что бюджет обязан вмещать
+// СУММУ номиналов подзондов (3с+4с=7с худший случай, см.
+// KnopkaTaimautPoUmolchaniyu), иначе кнопка обрубает заход раньше, чем оба
+// зонда честно доответят.
 //
 // Увиденная обстановка запоминается в avtorezhimKnopkaObstanovka —
 // /api/sostoyanie показывает её человеку тем же полем, что и фоновый
 // авторежим, даже если тумблер выключен (zametkaAvtorezhima, oblik/index.html).
+// KnopkaTaimautPoUmolchaniyu — сколько всего отведено одному заходу кнопки
+// «Подключиться» (domaSeychas), если avtorezhimKnopkaTaimaut не задан.
+//
+// Число не круглое ради круглого: авторежим гоняет подзонды ПОСЛЕДОВАТЕЛЬНО
+// на общем ctx (см. Avtorezhim.Zahod — там же объяснено, почему общий ctx не
+// разрывается ради «свежего бюджета» каждому зонду), поэтому этот таймаут
+// обязан вмещать СУММУ их номиналов: 3с DNS + 4с трафик = 7с худшего случая,
+// плюс 1с запаса. Пока было 5с, честно медленный DNS съедал остаток у
+// прямого зонда и вердикт переворачивался на «не дома» без всякой вины сети
+// (Вова, 28.08: «нажимаю подключиться, он не определяет дома»). Сторож
+// условия — TestKnopkaVmeshchaetSummuNominalovZondov.
+const KnopkaTaimautPoUmolchaniyu = 8 * time.Second
+
 // avtorezhimBoevoy собирает боевой avtorezhim.Novyy() с s.tunnelPodnyat —
 // общая точка для domaSeychas (кнопка «Подключиться») и ZapustitAvtorezhim
 // (фоновое слежение), чтобы KELEVRA_AVTOREZHIM_DNS (см. avtorezhimDnsAdres)
@@ -1249,7 +1266,7 @@ func (s *Sluzhba) domaSeychas(roditelskiy context.Context) avtorezhim.Sostoyanie
 	}
 	taimaut := s.avtorezhimKnopkaTaimaut
 	if taimaut <= 0 {
-		taimaut = 5 * time.Second
+		taimaut = KnopkaTaimautPoUmolchaniyu
 	}
 	ctx, otmena := context.WithTimeout(roditelskiy, taimaut)
 	defer otmena()
