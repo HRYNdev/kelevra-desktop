@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
@@ -88,7 +89,15 @@ func TestObnovlenieRuchkaSvezhayaVersiyaBezNovoy(t *testing.T) {
 // Сеть на стенде окна (stend/oblik_snimok.py) намеренно недоступна — ручка
 // обязана ответить понятной бедой, а не повесить запрос: окно не должно
 // зависнуть на «Проверяем…» навсегда (Вова 22.08, эталон — телефон).
-func TestObnovlenieRuchkaChestnoOtvechaetBezSeti(t *testing.T) {
+//
+// До 28.08 текст был один на все беды — «не удалось проверить»: Вова не
+// понимал, у него нет сети, GitHub лежит или просто долго. Ниже — четыре
+// теста на четыре РАЗНЫЕ причины (net-сеть, статус, таймаут, мусор), и
+// каждый ждёт СВОЙ текст.
+
+// TestObnovlenieRuchkaBedaNetSeti — порт закрыт (127.0.0.1:1 никто не
+// слушает): connection refused, самая частая беда — «нет сети у Вовы дома».
+func TestObnovlenieRuchkaBedaNetSeti(t *testing.T) {
 	s := stend(t)
 	m := s.Obsluzhit()
 	t.Setenv("KELEVRA_RELIZY", "http://127.0.0.1:1/nikogo-tam-net")
@@ -103,10 +112,100 @@ func TestObnovlenieRuchkaChestnoOtvechaetBezSeti(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
 		t.Fatalf("не разобрал ответ: %v", err)
 	}
-	if o.Beda == "" {
-		t.Fatalf("ждали понятную беду при недоступной сети: %+v", o)
+	const zhdu = "нет интернета, проверить не у кого"
+	if o.Beda != zhdu {
+		t.Fatalf("беда = %q, ждал %q", o.Beda, zhdu)
 	}
 	if strings.Contains(strings.ToLower(o.Beda), "http") || strings.Contains(o.Beda, "dial") {
 		t.Fatalf("беда несёт сырой сетевой текст, а не понятную подпись: %q", o.Beda)
+	}
+}
+
+// TestObnovlenieRuchkaBedaStatus — GitHub жив, но отвечает 503: сервер
+// работает, значит дело не в сети Вовы, а в самом GitHub.
+func TestObnovlenieRuchkaBedaStatus(t *testing.T) {
+	s := stend(t)
+	m := s.Obsluzhit()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("KELEVRA_RELIZY", srv.URL)
+
+	r := httptest.NewRequest("GET", "/"+s.klyuch+"/api/obnovlenie", nil)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	var o otvetObnovleniya
+	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+		t.Fatalf("не разобрал ответ: %v", err)
+	}
+	const zhdu = "GitHub ответил ошибкой 503"
+	if o.Beda != zhdu {
+		t.Fatalf("беда = %q, ждал %q", o.Beda, zhdu)
+	}
+}
+
+// TestObnovlenieRuchkaBedaTaymaut — сервер молчит дольше отведённого срока:
+// Вова видит подпись «GitHub не ответил за N секунд», а не зависшую
+// «Проверяем…» и не ту же надпись, что при отсутствии сети.
+//
+// Срок на время теста сокращён (иначе 6 настоящих секунд на каждый прогон);
+// после теста возвращается обратно — srokProverkiObnovleniya это var именно
+// ради такой подмены (см. sluzhba.go).
+func TestObnovlenieRuchkaBedaTaymaut(t *testing.T) {
+	s := stend(t)
+	m := s.Obsluzhit()
+
+	staryy := srokProverkiObnovleniya
+	srokProverkiObnovleniya = time.Second // не 0: "0 секунд" нечитаемо человеку
+	t.Cleanup(func() { srokProverkiObnovleniya = staryy })
+
+	otpushcheno := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-otpushcheno:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(otpushcheno); srv.Close() })
+	t.Setenv("KELEVRA_RELIZY", srv.URL)
+
+	r := httptest.NewRequest("GET", "/"+s.klyuch+"/api/obnovlenie", nil)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	var o otvetObnovleniya
+	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+		t.Fatalf("не разобрал ответ: %v", err)
+	}
+	const zhdu = "GitHub не ответил за 1 секунд"
+	if o.Beda != zhdu {
+		t.Fatalf("беда = %q, ждал %q", o.Beda, zhdu)
+	}
+}
+
+// TestObnovlenieRuchkaBedaMusor — GitHub (или проксёр между Вовой и им)
+// ответил 200, но телом, которое не JSON: страница-заглушка, HTML capitve
+// portal и подобное.
+func TestObnovlenieRuchkaBedaMusor(t *testing.T) {
+	s := stend(t)
+	m := s.Obsluzhit()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "<html>не json</html>")
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("KELEVRA_RELIZY", srv.URL)
+
+	r := httptest.NewRequest("GET", "/"+s.klyuch+"/api/obnovlenie", nil)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	var o otvetObnovleniya
+	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+		t.Fatalf("не разобрал ответ: %v", err)
+	}
+	const zhdu = "GitHub ответил непонятным"
+	if o.Beda != zhdu {
+		t.Fatalf("беда = %q, ждал %q", o.Beda, zhdu)
 	}
 }
