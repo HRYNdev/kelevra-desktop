@@ -61,8 +61,16 @@
     border:1px solid var(--gran); border-radius:999px; background:var(--karta);
   }
   .tochka { width:7px; height:7px; border-radius:50%; background:var(--slabyy); }
-  .chip.rabotaet .tochka { background:var(--norma); box-shadow:0 0 8px rgba(79,191,164,.18); }
-  .chip.rabotaet { color:var(--norma); border-color:rgba(79,191,164,.35); }
+  /* «Работает» красится АКЦЕНТОМ, а не токеном Ok. Это не мой вкус, это его
+     решение, записанное в его же коде телефона — Components.kt:73-79:
+     «Выбор Вовы 25.08.2026 после примерки на живом телефоне: подключённое
+     кольцо идёт В ТОН акценту, а не отдельной ролью "норма". Бирюза рядом с
+     оливой читалась как второй акцент.» (коммит 33fd5af убрал там ветку
+     colors.Ok). Десктоп до 29.08 остался на бирюзе — это и была та «бирюза»,
+     про которую он написал 29.08. Токен --norma живёт дальше, но только под
+     техническими пробниками (скорость узла), как K.Ok на телефоне. */
+  .chip.rabotaet .tochka { background:var(--akcent); box-shadow:0 0 8px rgba(168,204,107,.18); }
+  .chip.rabotaet { color:var(--akcent); border-color:rgba(168,204,107,.35); }
   .chip.podnimaem .tochka { background:var(--zhdem); animation:pulse 1.1s infinite; }
   .chip.podnimaem { color:var(--zhdem); }
   .chip.slomalos .tochka { background:var(--beda); }
@@ -153,7 +161,13 @@
     gap:5px; font-size:11px; font-weight:500; color:var(--slabyy);
     background:none; border:0; border-radius:0;
   }
-  .tab .tochka-tab { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  /* Иконка вкладки — 21dp, как на телефоне (KTabBar, Components.kt:417:
+     Modifier.size(21.dp), tint = Accent/Dim2). До 29.08 тут стоял кружок
+     6px: это была не иконка, а огрызок Icons.Outlined.RadioButtonChecked
+     (внутренняя точка без кольца), и он же дублировался на «Настройки»,
+     у которых на телефоне шестерёнка. Цвет берётся из currentColor .tab,
+     поэтому активная вкладка красит иконку акцентом сама. */
+  .tab .ikonka-tab { width:21px; height:21px; display:block; }
   .tab.aktivna { color:var(--akcent); font-weight:600; }
 
   /* Круг состояния — та же вещь, что на телефоне (KDial, Kelevra.kt/
@@ -248,9 +262,12 @@
   }
   @keyframes krug-vrashaetsya { to { transform:rotate(360deg); } }
 
-  .krug-blok.rabotaet .krug-koltso { stroke:var(--norma); color:var(--norma);
+  /* Кольцо и слово под ним — тот же акцент, что и у KDial на телефоне
+     (Components.kt:77: DialState.On -> colors.Accent). См. объяснение у
+     .chip.rabotaet выше. */
+  .krug-blok.rabotaet .krug-koltso { stroke:var(--akcent); color:var(--akcent);
     animation:krug-dyshit 3.6s ease-in-out infinite; }
-  .krug-blok.rabotaet .krug-slovo { color:var(--norma); }
+  .krug-blok.rabotaet .krug-slovo { color:var(--akcent); }
   .krug-blok.podnimaem .krug-koltso { stroke:var(--zhdem); color:var(--zhdem);
     stroke-dasharray:34 220; animation:krug-vrashaetsya 2.6s linear infinite; }
   .krug-blok.podnimaem .krug-slovo { color:var(--zhdem); }
@@ -618,11 +635,30 @@
 <body>
 
 <div class="shapka">
-  <svg class="znachok" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <path d="M12 2.5 4.5 5.6v6.1c0 4.6 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.2 7.5-9.8V5.6L12 2.5Z"
-          stroke="#a8cc6b" stroke-width="1.6" stroke-linejoin="round"/>
-    <path d="m8.6 12.1 2.4 2.4 4.4-4.6" stroke="#a8cc6b" stroke-width="1.8"
-          stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Значок приложения. До 29.08 тут был рукописный щит с галочкой — он
+       НИКОГДА не был логотипом Kelevra, я его когда-то нарисовал сам, и Вова
+       на скриншоте справедливо спросил, почему иконка старая. Теперь здесь
+       ровно тот же вектор, что и у иконки приложения: кольцо из
+       kelevra-box/app/src/main/res/drawable/ic_launcher_foreground.xml
+       (те же числа читает cmd/kelevra/znachok_iz_kanona.py, который рисует
+       znachok.ico): viewport 108, центр (54,54), радиус 27, обводка 4,
+       градиент (27,27)->(81,81) #A8CC6B -> #7F9E4A, внутреннее свечение
+       радиусом 19 при fillAlpha 0.16. Здесь взят тот же центральный кадр
+       72x72, что и в .ico, поэтому viewBox сдвинут на 18 по обеим осям.
+       Фон не рисуем: он и так тёмный из шапки. -->
+  <svg class="znachok" width="22" height="22" viewBox="0 0 72 72" fill="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="kolco-obvodka" gradientUnits="userSpaceOnUse" x1="9" y1="9" x2="63" y2="63">
+        <stop offset="0" stop-color="#A8CC6B"/>
+        <stop offset="1" stop-color="#7F9E4A"/>
+      </linearGradient>
+      <radialGradient id="kolco-svechenie" gradientUnits="userSpaceOnUse" cx="36" cy="36" r="19">
+        <stop offset="0" stop-color="#A8CC6B" stop-opacity="0.5"/>
+        <stop offset="1" stop-color="#A8CC6B" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <circle cx="36" cy="36" r="19" fill="url(#kolco-svechenie)" opacity="0.16"/>
+    <circle cx="36" cy="36" r="27" stroke="url(#kolco-obvodka)" stroke-width="4"/>
   </svg>
   <span class="imya">Kelevra</span>
   <!-- Раньше тут ещё стояло слово статуса («защищено»/«отключено») — то же
@@ -791,10 +827,19 @@
      ввода кода — там переключать нечего. -->
 <div class="taby" id="vkladki" hidden>
   <button class="tab aktivna" id="vkladka-set" type="button">
-    <span class="tochka-tab"></span>Сеть
+    <!-- Icons.Outlined.RadioButtonChecked — та же иконка, что у вкладки
+         «дашборд» на телефоне (MainActivity.kt:1135). -->
+    <svg class="ikonka-tab" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/>
+      <circle cx="12" cy="12" r="5"/>
+    </svg>Сеть
   </button>
   <button class="tab" id="vkladka-nastroyki" type="button">
-    <span class="tochka-tab"></span>Настройки
+    <!-- Icons.Outlined.Settings — шестерёнка, как на телефоне
+         (MainActivity.kt:1136). -->
+    <svg class="ikonka-tab" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.484.484 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+    </svg>Настройки
   </button>
 </div>
 
