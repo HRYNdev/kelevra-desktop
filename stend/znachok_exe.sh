@@ -88,4 +88,14 @@ if ! sobrat; then
 fi
 
 python3 "$KOREN/stend/pe_resursy.py" "$EXE"
+rc_resursy=$?
+
+# Ресурсы на месте — не значит, что цвет тот. stend/znachok_cvet.py разбирает
+# самый крупный образ RT_ICON и проверяет оливу/бирюзу по HSV (см. диагноз
+# в шапке того файла): значок может тихо остаться бирюзовым при живых
+# RT_ICON/RT_GROUP_ICON, и rc_resursy этого не заметит.
+python3 "$KOREN/stend/znachok_cvet.py" "$EXE"
+rc_cvet=$?
+
+[ "$rc_resursy" -eq 0 ] && [ "$rc_cvet" -eq 0 ]
 exit $?
