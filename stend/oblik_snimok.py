@@ -195,7 +195,7 @@ SCENY = {
     # не чистится при отключении, sluzhba.go) — сцена доказывает, что окно её
     # подменяет, а не показывает вперемешку с тем, что сейчас неправда.
     "18_avtorezhim_doma": dict(BAZA, sost="stoit", avtorezhim_vklyuchen=True,
-                               avtorezhim_obstanovka="дома",
+                               avtorezhim_obstanovka="дома", ozhidanie_doma=True,
                                zametka=ZAMETKI["ZametkaBezTunnelya"]),
     "19_avtorezhim_vne_doma": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                    vniz_bayt=204_800_000, vverh_bayt=9_961_472,
