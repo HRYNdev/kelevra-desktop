@@ -53,14 +53,49 @@ NASTR='HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
 ZHURNAL="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/kelevra.log"
 bed=0
 
-reg_set() { # $1 ProxyEnable(0|1)  $2 ProxyServer
-  "$WINE" reg add "$NASTR" /v ProxyEnable /t REG_DWORD /d "$1" /f >/dev/null 2>&1
-  "$WINE" reg add "$NASTR" /v ProxyServer /t REG_SZ /d "$2" /f >/dev/null 2>&1
-}
 reg_get() { # $1 имя значения -> печатает значение (или пусто)
   # wine пишет вывод с \r\n (виндовый формат): без tr -d '\r' сравнение строк
   # в скрипте молча ломается — 0x0 с хвостовым CR не равен чистому "0x0".
   "$WINE" reg query "$NASTR" /v "$1" 2>/dev/null | tr -d '\r' | awk -v v="$1" '$1==v {print $3}'
+}
+# ПУСТОЙ pgrep ≠ ТИХИЙ РЕЕСТР. Убитый SIGKILL'ом Kelevra.exe/ядро успевает
+# отправить запись в wineserver, а тот кладёт её в реестр уже ПОСЛЕ того, как
+# процесса нет: 29.08 стенд краснел через раз и каждый раз ДРУГИМ сценарием —
+# в сц.6 старым оказывался ProxyEnable, в сц.8 ProxyServer, будто продукт пишет
+# из двух значений только одно. Замер (9 изолированных прогонов одного писателя,
+# чтение с t=0 каждые 0.2с) показал: оба значения всегда меняются вместе, в одном
+# чтении. Расщепление приходило только в многосценарном прогоне и только хвостом
+# от процесса ПРЕДЫДУЩЕГО сценария. Продукт цел, врала площадка.
+zhdat_tishiny_reestra() { # ждём, пока реестр перестанет меняться сам
+  proshloe=""; tiho=0
+  for _ in $(seq 1 40); do  # предел 20 с
+    seychas="$(reg_get ProxyEnable)|$(reg_get ProxyServer)"
+    if [ "$seychas" = "$proshloe" ]; then
+      tiho=$((tiho + 1)); [ "$tiho" -ge 3 ] && return 0   # 3 одинаковых чтения подряд
+    else
+      tiho=0
+    fi
+    proshloe="$seychas"; sleep 0.5
+  done
+  echo "⚫ ПРИБОР МЁРТВ: реестр не замолкает 20 с (последнее: $proshloe) — площадку не на чем строить"
+  exit 7
+}
+# Выставить площадку. Зовётся ТОЛЬКО до того, как продукт что-то сделал: чтения
+# ПОСЛЕ действия продукта не трогаем ничем, иначе лекарство ослепит прибор.
+reg_set() { # $1 ProxyEnable(0|1)  $2 ProxyServer
+  zhdat_tishiny_reestra
+  for popytka in 1 2 3; do
+    "$WINE" reg add "$NASTR" /v ProxyEnable /t REG_DWORD /d "$1" /f >/dev/null 2>&1
+    "$WINE" reg add "$NASTR" /v ProxyServer /t REG_SZ /d "$2" /f >/dev/null 2>&1
+    sleep 1   # хвост чужой записи, если он ещё в пути, приезжает здесь
+    if [ "$(reg_get ProxyEnable)" = "0x$1" ] && [ "$(reg_get ProxyServer)" = "$2" ]; then
+      return 0
+    fi
+    echo "  ── площадку сдуло чужим хвостом (попытка $popytka: ProxyEnable=$(reg_get ProxyEnable) ProxyServer=$(reg_get ProxyServer)), выставляю заново"
+    zhdat_tishiny_reestra
+  done
+  echo "⚫ ПРИБОР МЁРТВ: площадку не удержать — реестр перебивает кто-то живой"
+  exit 7
 }
 
 # запускает Kelevra.exe в служебном режиме, возвращает URL службы через echo.
