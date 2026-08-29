@@ -35,7 +35,7 @@
   html, body { height:100%; }
   body {
     margin:0; background:var(--fon); color:var(--tekst);
-    font:15px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+    font:15px/1.45 "Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing:antialiased; overflow:hidden;
     user-select:none;
   }
@@ -89,7 +89,13 @@
      (последний узел упирается в реальный, а не невидимый, край). */
   .lenta {
     position:absolute; top:var(--shapka); bottom:var(--taby-vysota); left:0; right:0;
-    overflow-y:auto; overflow-x:hidden; padding:0 18px var(--nizhnyaya);
+    /* Нижний отступ был --nizhnyaya (84px) — запас ПОВЕРХ уже вычтенной
+       панели вкладок (bottom:var(--taby-vysota)), то есть двойной. Он и не
+       давал подвалу версии влезть в экран настроек, когда буквы выросли до
+       канона телефона (15/13 вместо 13.5/11.5): контент 622px при видимых
+       538px, «KELEVRA 0.5.3» уезжал за край. 18px — тот же воздух, что по
+       бокам. */
+    overflow-y:auto; overflow-x:hidden; padding:0 18px 18px;
   }
   /* Экран кода — единственный без нижней панели: вкладки скрыты, поэтому
      .lenta тут возвращает себе полную высоту (bottom:0), а не режется по
@@ -282,9 +288,9 @@
      Цвет — tihiy, не slabyy: у slabyy контраст 3.46:1 на фоне (WCAG требует
      4.5:1 для текста 11.5px), обмерено формулой относительной яркости. */
   .zagolovok-bloka {
-    display:flex; align-items:center; margin:18px 13px 8px;
+    display:flex; align-items:center; margin:18px 2px 8px;
     font-family:ui-monospace, Consolas, monospace;
-    font-size:11.5px; letter-spacing:.9px; text-transform:uppercase; color:var(--tihiy);
+    font-size:10px; letter-spacing:1.4px; text-transform:uppercase; color:var(--tihiy);
   }
   /* Тот же капкан, что у .perekl-ryad: явный display:flex перебивает
      встроенное [hidden]{display:none}, и скрытый заголовок остался бы виден. */
@@ -323,7 +329,7 @@
     display:block; margin-top:2px; font-size:11.5px; line-height:1.35; color:var(--tihiy);
   }
   .perekl {
-    flex:none; width:40px; height:24px; padding:0; border-radius:999px;
+    flex:none; width:44px; height:26px; padding:0; border-radius:999px;
     background:var(--gran); position:relative; transition:background .15s;
     /* -2px: тумблер (24px) чуть выше строки заголовка (16px) — сдвигаем вверх
        на половину разницы, чтобы его середина легла на середину ПЕРВОЙ
@@ -331,11 +337,11 @@
     margin-top:-2px;
   }
   .perekl .knob {
-    position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
+    position:absolute; top:3px; left:3px; width:19px; height:19px; border-radius:50%;
     background:var(--tihiy); transition:left .15s, background .15s;
   }
   .perekl.vklyuchen { background:rgba(168,204,107,.32); }
-  .perekl.vklyuchen .knob { left:18px; background:var(--akcent); }
+  .perekl.vklyuchen .knob { left:22px; background:var(--akcent); }
   .perekl.ustarela { background:rgba(224,163,74,.32); }
   .perekl.ustarela .knob { background:var(--zhdem); }
   .perekl:disabled { opacity:.55; cursor:default; }
@@ -456,7 +462,7 @@
      margin-top: тот же приём, что у .perekl — сдвигает знак на середину
      строки заголовка вместо верхнего края. */
   #tab-nastroyki .tihaya::after {
-    content:"\203A"; color:var(--slabyy); font-size:18px; line-height:1; margin-top:1px;
+    content:"\203A"; color:var(--slabyy); font-size:20px; line-height:1; margin-top:1px;
   }
   /* Опять display:flex поверх [hidden] — «Скопировать журнал» скрыт по умолчанию. */
   #tab-nastroyki .tihaya[hidden] { display:none; }
@@ -526,22 +532,28 @@
      кнопка без объяснения — то, из-за чего хозяин 22.08 не понял ни одного
      пункта настроек. */
   .tihaya-tekst { display:flex; flex-direction:column; gap:2px; text-align:left; min-width:0; }
-  .tihaya-zagolovok { color:var(--tekst); font-size:13.5px; font-weight:500; }
-  .tihaya-podpis { color:var(--tihiy); font-size:11.5px; line-height:1.35; }
+  .tihaya-zagolovok { color:var(--tekst); font-size:15px; font-weight:500; }
+  .tihaya-podpis { color:var(--tihiy); font-size:13px; line-height:1.35; }
   /* Заголовок экрана «Настройки» — то же самое, что открывает экран на
      телефоне (SimpleSettingsScreen.kt: Montserrat SemiBold 21sp, letter-
      spacing -0.4). Без него список из трёх кнопок ничем не подписан. */
   .zagolovok-ekrana {
     font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
     font-weight:650; font-size:21px; letter-spacing:-.4px; color:var(--tekst);
-    margin:18px 13px 6px;
+    /* Слева было 13px — заголовок экрана стоял на 13px правее левого края
+       карточек под ним, по разным вертикалям. На телефоне заголовок и
+       содержимое идут одним отступом (KDim.Pad). Сверху/снизу — 12/8 по
+       эталону (SimpleSettingsScreen.kt: Spacer 12dp + padding 8dp). */
+    margin:12px 0 8px;
   }
   /* Подвал «KELEVRA <версия>» — тот же текст, что и на телефоне
      (BuildConfig.VERSION_NAME), тем же моно-шрифтом и цветом Dim2
      (0x5F6B7D — ровно var(--slabyy)). Значок версии переехал сюда из
      шапки: на телефоне в шапке его нет вовсе (хозяин, 0.6.8: «единый дизайн
      ты не знаешь что такое»). */
-  .podval-versiya { margin:22px 13px 4px; font-size:10px; letter-spacing:1.4px; color:var(--slabyy); }
+  /* Слева было 13px — как у заголовка экрана, мимо края карточек; сверху 22px
+     не давали подвалу влезть в экран после укрупнения букв до канона. */
+  .podval-versiya { margin:14px 0 4px; font-size:10px; letter-spacing:1.4px; color:var(--slabyy); }
   .tihaya:hover { color:var(--tekst); border-color:var(--gran2); }
   .ssylka {
     background:none; border:0; padding:0; color:var(--tihiy); font-size:12px;
