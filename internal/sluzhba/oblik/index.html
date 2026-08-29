@@ -15,7 +15,7 @@
     --fon:#111310; --fon2:#0c0e0b; --karta:#191c18; --karta-verh:#21251f;
     --gran:#2b2f29; --gran2:#3a3f37;
     --tekst:#f0f1ec; --tihiy:#a5aba3; --slabyy:#71766f;
-    --akcent:#a8cc6b; --akcent-tem:#1a2010;
+    --akcent:#a8cc6b; --akcent-tem:#111310;
     --zhdem:#e0a34a; --beda:#f08379; --norma:#4fbfa4;
     --shapka:56px; --nizhnyaya:84px; --taby-vysota:66px;
     /* KDim: RadiusL 26dp, RadiusM 18dp, RadiusS 12dp, DialSize 210dp, DialStroke 2dp. */
@@ -441,6 +441,66 @@
   }
   /* Опять display:flex поверх [hidden] — «Скопировать журнал» скрыт по умолчанию. */
   #tab-nastroyki .tihaya[hidden] { display:none; }
+  /* Рубрика = ОДНА карточка (эталон телефона: KCard, Components.kt — радиус
+     RadiusM=18dp=var(--r-m), фон Surface=var(--karta), рамка 1dp
+     Border=var(--gran), padding 16dp по бокам / 14dp сверху-снизу), а не
+     стопка отдельных карточек-кнопок. .karta уже даёт ровно это (border,
+     radius, background) — добавляем только вертикальный padding 14px. */
+  #tab-nastroyki .karta-nastroyki { padding-top:14px; padding-bottom:14px; overflow:hidden; }
+  /* Строки внутри карточки — те же .tihaya/.perekl-ryad, что и раньше (сама
+     форма пункта не менялась), но без собственной рамки/фона/радиуса и без
+     ЛЮБОГО собственного padding — весь отступ теперь либо от
+     .karta-nastroyki (16dp/14dp на краях списка), либо от разделителя между
+     строками (14dp/1dp/14dp) ниже. KRowItem на телефоне не носит свой
+     padding вовсе — высоту строке даёт только текст, а расстояние между
+     строками целиком на KDivider; раньше строка добавляла ЕЩЁ и свои
+     11px/10px сверху и снизу вдобавок к разделителю, и список стал ВЫШЕ, а
+     не ниже (первый прогон стенда: scrollHeight 704→816px, задача требовала
+     обратного). Специфичность `#tab-nastroyki .karta-nastroyki .tihaya`
+     (1 id + 2 класса) обязана перебить более старое `#tab-nastroyki .tihaya`
+     (1 id + 1 класс) — иначе его padding снова торчал бы внутри уже
+     отступленной карточки. */
+  #tab-nastroyki .karta-nastroyki .tihaya {
+    border:0; background:none; border-radius:0; padding:0;
+  }
+  #tab-nastroyki .karta-nastroyki .perekl-ryad {
+    border:0; background:none; border-radius:0; margin-top:0; padding:0;
+  }
+  /* Разделитель между строками — KDivider (Components.kt): пробел 14dp,
+     линия 1dp Border, пробел 14dp. `.nastroyki-ryad` метит только настоящие
+     строки списка (не .beda-подсказку под тумблером — она не участвует в
+     счёте). Общий сосед (`~`) вместо «не первый ребёнок» — важно: линия
+     появляется только если ПЕРЕД строкой есть ДРУГАЯ видимая строка с тем же
+     классом. Когда #ryad-avtozapusk скрыт атрибутом [hidden], он не подходит
+     под `:not([hidden])` слева и не «включает» разделитель для следующей за
+     ним строки — висячей линии над «Проверить обновление» не остаётся,
+     что бы ни было скрыто. */
+  #tab-nastroyki .karta-nastroyki > .nastroyki-ryad:not([hidden]) ~ .nastroyki-ryad:not([hidden]) {
+    border-top:1px solid var(--gran); margin-top:14px; padding-top:14px;
+  }
+  /* «Журнал работы» разворачивает <pre> НИЖЕ своей строки — #zhurnal нарочно
+     вне класса .nastroyki-ryad и без разделителя-линии: у него уже есть
+     собственная рамка-бокс (фон, border, radius — правило #zhurnal ниже),
+     вторая линия сверху читалась бы как двойная рамка. Родная margin-top:10
+     этого бокса (правило #zhurnal) уже отделяет его от строки «Журнал
+     работы» — трогать не нужно.
+     Горизонтальные отступы карточки (16dp) компенсированы отрицательным
+     margin: <pre> — моно-текст лога, а не пункт списка из ЭТАЛОНА телефона,
+     и в исходной вёрстке (до карточки) занимал всю ширину вкладки. Без
+     компенсации те же строки лога стали короче на 32px и переносились на
+     лишнюю строку — высота содержимого выросла (замер: scrollHeight
+     704→736px при простой заливке в карточку), хотя задача требует ровно
+     обратного. Card-nastroyki имеет overflow:hidden — край <pre> при
+     border-radius:var(--r-s) не вылезет за скруглённый угол карточки. */
+  #tab-nastroyki .karta-nastroyki > #zhurnal {
+    margin-left:-16px; margin-right:-16px;
+  }
+  /* Раньше зазор до «Скопировать журнал» держал отдельный <div
+     style="height:8px">, который занимал место ВСЕГДА, даже когда обе
+     соседние строки скрыты (журнал ещё не открыт) — тратил высоту вкладки
+     без всякой пользы. margin-top на самой кнопке отделяет её только тогда,
+     когда она реально видна. */
+  #knopka-kopirovat { margin-top:6px; }
   /* Заголовок + подпись второй строкой внутри пункта .tihaya — эталон
      телефона (KRowItem: title Montserrat Medium 15sp colors.Text, subtitle
      Montserrat 13sp colors.Dim = ровно var(--tihiy) на компьютере). Голая
@@ -657,51 +717,65 @@
         <button class="rezhim-pol" id="rezhim-ruchnoy" type="button">Вручную</button>
       </div>
 
+      <!-- Рубрика «Приложение» — ОДНА карточка (KCard, Components.kt), внутри
+           которой строки разделены тонкой линией (KDivider: 14dp/1dp/14dp),
+           а не каждая строка своей отдельной рамкой. Эталон телефона:
+           SimpleSettingsScreen.kt держит все пункты рубрики в одном KCard.
+           Раньше тут стояли три независимые карточки-кнопки подряд — экран
+           читался стопкой кнопок, а не списком настроек (хозяин 28.08:
+           «настройки криво изреализованные... не под пользователями»).
+           Класс .nastroyki-ryad метит только настоящие СТРОКИ списка (не
+           .beda-подсказку под тумблером) — на нём держится правило-разделитель
+           ниже (общий сосед `~`, а не «явно первый/не первый ребёнок»): линия
+           рисуется только когда ЕСТЬ предыдущая ВИДИМАЯ строка с тем же
+           классом, поэтому скрытие #ryad-avtozapusk через [hidden] не
+           оставляет разделитель висеть перед следующей строкой. -->
       <div class="zagolovok-bloka" id="zag-avtozapusk">Приложение</div>
-      <div class="perekl-ryad" id="ryad-avtozapusk" hidden>
-        <span class="perekl-tekst">Запускать вместе с Windows
-          <span class="podpis">Kelevra включится сам при входе в систему.</span>
-          <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
-        </span>
-        <button class="perekl" id="perekl-avtozapusk" type="button" role="switch" aria-checked="false">
-          <span class="knob"></span>
+      <div class="karta karta-nastroyki">
+        <div class="perekl-ryad nastroyki-ryad" id="ryad-avtozapusk" hidden>
+          <span class="perekl-tekst">Запускать вместе с Windows
+            <span class="podpis">Kelevra включится сам при входе в систему.</span>
+            <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
+          </span>
+          <button class="perekl" id="perekl-avtozapusk" type="button" role="switch" aria-checked="false">
+            <span class="knob"></span>
+          </button>
+        </div>
+        <div class="beda" id="beda-avtozapusk"></div>
+        <!-- Автоустановка на холодном старте убрана сознательно
+             (cmd/kelevra/main.go) — единственная дверь к установке была тычок
+             в пузырь трея (trey_windows.go: tychokVPuzyr). 28.08: у этой кнопки
+             появилась вторая дверь к ТОЙ ЖЕ ручке (/api/obnovlenie_postavit):
+             пока обновления нет — кнопка спрашивает GitHub прямо сейчас (эталон
+             телефона: SimpleSettingsScreen.kt, «Проверить обновление»); когда
+             фоновая проверка (SleditZaObnovleniem) уже нашла версию новее
+             (s.novaya_versiya_dostupna) — та же кнопка ставит именно её, не
+             заставляя ждать пузырь, который показывается один раз. -->
+        <button class="tihaya nastroyki-ryad" id="knopka-obnovlenie">
+          <span class="tihaya-tekst">
+            <span class="tihaya-zagolovok" id="zagolovok-obnovlenie">Проверить обновление</span>
+            <span class="tihaya-podpis" id="podpis-obnovlenie">Версия —</span>
+          </span>
         </button>
-      </div>
-      <div class="beda" id="beda-avtozapusk"></div>
-      <!-- Автоустановка на холодном старте убрана сознательно
-           (cmd/kelevra/main.go) — единственная дверь к установке была тычок
-           в пузырь трея (trey_windows.go: tychokVPuzyr). 28.08: у этой кнопки
-           появилась вторая дверь к ТОЙ ЖЕ ручке (/api/obnovlenie_postavit):
-           пока обновления нет — кнопка спрашивает GitHub прямо сейчас (эталон
-           телефона: SimpleSettingsScreen.kt, «Проверить обновление»); когда
-           фоновая проверка (SleditZaObnovleniem) уже нашла версию новее
-           (s.novaya_versiya_dostupna) — та же кнопка ставит именно её, не
-           заставляя ждать пузырь, который показывается один раз. -->
-      <button class="tihaya" id="knopka-obnovlenie">
-        <span class="tihaya-tekst">
-          <span class="tihaya-zagolovok" id="zagolovok-obnovlenie">Проверить обновление</span>
-          <span class="tihaya-podpis" id="podpis-obnovlenie">Версия —</span>
-        </span>
-      </button>
-      <div>
-        <button class="tihaya" id="knopka-zhurnal">
+        <button class="tihaya nastroyki-ryad" id="knopka-zhurnal">
           <span class="tihaya-tekst">
             <span class="tihaya-zagolovok" id="zagolovok-zhurnal">Журнал работы</span>
             <span class="tihaya-podpis">Записи о запусках и ошибках</span>
           </span>
         </button>
         <pre id="zhurnal" hidden></pre>
-        <div style="height:8px"></div>
         <button class="tihaya" id="knopka-kopirovat" hidden>Скопировать журнал</button>
       </div>
 
       <div class="zagolovok-bloka">Подписка</div>
-      <button class="tihaya" id="knopka-smenit">
-        <span class="tihaya-tekst">
-          <span class="tihaya-zagolovok">Подключить по коду</span>
-          <span class="tihaya-podpis">Изменить код доступа</span>
-        </span>
-      </button>
+      <div class="karta karta-nastroyki">
+        <button class="tihaya nastroyki-ryad" id="knopka-smenit">
+          <span class="tihaya-tekst">
+            <span class="tihaya-zagolovok">Подключить по коду</span>
+            <span class="tihaya-podpis">Изменить код доступа</span>
+          </span>
+        </button>
+      </div>
 
       <!-- Подвал — эталон телефона: RobotoMono, letter-spacing 1.4, тихий
            цвет. Значок версии убран из шапки наверху (см. #chip-tekst в
