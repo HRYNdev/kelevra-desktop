@@ -41,8 +41,10 @@ def naiti_sektsiyu(sektsii, rva):
     return None
 
 
-def razobrat_pe(data):
-    """Возвращает {type_id: количество листьев (образов)} по дереву ресурсов."""
+def _zagolovok_resursov(data):
+    """Общая часть разбора: доходит до базы дерева ресурсов (baza) и таблицы
+    секций (sektsii), дальше razobrat_pe и sobrat_obrazy расходятся — один
+    только считает листья, другой ещё и достаёт их байты."""
     if len(data) < 0x40 or data[0:2] != b"MZ":
         raise ValueError("не PE/MZ файл (нет сигнатуры MZ)")
     e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
@@ -69,7 +71,7 @@ def razobrat_pe(data):
     res_dir_off = dd_off + 2 * 8
     res_rva, res_size = struct.unpack_from("<II", data, res_dir_off)
     if res_rva == 0 or res_size == 0:
-        return {}
+        return None, []
 
     sektsii_off = opt_off + razmer_opt
     sektsii = []
@@ -83,6 +85,14 @@ def razobrat_pe(data):
     baza = naiti_sektsiyu(sektsii, res_rva)
     if baza is None:
         raise ValueError(f"RVA таблицы ресурсов {res_rva:#x} не попал ни в одну секцию")
+    return baza, sektsii
+
+
+def razobrat_pe(data):
+    """Возвращает {type_id: количество листьев (образов)} по дереву ресурсов."""
+    baza, sektsii = _zagolovok_resursov(data)
+    if baza is None:
+        return {}
 
     naideno = {}
 
@@ -113,6 +123,48 @@ def razobrat_pe(data):
         det_smeshch = data_raw & 0x7FFFFFFF
         naideno[tip_id] = naideno.get(tip_id, 0) + kolichestvo_listyev(det_smeshch, est_pod)
     return naideno
+
+
+def sobrat_obrazy(data, nuzhnyy_tip):
+    """Возвращает список байтов КАЖДОГО листа-образа заданного типа (напр.
+    RT_ICON=3): реально достаёт данные, а не только считает их, как
+    razobrat_pe. IMAGE_RESOURCE_DATA_ENTRY — это (OffsetToData RVA, Size,
+    CodePage, Reserved) по 4 байта; OffsetToData переводится в file-offset
+    через ту же naiti_sektsiyu, что и таблица ресурсов."""
+    baza, sektsii = _zagolovok_resursov(data)
+    if baza is None:
+        return []
+
+    obrazy = []
+
+    def obojti(smeshch, est_pod, tip_id):
+        if not est_pod:
+            data_rva, razmer, _codepage, _rezerv = struct.unpack_from(
+                "<IIII", data, baza + smeshch)
+            file_off = naiti_sektsiyu(sektsii, data_rva)
+            if file_off is None:
+                raise ValueError(f"RVA данных образа {data_rva:#x} не попал ни в одну секцию")
+            if tip_id == nuzhnyy_tip:
+                obrazy.append(data[file_off:file_off + razmer])
+            return
+        (_har, _time, _major, _minor,
+         n_named, n_id) = struct.unpack_from("<IIHHHH", data, baza + smeshch)
+        zapis_off = baza + smeshch + 16
+        for i in range(n_named + n_id):
+            _name_raw, data_raw = struct.unpack_from("<II", data, zapis_off + i * 8)
+            pod_est = bool(data_raw & 0x80000000)
+            pod_smeshch = data_raw & 0x7FFFFFFF
+            obojti(pod_smeshch, pod_est, tip_id)
+
+    (_har, _time, _major, _minor,
+     n_named, n_id) = struct.unpack_from("<IIHHHH", data, baza)
+    for i in range(n_named + n_id):
+        name_raw, data_raw = struct.unpack_from("<II", data, baza + 16 + i * 8)
+        tip_id = name_raw & 0x7FFFFFFF
+        est_pod = bool(data_raw & 0x80000000)
+        det_smeshch = data_raw & 0x7FFFFFFF
+        obojti(det_smeshch, est_pod, tip_id)
+    return obrazy
 
 
 def main():
