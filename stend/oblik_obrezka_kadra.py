@@ -168,19 +168,64 @@ SCENY_DLYA_ZABORA["25_dva_uzla_mozhno_tun"] = SCENA_DVA_UZLA
 # следующей правке пикселей.
 #
 # Порча ниже не подбирает число заранее, а вычисляет его из ЖИВОЙ геометрии
-# сцены прямо перед порчей: `#uzly` — контейнер, который реально клипает
-# список (index.html: `#uzly{overflow-y:auto}`), и его высота уже вычислена
-# JS-подгонкой (`podognatVysotuUzlov`) так, что НИЗ `#uzly` всегда совпадает
-# с НИЗОМ последнего целиком нарисованного узла (проверено замером: высота
-# без порчи оканчивается ровно на границе узла, ни разу не на середине —
-# в этом и состоит починка index.html). Порча вычитает из этой безопасной
-# высоты ровно половину высоты одного узла (`itemH/2`) — новая граница
-# ГАРАНТИРОВАННО попадает в середину того самого узла, на чьей нижней
-# границе раньше стояла безопасная высота, какими бы ни были itemH/stroka в
-# момент замера (другой шрифт, другой DPI, другая правка вёрстки). Это не
-# «подобрано и работает», а следствие инварианта: «низ #uzly = низ узла»
-# минус «половина узла» = «середина того же узла», всегда.
-KOEFF_SEREDINY_UZLA = 0.5  # доля высоты узла, вычитаемая из безопасной высоты
+# сцены прямо перед порчей. ВТОРАЯ СМЕРТЬ ТОГО ЖЕ МЕСТА (29.08): порча целила
+# в `#uzly` — контейнер списка узлов на главном экране. Список узлов переехал
+# в шторку выбора выхода, на сцене 4_rabotaet `#uzly` теперь СКРЫТ, его rect =
+# 0×0, и порча честно вычислялась в `max-height: 0.000px` — то есть портила
+# невидимое и не резала ничего. Забор от этого не позеленел (контроль сказал
+# «щуп мёртв»), но урок тот же, что 27.08: щуп нельзя привязывать к ИМЕНИ
+# конкретного узла вёрстки, он переживёт переезд только если спросит у живой
+# страницы, КТО её сейчас клипает.
+#
+# Поэтому порча больше не знает названий: она берёт клипающий контейнер
+# первого кадра (`overflow-y: auto|scroll` — сегодня это `#tab-set`, до 29.08
+# был `#uzly`, завтра будет что угодно), находит в нём ПОСЛЕДНИЙ значимый
+# элемент, целиком лежащий в видимой области, и опускает нижнюю границу
+# контейнера ровно на половину высоты этого элемента. Граница
+# ГАРАНТИРОВАННО ложится в его середину — «целиком за границей» (не беда по
+# договору щупа) исключено арифметикой, а не подбором числа.
+KOEFF_SEREDINY_UZLA = 0.5  # доля высоты элемента, на которую режется контейнер
+
+# Возвращает [selektor_konteynera, novaya_vysota] либо [null, prichina].
+GEOMETRIYA_PORCHI_JS = """(selektory) => {
+  const znach = [];
+  for (const sel of selektory) document.querySelectorAll(sel).forEach((el) => {
+    const r = el.getBoundingClientRect();
+    if (r.height > 0 && r.width > 0) znach.push(el);
+  });
+  if (!znach.length) return [null, "на сцене нет ни одного видимого значимого элемента"];
+  // Клипающий предок ищется у самих элементов, а не по имени в вёрстке.
+  const klipery = new Map();
+  for (const el of znach) {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (["auto", "scroll"].includes(getComputedStyle(p).overflowY)) {
+        if (!klipery.has(p)) klipery.set(p, []);
+        klipery.get(p).push(el);
+        break;  // ближайший клипер — тот, чью границу мы и будем двигать
+      }
+    }
+  }
+  if (!klipery.size) return [null, "ни один значимый элемент не лежит в прокручиваемом контейнере"];
+  // Самый населённый клипер = контейнер первого кадра.
+  let kont = null, deti = [];
+  for (const [p, xs] of klipery) if (xs.length > deti.length) { kont = p; deti = xs; }
+  const kr = kont.getBoundingClientRect();
+  // Последний ребёнок, целиком видимый внутри контейнера И окна: его-то
+  // середину и должна пересечь новая граница.
+  const niz = Math.min(kr.bottom, window.innerHeight);
+  let cel = null;
+  for (const el of deti) {
+    const r = el.getBoundingClientRect();
+    if (r.top >= kr.top && r.bottom <= niz && (!cel || r.bottom > cel.getBoundingClientRect().bottom)) cel = el;
+  }
+  if (!cel) return [null, "внутри контейнера нет ни одного целиком видимого значимого элемента"];
+  const cr = cel.getBoundingClientRect();
+  const selektor = kont.id ? "#" + kont.id
+    : (typeof kont.className === "string" && kont.className.trim()
+       ? "." + kont.className.trim().split(/\\s+/).join(".") : null);
+  if (!selektor) return [null, "у клипающего контейнера нет ни id, ни класса — не за что зацепить порчу"];
+  return [selektor, cr.bottom - kr.top - cr.height * """ + str(KOEFF_SEREDINY_UZLA) + """];
+}"""
 
 
 def kontrol_shchupa(br, port):
@@ -196,14 +241,13 @@ def kontrol_shchupa(br, port):
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
-    # Живая геометрия ДО порчи: высота #uzly (JS уже подогнал её под целые
-    # узлы) и высота одного узла — из них, а не с потолка, строится порча.
-    h0, item_h = str_.evaluate(
-        "() => { const uz = document.getElementById('uzly');"
-        " const u = uz.querySelector('.uzel');"
-        " return [uz.getBoundingClientRect().height, u.getBoundingClientRect().height]; }"
-    )
-    porcha_css = f"#uzly {{ max-height: {h0 - item_h * KOEFF_SEREDINY_UZLA:.3f}px !important; }}"
+    selektor, znachenie = str_.evaluate(GEOMETRIYA_PORCHI_JS, ZNACHIMYE_SELEKTORY)
+    if selektor is None:
+        # Не измерили геометрию — это КРАСНЫЙ с внятной причиной, а не порча
+        # в 0px, которая портит невидимое и выглядит как мёртвый щуп.
+        str_.close()
+        return [], f"ПОРЧУ НЕ ПОСТРОИТЬ: {znachenie}"
+    porcha_css = f"{selektor} {{ max-height: {znachenie:.3f}px !important; overflow-y: auto !important; }}"
     str_.add_style_tag(content=porcha_css)
     str_.wait_for_timeout(200)
     bedy, _ = proverit_obrezku_kadra(str_, "контроль-обрезка")
