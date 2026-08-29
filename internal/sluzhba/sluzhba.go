@@ -754,6 +754,14 @@ type otvetSostoyaniya struct {
 	// PrichinaSlepoty). Пусто — либо слепоты нет, либо она ещё не длится
 	// достаточно, чтобы тревожить человека.
 	AvtorezhimSlepPrichina string `json:"avtorezhim_slep_prichina,omitempty"`
+	// OzhidanieDoma — авторежим включён, обстановка «дома» и защита осознанно
+	// не поднята (см. podklyuchit и avtorezhimKolbek): человек за своим
+	// роутером, обход блокировок уже делает он, а автомат сам поднимет
+	// защиту, как только уйдёт из дома. Круг в окне (index.html) знает
+	// только rabotaet/podnimaem/slomalos из ядра — без этого поля «дома» и
+	// «выключено вручную» неотличимы, и подсказка врёт «нажмите, чтобы
+	// включить» на то, что человек уже нажал (хозяин, 27.08).
+	OzhidanieDoma bool `json:"ozhidanie_doma"`
 	// NovayaVersiyaDostupna — находка ФОНОВОЙ проверки (SleditZaObnovleniem,
 	// obnovlenieProveritRuchka), а не ручного нажатия кнопки «Проверить
 	// обновление» — та отвечает своим отдельным otvetObnovleniya.Novaya.
@@ -763,6 +771,14 @@ type otvetSostoyaniya struct {
 	// администратора хоть раз, отдельно от Prava (есть ли они СЕЙЧАС): вместе
 	// эти два поля различают «ещё не спрашивали» и «спрашивали и отказали».
 	PravaUzheSprosheny bool `json:"prava_uzhe_sprosheny"`
+}
+
+// ozhidanieDoma — истинно ровно тогда, когда авторежим включён, обстановка
+// «дома» и ядро прямо сейчас не работает (защита осознанно опущена или ещё
+// не поднималась). Вынесена отдельной функцией от полей otvetSostoyaniya,
+// чтобы условие проверялось таблицей случаев без поднятия HTTP-стенда.
+func ozhidanieDoma(avtorezhimVklyuchen bool, obstanovka string, sost string) bool {
+	return avtorezhimVklyuchen && obstanovka == avtorezhim.Doma.String() && sost != string(yadro.Rabotaet)
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -834,6 +850,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		o.AvtorezhimObstanovka = s.avtorezhimKnopkaObstanovka.String()
 	}
 	s.avtorezhimZamok.Unlock()
+	o.OzhidanieDoma = ozhidanieDoma(o.AvtorezhimVklyuchen, o.AvtorezhimObstanovka, o.Sost)
 	otdat(w, o, nil)
 }
 

@@ -275,6 +275,12 @@
     animation:krug-dyshit 2.8s ease-in-out infinite; }
   .krug-blok.slomalos .krug-slovo { color:var(--beda); }
   .krug-blok.stoit .krug-koltso { stroke:var(--slabyy); }
+  /* Ожидание дома (ozhidanie_doma, sluzhba.go): защита осознанно не поднята,
+     авторежим сам включит её, когда человек уйдёт из дома — это не беда и не
+     работа, поэтому цвет «ждём» (тот же, что у podnimaem), но БЕЗ вращения:
+     вращение в этом файле означает «идёт работа», а тут её нет вовсе. */
+  .krug-blok.ozhidanie .krug-koltso { stroke:var(--zhdem); color:var(--zhdem); }
+  .krug-blok.ozhidanie .krug-slovo { color:var(--zhdem); }
 
   /* margin 13px, не 2px: слева от текста должен быть тот же отступ, что и у
      карточек/узлов ниже (их padding 13-16px от края .lenta) — раньше «ВЫБОР
@@ -873,6 +879,11 @@ function podzagolovok(s) {
   // на том же экране, а в круг шириной 144px пара «режим · узел» не влезает и
   // резалась многоточием («трафик браузеров ·…»). Круг отвечает на один
   // вопрос — ЧТО защищено; какой узел — вопрос списка ниже.
+  // Ожидание дома (ozhidanie_doma, sluzhba.go) — проверяем раньше s.sost:
+  // ядро в этот момент стоит («stoit»), но «трафик идёт напрямую» тут неправда
+  // ровно наоборот, а не молчаливое совпадение — обход блокировок уже делает
+  // роутер, VPN и не нужен (хозяин, 27.08).
+  if (s.ozhidanie_doma) return "дома VPN не нужен";
   if (s.sost === "rabotaet") {
     return s.rezhim === "tunnel" ? "весь трафик" : "трафик браузеров";
   }
@@ -1094,8 +1105,11 @@ async function obnovit() {
   $("lenta").classList.toggle("bez-nizhney", nuzhenKod);
   primenitVkladku();
 
-  $("krug-blok").className = "krug-blok " + s.sost;
-  const zvanie = podpisi[s.sost] || s.sost;
+  // Ожидание дома — класс ДОПОЛНИТЕЛЬНЫЙ к s.sost (обычно "stoit"), а не
+  // замена: .krug-blok.ozhidanie CSS-правило (см. выше .stoit) стоит позже в
+  // таблице стилей и побеждает цветом --zhdem.
+  $("krug-blok").className = "krug-blok " + s.sost + (s.ozhidanie_doma ? " ozhidanie" : "");
+  const zvanie = s.ozhidanie_doma ? "ожидание" : (podpisi[s.sost] || s.sost);
   $("zvanie").textContent = zvanie;
   $("zvanie").classList.toggle("dlinnoe", zvanie.length > 9);
   $("podzagolovok").textContent = podzagolovok(s);
@@ -1127,8 +1141,13 @@ async function obnovit() {
   // Круг сам кнопка (см. index: #krug-blok — <button>): подпись под ним
   // говорит, что сделает нажатие, а не дублирует его текстом внутри круга.
   const knopka = $("krug-blok");
-  knopka.disabled = s.sost === "podnimaem";
-  $("podskazka").textContent = s.sost === "rabotaet" ? "нажмите, чтобы выключить"
+  // Дома нажатие круга и так ничего не делает (сервер защиту не поднимает,
+  // см. podklyuchit, sluzhba.go) — мёртвая кнопка обязана выглядеть мёртвой,
+  // а не притворяться живой (хозяин, 27.08: жал «включить», а оно и так уже
+  // «включено» его же нажатием ранее).
+  knopka.disabled = s.sost === "podnimaem" || s.ozhidanie_doma;
+  $("podskazka").textContent = s.ozhidanie_doma ? "включится сам, когда уйдёте из дома"
+      : s.sost === "rabotaet" ? "нажмите, чтобы выключить"
       : s.sost === "podnimaem" ? "подождите"
       : "нажмите, чтобы включить";
 
