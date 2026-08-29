@@ -26,3 +26,9 @@ func Est() bool {
 func Poprosit(smenaPID int) error {
 	return fmt.Errorf("запросить права можно только на Windows")
 }
+
+// PoprositPriStarte — та же заглушка для запроса прав сразу при старте (см.
+// prava_windows.go), нужна только чтобы cmd/kelevra собирался и на не-Windows.
+func PoprositPriStarte(smenaPID int) error {
+	return fmt.Errorf("запросить права можно только на Windows")
+}
