@@ -132,8 +132,19 @@ func TestPravilaBezVybroshennogoVhoda(t *testing.T) {
 	}
 	d := razobrat(t, gotovyy)
 	pravila := d["route"].(map[string]any)["rules"].([]any)
-	if len(pravila) != 2 {
-		t.Fatalf("ожидал 2 правила (одно выброшено целиком), получил %d", len(pravila))
+	// Своё правило про QUIC (dobavitPravilomRezhimQuic) к этой проверке
+	// отношения не имеет — считаем только правила профиля.
+	svoih := 0
+	for _, p := range pravila {
+		if pr, ok := p.(map[string]any); ok {
+			if proto, _ := pr["protocol"].(string); proto == "quic" {
+				continue
+			}
+		}
+		svoih++
+	}
+	if svoih != 2 {
+		t.Fatalf("ожидал 2 правила (одно выброшено целиком), получил %d", svoih)
 	}
 	if strings.Contains(string(gotovyy), "tun-in") {
 		t.Fatal("ссылка на выброшенный вход осталась в правилах")

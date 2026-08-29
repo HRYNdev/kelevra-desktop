@@ -178,6 +178,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	if r, ok := d["route"].(map[string]any); ok {
 		delete(r, "override_android_vpn")
 	}
+	dobavitPravilomRezhimQuic(d)
 
 	vhody, _ := d["inbounds"].([]any)
 	k := Kartina{}
@@ -263,6 +264,61 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		return nil, k, err
 	}
 	return gotovyy, k, nil
+}
+
+// dobavitPravilomRezhimQuic режет QUIC в самом начале route.rules (после
+// уже существующих sniff/hijack-dns, до правил с rule_set).
+//
+// Диагноз 29.08: ядро sing-box опознаёт googlevideo.com сниффом по SNI, а
+// снифф QUIC (common/sniff/quic.go в ядре) разбирает только Initial-пакет и
+// промахивается на retry/coalescing — YouTube ходит по QUIC и часть его
+// соединений проваливается мимо ВСЕХ rule_set сразу на route.final=direct, к
+// провайдеру, который душит видео. Chrome, не получив ответа по QUIC,
+// мгновенно откатывается на TCP/443, где снифф по SNI надёжен — там
+// googlevideo.com уже попадает в свой rule_set и уходит в туннель как
+// положено.
+//
+// Идемпотентно: если в route.rules уже есть правило с "protocol":"quic" (то
+// ли своё же, вставленное прошлым прогоном, то ли профиль сам решил про
+// QUIC), ничего не делает — профиль главнее.
+func dobavitPravilomRezhimQuic(d map[string]any) {
+	r, ok := d["route"].(map[string]any)
+	if !ok {
+		return
+	}
+	pravila, _ := r["rules"].([]any)
+	for _, p := range pravila {
+		pr, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		if proto, _ := pr["protocol"].(string); proto == "quic" {
+			return
+		}
+	}
+
+	// Вставляем после ведущих sniff/hijack-dns — снифф должен успеть
+	// отработать до нашего reject — но до первого правила с rule_set,
+	// иначе решение комплекта/rule_set перехватит трафик раньше среза.
+	vstavka := 0
+	for vstavka < len(pravila) {
+		pr, ok := pravila[vstavka].(map[string]any)
+		if !ok {
+			break
+		}
+		if act, _ := pr["action"].(string); act == "sniff" || act == "hijack-dns" {
+			vstavka++
+			continue
+		}
+		break
+	}
+
+	novoye := map[string]any{"protocol": "quic", "action": "reject"}
+	obnovlennye := make([]any, 0, len(pravila)+1)
+	obnovlennye = append(obnovlennye, pravila[:vstavka]...)
+	obnovlennye = append(obnovlennye, novoye)
+	obnovlennye = append(obnovlennye, pravila[vstavka:]...)
+	r["rules"] = obnovlennye
 }
 
 // Razobrat — только прочитать профиль, ничего не меняя: нужно, когда конфиг
