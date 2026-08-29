@@ -20,12 +20,16 @@
       lenta.bottom === vkladki.top ВСЕГДА, и строгое el.top < vkladki.top <
       el.bottom не выполнялось НИ РАЗУ ни при какой разметке. Проверка
       светилась зелёным по конструкции, не по факту (диагноз 24.08).
-  (д) ВЫБРАННЫЙ узел списка (класс .vybran) обязан помещаться в ленте
-      целиком: lenta.top <= узел.top и узел.bottom <= lenta.bottom (допуск
-      1px). Обрезанная НЕвыбранная строка — нормальный признак прокрутки,
-      беды тут нет; но если обрезан именно текущий выбор — человек не видит,
-      что у него выбрано (снимки 11_beda_port.png/12_beda_seti.png, 24.08:
-      «Нидерланды 2» обрезана ровно посередине текста).
+  (д) ВЫБРАННЫЙ узел списка (класс .vybran) обязан помещаться в контейнере
+      целиком: с 29.08 список живёт в шторке выбора выхода (.shtorka, см.
+      (з) ниже), поэтому граница теперь её, не ленты: shtorka.top <=
+      узел.top и узел.bottom <= shtorka.bottom (допуск 1px). Обрезанная
+      НЕвыбранная строка — нормальный признак прокрутки, беды тут нет; но
+      если обрезан именно текущий выбор — человек не видит, что у него
+      выбрано (снимки 11_beda_port.png/12_beda_seti.png, 24.08: «Нидерланды
+      2» обрезана ровно посередине текста; беда была найдена на главном
+      экране, до переезда списка в шторку, — проверка того же класса брака
+      живёт теперь в proverit_kartu_i_shtorku).
   (е) пять состояний точки сигнала узла (.uzel .signal — bystro/sredne/
       medlenno/mertv/«без замера») обязаны иметь ПОПАРНО РАЗНЫЙ вычисленный
       вид (background-color + box-shadow + border). Судим getComputedStyle,
@@ -46,27 +50,32 @@
       «он нахуй всё ещё стоит нахуй не по центру а слева», «закрывает обзор
       на надписи», «ездит нахуй квадратом». Прежняя (ж) мерила уезд за
       ВЕРХНИЙ край при прокрутке — мой неверный разбор его слов 25.08.
-  (з) ПОЛОСА ВЫБОРА РЕЖИМА (27.08, заказ Вовы: «должно быть тупо выбор авто
-      режим который сам все определяет, или ручной и там сам выбираешь» —
-      список узлов с «Нидерланды прямой, запасной, комната» его злил).
-      28.08 Вова, впервые открыв программу: «настройки из отдельной вкладки
-      нахуя то переехали вниз основной, это ваще не удобно» — коммит #66
-      унёс полосу на главный экран; 29.08 он же, дословно: «4 ему жить в
-      вкладке сеть» — полоса вернулась на вкладку «Сеть» (#tab-set), проверка
-      перенастроена под это (третье по счёту) место, а не выброшена.
-      (з0) на вкладке «Сеть» (#tab-set) РОВНО одна полоса `.rezhim-perekl`,
-      обе половины несут дословный текст «Автоматически» / «Вручную» — не
-      перевод смысла, а те же слова, что на телефоне (HomeScreen.kt:464-465),
-      и полоса не смеет ни накрывать собой другой текст этой же вкладки, ни
-      быть накрытой — тот же приём, что и (ж2) у круга: сравниваем
-      getBoundingClientRect() полосы против всех остальных видимых узлов
-      вкладки.
-      (з1) на вкладке «Настройки» (#tab-nastroyki) полосы `.rezhim-perekl`
-      НЕТ вовсе — ловит именно возврат на прежнее (28.08) место.
-      (з2) `#uzly` (список узлов на главном экране) виден ТОЛЬКО когда
-      `avtorezhim_vklyuchen=false` (ручной): при авто он обязан быть скрыт
-      целиком (сверено с полем сцены, а не с порядком в HTML — иначе
-      проверка судила бы себя саму).
+  (з) КАРТОЧКА «ВЫХОД» + ШТОРКА ВЫБОРА (29.08, ответ на заказ Вовы 27.08:
+      «должно быть тупо выбор авто режим который сам все определяет, или
+      ручной и там сам выбираешь» — список узлов с «Нидерланды прямой,
+      запасной, комната», висевший на экране ВСЕГДА, его злил). Полоса
+      режима успела пожить на главном экране, в «Настройках» и снова на
+      главном (третье место по счёту) — теперь она внутри шторки, которая
+      открывается кликом по карточке «Выход» (эталон телефона: HomeScreen.kt
+      293-325 карточка, 374-443 шторка). 29.08 Вова про сам список узлов,
+      дословно: «ручной режим если тыкаешь то там выбор сделан криво» —
+      выбранный узел получил явную галочку ✓ (ExitRow, 528-529) взамен еле
+      заметной рамки.
+      (з0) на главном экране (вкладка «Сеть») РОВНО одна карточка
+      `.karta-vyhod`, с непустым состоянием (title/subtitle) и шевроном
+      «›»; шторка ДО клика по карточке закрыта.
+      (з1) клик по карточке открывает шторку: внутри ровно одна полоса
+      `.rezhim-perekl` с дословным текстом «Автоматически» / «Вручную» —
+      не перевод смысла, а те же слова, что на телефоне (HomeScreen.kt:
+      464-465), без перекрытий с другим текстом шторки; список `#uzly`
+      виден — эталон телефона, HomeScreen.kt 413: список виден в ОБОИХ
+      режимах, не прячется в авто целиком, как было раньше.
+      (з2) в авторежиме подсветку (.vybran) не несёт НИ ОДИН узел — эталон
+      HomeScreen.kt 424 (selected = !auto.auto && ch.selected); в ручном —
+      подсвечен ровно один узел (текущий выбор), и у него есть галочка ✓.
+      (з3) Esc закрывает шторку, и на вкладке «Настройки» (#tab-nastroyki)
+      полосы `.rezhim-perekl` нет вовсе — ловит именно возврат на прежнее
+      (28.08) место.
 
     python3 stend/oblik_geometriya.py
 """
@@ -97,20 +106,7 @@ GEOMETRIYA_JS = """() => {
   const srok = r(document.getElementById('podpiska-srok'));
   const vkladki = r(document.getElementById('vkladki'));
   const lenta = r(document.getElementById('lenta'));
-  // top/bottom — СЫРЫЕ координаты разметки, без клипа по .lenta: раньше низ
-  // узла обрезали границей ленты ДО сравнения, и (д) ниже проверяет ровно
-  // то, что клип прятал — вылезает ли выбранный узел за реальные границы
-  // скроллящегося контейнера (overflow режет его физически, но rect об этом
-  // молчит).
-  const uzly = [...document.querySelectorAll('#uzly .uzel')]
-    .map((el) => ({el, rr: el.getBoundingClientRect()}))
-    .filter(({rr}) => rr.width > 0 || rr.height > 0)
-    .map(({el, rr}) => ({
-      imya: (el.querySelector('.imya') || el).textContent.trim().slice(0, 40),
-      top: rr.top, bottom: rr.bottom,
-      vybran: el.classList.contains('vybran'),
-    }));
-  return {krug, podskazka, podpiska, imya, srok, vkladki, lenta, uzly};
+  return {krug, podskazka, podpiska, imya, srok, vkladki, lenta};
 }"""
 
 
@@ -144,14 +140,10 @@ def proverit_glavnyy_ekran(str_, imya_sceny):
             bedy.append(f"{imya_sceny}: (г) низ ленты {lenta['bottom']:.0f}px заходит под "
                         f"панель вкладок на {zapolzanie:.0f}px (панель.top={vkladki['top']:.0f})")
 
-    if lenta:
-        for u in d["uzly"]:
-            if not u["vybran"]:
-                continue
-            if u["top"] < lenta["top"] - 1 or u["bottom"] > lenta["bottom"] + 1:
-                bedy.append(f"{imya_sceny}: (д) выбранный узел «{u['imya']}» обрезан лентой "
-                            f"(узел {u['top']:.0f}…{u['bottom']:.0f}, лента {lenta['top']:.0f}…{lenta['bottom']:.0f})")
-
+    # (д) — «выбранный узел обрезан лентой» — переехала в proverit_kartu_i_shtorku
+    # ниже вместе со списком узлов: с 29.08 список живёт в шторке (.shtorka),
+    # а не в этой самой ленте, и мерить его тут стало нечем (шторка закрыта
+    # по умолчанию, #uzly вернул бы пустой прямоугольник).
     return bedy
 
 
@@ -222,39 +214,58 @@ def proverit_krug_os_x(str_, imya_sceny):
     return bedy
 
 
-REZHIM_SET_JS = """() => {
-  // Проход №1 — вкладка «Сеть» ещё активна (страница только что открыта,
-  // клика по табам не было). (з0) полоса обязана быть здесь, ровно одна,
-  // с дословными подписями и без перекрытий; (з2) список узлов должен
-  // слушаться режима так же, как и раньше.
-  const r = (el) => {
-    if (!el) return null;
-    const rr = el.getBoundingClientRect();
-    return (rr.width > 0 || rr.height > 0) ? rr : null;
+REZHIM_NASTROYKI_JS = """() => {
+  // (з3) полосы `.rezhim-perekl` на вкладке «Настройки» быть не должно
+  // вовсе. С 29.08 полоса — потомок `.shtorka`, сестры `#tab-set`/
+  // `#tab-nastroyki`, а не их содержимого, так что запрос ниже структурно
+  // истинен всегда — щуп остаётся как регресс-страховка на случай, если
+  // разметку снова вернут внутрь вкладки.
+  return {
+    barVNastroykah: document.querySelectorAll('#tab-nastroyki .rezhim-perekl').length,
   };
-  const uzly = document.getElementById('uzly');
+}"""
+
+KARTA_GLAVNAYA_JS = """() => {
+  const r = (el) => { if (!el) return null; const rr = el.getBoundingClientRect();
+    return (rr.width > 0 || rr.height > 0) ? rr : null; };
   // Есть ли вообще главный экран на этой сцене — своя примета (круг),
-  // независимая от полосы: иначе отсутствие `.rezhim-perekl` в разметке
+  // независимая от карточки: иначе отсутствие `.karta-vyhod` в разметке
   // читалось бы прибором как «сцена без главного экрана» и молчало бы —
   // ровно та ловушка «проверка с пустым входом зеленеет» (25.08).
   const glavnyyEkranViden = !!r(document.querySelector('.krug-fon'));
-  const bar = document.querySelector('#tab-set .rezhim-perekl');
+  const karty = document.querySelectorAll('.karta-vyhod');
+  const karta = karty[0] || null;
+  const title = document.getElementById('vyhod-title');
+  const subtitle = document.getElementById('vyhod-subtitle');
+  const shtorkaFon = document.getElementById('shtorka-fon');
+  return {
+    glavnyyEkranViden,
+    kolichestvoKart: karty.length,
+    kartaVidna: !!r(karta),
+    titleText: title ? title.textContent.trim() : null,
+    subtitleText: subtitle ? subtitle.textContent.trim() : null,
+    shevronEst: !!(karta && karta.querySelector('.vyhod-shevron')),
+    shtorkaVidnaDoKlika: !!(shtorkaFon && !shtorkaFon.hidden),
+  };
+}"""
+
+SHTORKA_OTKRYTA_JS = """() => {
+  const r = (el) => { if (!el) return null; const rr = el.getBoundingClientRect();
+    return (rr.width > 0 || rr.height > 0) ? rr : null; };
+  const fon = document.getElementById('shtorka-fon');
+  const shtorka = document.getElementById('shtorka');
+  const bar = document.querySelector('#shtorka-fon .rezhim-perekl');
   const avto = document.getElementById('rezhim-avto');
   const ruchnoy = document.getElementById('rezhim-ruchnoy');
-  const lenta = document.getElementById('lenta');
+  const uzly = document.getElementById('uzly');
   const barRect = r(bar);
-  // Тот же приём измерения, что и у круга (ж2): getBoundingClientRect()
-  // полосы против ВСЕХ остальных видимых узлов ленты. Потомки #uzly
-  // ИСКЛЮЧЕНЫ: список — свой скролл-контейнер (overflow-y:auto) с
-  // автопрокруткой к выбранному узлу, и её заголовок «Выбор узла» после
-  // такой прокрутки честно лежит в сырых координатах ВЫШЕ верха #uzly
-  // (замер: заголовок top=421.75 при uzly.top=455.75, uzly.scrollTop=52) —
-  // это клипуется собственным overflow контейнера и физически не видно, не
-  // настоящее перекрытие с полосой. Проверка того, что #uzly стоит НИЖЕ
-  // полосы, — задача (з2)/вёрстки колонки, а не этого перекрытия.
+  const shtorkaRect = r(shtorka);
+  // Тот же приём измерения, что и у круга (ж2)/старой полосы: перекрытие
+  // полосы с ЛЮБЫМ другим текстом шторки. Потомки #uzly исключены — список
+  // сам скроллится (overflow-y у .shtorka целиком, не у #uzly с 29.08).
   const perekryto = [];
-  if (barRect && lenta) {
-    for (const el of lenta.querySelectorAll('*')) {
+  if (barRect && shtorka) {
+    for (const el of shtorka.querySelectorAll('*')) {
       if (bar.contains(el) || el.contains(bar)) continue;
       if (uzly && uzly.contains(el)) continue;
       const rr = el.getBoundingClientRect();
@@ -266,75 +277,153 @@ REZHIM_SET_JS = """() => {
       if (dy > 2 && dx > 2 && svoy) perekryto.push({tekst: svoy.slice(0, 30), dy: Math.round(dy)});
     }
   }
+  // top/bottom — СЫРЫЕ координаты разметки, без клипа: сравниваем их с
+  // границами .shtorka (её собственный overflow-y:auto) в (д) ниже — тот же
+  // приём, что раньше сравнивал выбранный узел с .lenta, пока список жил
+  // в главной колонке.
+  const stroki = uzly ? [...uzly.querySelectorAll('.uzel')]
+    .map((el) => ({el, rr: el.getBoundingClientRect()}))
+    .filter(({rr}) => rr.width > 0 || rr.height > 0)
+    .map(({el, rr}) => ({
+      imya: (el.querySelector('.imya') || el).textContent.trim().slice(0, 40),
+      top: rr.top, bottom: rr.bottom,
+      vybran: el.classList.contains('vybran'),
+      galochka: !!el.querySelector('.galochka'),
+    })) : [];
   return {
-    glavnyyEkranViden,
-    kolichestvoVsego: document.querySelectorAll('.rezhim-perekl').length,
+    fonVidno: !!(fon && !fon.hidden),
+    kolichestvoBar: document.querySelectorAll('#shtorka-fon .rezhim-perekl').length,
     est_bar: !!barRect,
     avtoText: avto ? avto.textContent.trim() : null,
     ruchnoyText: ruchnoy ? ruchnoy.textContent.trim() : null,
     perekryto: perekryto.slice(0, 4),
     uzlyVidno: !!(uzly && !uzly.hidden && r(uzly)),
-    uzlyHidden: !!(uzly && uzly.hidden),
-  };
-}"""
-
-REZHIM_NASTROYKI_JS = """() => {
-  // Проход №2 — после клика по вкладке «Настройки». (з1) полосы здесь быть
-  // не должно вовсе — это единственный приём, ловящий возврат на прежнее
-  // (28.08) место.
-  return {
-    barVNastroykah: document.querySelectorAll('#tab-nastroyki .rezhim-perekl').length,
+    shtorkaRect,
+    stroki,
   };
 }"""
 
 
-def proverit_rezhim_perekl(str_, imya_sceny, avtorezhim_vklyuchen_ozhidaem):
-    """(з) Полоса выбора режима — 29.08 переехала на вкладку «Сеть» (Вова
-    дословно: «4 ему жить в вкладке сеть»). Заказ 27.08 на саму форму («тупо
-    выбор авто режим который сам все определяет, или ручной и там сам
-    выбираешь») никуда не делся — сменилось только МЕСТО (уже третье: главный
-    экран → «Настройки» → «Сеть»).
+def proverit_kartu_i_shtorku(str_, imya_sceny, avtorezhim_vklyuchen_ozhidaem):
+    """(з) Карточка «Выход» + шторка выбора (29.08). Полоса режима и весь
+    список узлов, раньше висевшие на главном экране всегда (третье их место
+    после «Настройки» и главного экрана, см. историю в стенде выше), теперь
+    живут в шторке, открывающейся кликом по карточке — заказ Вовы 27.08:
+    «должно быть тупо выбор авто режим который сам все определяет, или
+    ручной и там сам выбираешь», и 29.08: «ручной режим если тыкаешь то там
+    выбор сделан криво» (подсветка выбранного узла).
+
+    (з0) карточка `.karta-vyhod` — ровно одна, с непустыми title/subtitle
+        и шевроном; шторка ДО клика закрыта.
+    (з1) клик по карточке открывает шторку: внутри неё ровно одна полоса
+        `.rezhim-perekl` с дословными подписями «Автоматически»/«Вручную»,
+        без перекрытий, и виден список `#uzly` — эталон телефона,
+        HomeScreen.kt 413: список виден в ОБОИХ режимах, не только в ручном.
+    (д)  выбранный узел не обрезан границей `.shtorka` (retarget прежней (д),
+        измерявшей то же самое против `.lenta`, пока список жил на главном).
+    (з2) в авторежиме подсветку (.vybran) не несёт НИ ОДИН узел — эталон
+        HomeScreen.kt 424 (selected = !auto.auto && ch.selected); в ручном —
+        выбранный узел несёт подсветку И галочку ✓ (ExitRow, 528-529).
+    (з3) Esc закрывает шторку, и на вкладке «Настройки» полосы режима нет.
     """
     bedy = []
-    d = str_.evaluate(REZHIM_SET_JS)
+    d = str_.evaluate(KARTA_GLAVNAYA_JS)
     if not d["glavnyyEkranViden"]:
-        # Сцена «1_kod» не рисует главный экран вовсе (карта-koda видна вместо
-        # karta-svyazi) — ни полосы, ни списка узлов там нет и не должно
-        # быть, это не беда (тот же приём, что и в proverit_glavnyy_ekran).
+        # Сцена «1_kod» не рисует главный экран вовсе — нечего мерить (тот же
+        # приём, что и в proverit_glavnyy_ekran).
         return bedy
-    if not d["est_bar"]:
-        bedy.append(f"{imya_sceny}: (з0) полосы выбора режима `.rezhim-perekl` нет на вкладке «Сеть»")
+    if d["kolichestvoKart"] != 1 or not d["kartaVidna"]:
+        bedy.append(f"{imya_sceny}: (з0) карточка «Выход» `.karta-vyhod` не видна на вкладке "
+                    f"«Сеть» (найдено {d['kolichestvoKart']})")
     else:
-        if d["kolichestvoVsego"] != 1:
-            bedy.append(f"{imya_sceny}: (з0) полос выбора режима {d['kolichestvoVsego']}, а нужна РОВНО одна")
-        if d["avtoText"] != "Автоматически":
-            bedy.append(f"{imya_sceny}: (з0) подпись половины «{d['avtoText']}», а нужна дословно «Автоматически»")
-        if d["ruchnoyText"] != "Вручную":
-            bedy.append(f"{imya_sceny}: (з0) подпись половины «{d['ruchnoyText']}», а нужна дословно «Вручную»")
-        if d["perekryto"]:
-            chto = ", ".join(f"«{z['tekst']}» на {z['dy']}px" for z in d["perekryto"])
-            bedy.append(f"{imya_sceny}: (з0) полоса режима перекрывается с текстом вкладки «Сеть»: {chto}")
+        if not d["titleText"]:
+            bedy.append(f"{imya_sceny}: (з0) карточка «Выход» без текста состояния (title пуст)")
+        if not d["subtitleText"]:
+            bedy.append(f"{imya_sceny}: (з0) карточка «Выход» без подписи (subtitle пуст)")
+        if not d["shevronEst"]:
+            bedy.append(f"{imya_sceny}: (з0) у карточки «Выход» нет шеврона «›»")
+    if d["shtorkaVidnaDoKlika"]:
+        bedy.append(f"{imya_sceny}: (з0) шторка выбора открыта БЕЗ клика по карточке")
+    if bedy:
+        return bedy  # без рабочей карточки открывать шторку нечем
 
-    if avtorezhim_vklyuchen_ozhidaem:
-        if d["uzlyVidno"]:
-            bedy.append(f"{imya_sceny}: (з2) авторежим включён, а #uzly виден — список узлов должен быть скрыт")
+    str_.click("#karta-vyhod")
+    str_.wait_for_timeout(200)
+    ds = str_.evaluate(SHTORKA_OTKRYTA_JS)
+    if not ds["fonVidno"]:
+        bedy.append(f"{imya_sceny}: (з1) клик по карточке «Выход» не открыл шторку")
+        return bedy
+    if not ds["est_bar"]:
+        bedy.append(f"{imya_sceny}: (з1) в открытой шторке нет полосы выбора режима `.rezhim-perekl`")
     else:
-        if not d["uzlyVidno"]:
-            bedy.append(f"{imya_sceny}: (з2) авторежим выключен (ручной), а #uzly скрыт "
-                        f"(hidden={d['uzlyHidden']}) — список узлов должен быть виден")
+        if ds["kolichestvoBar"] != 1:
+            bedy.append(f"{imya_sceny}: (з1) полос выбора режима в шторке {ds['kolichestvoBar']}, "
+                        "а нужна РОВНО одна")
+        if ds["avtoText"] != "Автоматически":
+            bedy.append(f"{imya_sceny}: (з1) подпись половины «{ds['avtoText']}», "
+                        "а нужна дословно «Автоматически»")
+        if ds["ruchnoyText"] != "Вручную":
+            bedy.append(f"{imya_sceny}: (з1) подпись половины «{ds['ruchnoyText']}», "
+                        "а нужна дословно «Вручную»")
+        if ds["perekryto"]:
+            chto = ", ".join(f"«{z['tekst']}» на {z['dy']}px" for z in ds["perekryto"])
+            bedy.append(f"{imya_sceny}: (з1) полоса режима перекрывается с текстом шторки: {chto}")
+    if not ds["uzlyVidno"]:
+        bedy.append(f"{imya_sceny}: (з1) список узлов `#uzly` не виден в открытой шторке "
+                    "(эталон телефона — HomeScreen.kt 413, список виден в обоих режимах)")
+
+    shtorka_r = ds["shtorkaRect"]
+    if shtorka_r:
+        for u in ds["stroki"]:
+            if not u["vybran"]:
+                continue
+            if u["top"] < shtorka_r["top"] - 1 or u["bottom"] > shtorka_r["bottom"] + 1:
+                bedy.append(f"{imya_sceny}: (д) выбранный узел «{u['imya']}» обрезан шторкой "
+                            f"(узел {u['top']:.0f}…{u['bottom']:.0f}, "
+                            f"шторка {shtorka_r['top']:.0f}…{shtorka_r['bottom']:.0f})")
+
+    vybranno = [u for u in ds["stroki"] if u["vybran"]]
+    if avtorezhim_vklyuchen_ozhidaem:
+        if vybranno:
+            imena = ", ".join(f"«{u['imya']}»" for u in vybranno)
+            bedy.append(f"{imya_sceny}: (з2) авторежим включён, а подсвечен узел {imena} — "
+                        "эталон телефона (HomeScreen.kt 424): в авто не подсвечен НИКТО")
+    else:
+        if ds["stroki"] and len(vybranno) != 1:
+            bedy.append(f"{imya_sceny}: (з2) ручной режим, узлов в шторке {len(ds['stroki'])}, "
+                        f"а подсвеченных {len(vybranno)} — должен быть ровно 1")
+        for u in vybranno:
+            if not u["galochka"]:
+                bedy.append(f"{imya_sceny}: (з2) выбранный узел «{u['imya']}» без галочки ✓ "
+                            "(эталон телефона — ExitRow, HomeScreen.kt 528-529)")
+
+    # Закрываем шторку тем же Esc, что обещан человеку (index.html:
+    # document.addEventListener('keydown', ...)) — и той же дверью придётся
+    # уйти, чтобы кликнуть по вкладке «Настройки»: .shtorka-fon перекрывает
+    # собой всё окно, включая панель вкладок (z-index 5 против 3 у .taby).
+    str_.keyboard.press("Escape")
+    str_.wait_for_timeout(200)
+    zakrylos = str_.evaluate(
+        "() => { const f = document.getElementById('shtorka-fon'); return !!(f && f.hidden); }")
+    if not zakrylos:
+        bedy.append(f"{imya_sceny}: (з3) Esc не закрыл шторку — панель вкладок недоступна, "
+                    "дальше не проверяю (клик по ней завис бы на перекрытом фоне)")
+        return bedy
 
     str_.click("#vkladka-nastroyki")
     str_.wait_for_timeout(200)
     dn = str_.evaluate(REZHIM_NASTROYKI_JS)
     if dn["barVNastroykah"] != 0:
-        bedy.append(f"{imya_sceny}: (з1) полоса выбора режима осталась на вкладке «Настройки» "
-                    f"({dn['barVNastroykah']}) — она обязана жить на вкладке «Сеть»")
+        bedy.append(f"{imya_sceny}: (з3) полоса выбора режима видна на вкладке «Настройки» "
+                    f"({dn['barVNastroykah']}) — она обязана жить в шторке «Сети»")
     # Возвращаем сцену на вкладку «Сеть» — иначе следующая проверка в этой же
     # sтранице (proverit_gradacii_signala на 24_uzly_vse_gradacii) искала бы
-    # .uzel .signal на скрытой сейчас вкладке и молчала бы вместо суждения.
+    # #karta-vyhod на скрытой сейчас вкладке и молчала бы вместо суждения.
     str_.click("#vkladka-set")
     str_.wait_for_timeout(200)
     return bedy
+
+
 
 
 SIGNAL_JS = """() => {
@@ -357,7 +446,13 @@ def proverit_gradacii_signala(str_, imya_sceny):
     приходит из var(--zhdem) и т.п., и «средне» с «медленно» можно свести к
     одному виду, ни разу не тронув слово medlenno в самом правиле — ровно так
     беда 25.08 и прошла бы мимо текстового сравнения.
+
+    Список узлов с 29.08 живёт в шторке (.shtorka, закрыта по умолчанию) —
+    открываем её тем же кликом, что и человек, иначе querySelectorAll ниже
+    смотрел бы в пустоту.
     """
+    str_.click("#karta-vyhod")
+    str_.wait_for_timeout(200)
     otp = str_.evaluate(SIGNAL_JS)
     zhdem = ["bystro", "sredne", "medlenno", "mertv", "bez_zamera"]
     otsutstvuet = [s for s in zhdem if s not in otp]
@@ -462,7 +557,7 @@ def zamerit():
                 str_.wait_for_timeout(700)
                 bedy = proverit_glavnyy_ekran(str_, imya_sceny)
                 bedy += proverit_krug_os_x(str_, imya_sceny)
-                bedy += proverit_rezhim_perekl(
+                bedy += proverit_kartu_i_shtorku(
                     str_, imya_sceny, bool(SCENY[imya_sceny].get("avtorezhim_vklyuchen")))
                 if imya_sceny == "24_uzly_vse_gradacii":
                     bedy += proverit_gradacii_signala(str_, imya_sceny)
