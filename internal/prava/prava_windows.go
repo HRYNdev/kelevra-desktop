@@ -47,6 +47,19 @@ func Est() bool {
 // живы разом (беда 25.08, «2 *** открыто»). Теперь метка живёт у старой
 // копии до её смерти, а связь между копиями — явный аргумент, а не гонка.
 func Poprosit(smenaPID int) error {
+	return poprosit(smenaPID, false)
+}
+
+// PoprositPriStarte — то же самое окно UAC, но при запросе прав сразу на
+// обычном старте программы (заказ хозяина 29.08), а не по кнопке «Включить для
+// всех программ». Разница — аргумент --pri-starte новой копии: main.go по
+// нему не зовёт vosstanovitPolnuyuZashchitu (человек ещё ничего не подключал,
+// он просто открыл приложение), в отличие от --smena после кнопки.
+func PoprositPriStarte(smenaPID int) error {
+	return poprosit(smenaPID, true)
+}
+
+func poprosit(smenaPID int, priStarte bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -57,7 +70,11 @@ func Poprosit(smenaPID int) error {
 	verb, _ := syscall.UTF16PtrFromString("runas")
 	fayl, _ := syscall.UTF16PtrFromString(exe)
 	papka, _ := syscall.UTF16PtrFromString(katalog(exe))
-	argy, _ := syscall.UTF16PtrFromString(fmt.Sprintf("--smena %d", smenaPID))
+	arg := fmt.Sprintf("--smena %d", smenaPID)
+	if priStarte {
+		arg += " --pri-starte"
+	}
+	argy, _ := syscall.UTF16PtrFromString(arg)
 
 	const swShowNormal = 1
 	r, _, _ := shellExecute.Call(0,

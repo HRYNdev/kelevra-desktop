@@ -18,6 +18,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
+	"github.com/HRYNdev/kelevra-desktop/internal/prava"
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
 	"github.com/HRYNdev/kelevra-desktop/internal/sluzhba"
 )
@@ -25,10 +26,17 @@ import (
 // argSluzhba/argTiho — режимы запуска этого же .exe (см. шапку файла).
 // argSmena — не режим, а сообщение от прошлой, ещё не повышенной копии:
 // значение после флага — её pid (см. prava.Poprosit и polnayaZashchita).
+// argPriStarte — сообщение той же природы, что и argSmena: новая, уже
+// повышенная копия узнаёт из него, что смена вызвана запросом прав СРАЗУ ПРИ
+// СТАРТЕ (sprositPravaNaStarte), а не кнопкой «Включить для всех программ»
+// (polnayaZashchita). Разница важна ровно в одном месте — vosstanovitPolnuyuZashchitu
+// не должна сама дёргать /api/podklyuchit: человек только открыл программу и
+// ничего подключать не просил.
 const (
-	argSluzhba = "--sluzhba"
-	argTiho    = "--tiho"
-	argSmena   = "--smena"
+	argSluzhba   = "--sluzhba"
+	argTiho      = "--tiho"
+	argSmena     = "--smena"
+	argPriStarte = "--pri-starte"
 )
 
 // srokOzhidaniyaSmeny — сколько новая, уже повышенная копия ждёт смерти
@@ -94,16 +102,36 @@ func main() {
 	smenaPID, _ := argSmenaPID()
 
 	tiho := tihiyZapusk(os.Args)
+	priStarte := priStarteZapusk(os.Args)
+
+	// Заказ хозяина 29.08: «чтоб это подтверждение тупо вылазило при старте
+	// программы и больше не мешало» — окно UAC теперь спрашивается сразу тут,
+	// ДО adresKopii (иначе уже открытое окно мигнуло бы поверх запроса прав).
+	// nuzhnoSprositPravaNaStarte и её комментарий держат все условия разом.
+	// estChuzhayaKopiya считаем, только когда остальные условия уже пройдены:
+	// kopiya.Nayti при мёртвой метке ждёт ответа до kopiya.Skolko, и платить
+	// эту цену на КАЖДОМ обычном запуске (когда права и так уже есть) незачем.
+	estPrava := prava.Est()
+	estChuzhayaKopiya := false
+	if !estPrava && !tiho && smenaPID == 0 {
+		_, estChuzhayaKopiya = kopiya.Nayti(papka)
+	}
+	if nuzhnoSprositPravaNaStarte(estPrava, tiho, smenaPID, estChuzhayaKopiya) {
+		if sprositPravaNaStarte(papka) {
+			return
+		}
+	}
 
 	// Окно — ВНЕ замка (см. adresKopii): pokazatOkno не возвращается, пока
 	// человек не закроет окно.
 	adres, chuzhaya := adresKopii(papka, putZhurnala, smenaPID)
-	// Смена прав по кнопке «Включить для всех программ» (--smena БЕЗ --tiho)
-	// обязана не просто перезапустить приложение, а довести до конца то,
-	// ради чего её позвали: человек просил защиту, а не рестарт (см.
-	// vosstanovitPolnuyuZashchitu). Автообновление (--tiho --smena) сюда не
-	// попадает — оно про свежесть файла, а не про включение защиты.
-	if smenaPID > 0 && !tiho {
+	// Смена прав по кнопке «Включить для всех программ» (--smena БЕЗ --tiho и
+	// БЕЗ --pri-starte) обязана не просто перезапустить приложение, а довести
+	// до конца то, ради чего её позвали: человек просил защиту, а не рестарт
+	// (см. vosstanovitPolnuyuZashchitu). Автообновление (--tiho --smena) и
+	// запрос прав при старте (--smena --pri-starte, sprositPravaNaStarte) сюда
+	// не попадают — ни то, ни другое не значит «человек нажал Подключить».
+	if smenaPID > 0 && !tiho && !priStarte {
 		vosstanovitPolnuyuZashchitu(adres)
 	}
 	if !tiho {
@@ -293,6 +321,65 @@ func estArg(arg string) bool {
 	return false
 }
 
+// nuzhnoSprositPravaNaStarte решает, спросить ли права администратора сразу
+// на обычном старте (заказ хозяина 29.08: «чтоб это подтверждение тупо вылазило
+// при старте программы и больше не мешало»), а не откладывать до первого
+// подключения (internal/sluzhba.zaprositPravaAvtomaticheskiEsliNado — этот
+// путь у СУЩЕСТВУЮЩИХ установок не сработает никогда: hranenie.Zagruzit
+// метит их «уже спрашивали» ещё на миграции) или до клика по кнопке
+// «Включить для всех программ».
+//
+// Чистая функция — решение проверяется тестом без настоящего UAC и без сети:
+//
+//	estPrava          — права уже есть (prava.Est()), спрашивать нечего.
+//	tiho              — автообновление (--tiho --smena) или автозапуск с
+//	                     Windows (--tiho) — не человек только что открыл окно.
+//	smenaPID          — эта копия уже И ЕСТЬ смена режима (после UAC либо
+//	                     после обновления), спрашивать второй раз подряд нельзя.
+//	estChuzhayaKopiya — рядом уже висит живая копия: человек кликнул значок
+//	                     в трее у неё, а не запустил программу с нуля —
+//	                     показывать UAC в ответ на клик по трею нельзя.
+func nuzhnoSprositPravaNaStarte(estPrava, tiho bool, smenaPID int, estChuzhayaKopiya bool) bool {
+	if estPrava || tiho || smenaPID > 0 || estChuzhayaKopiya {
+		return false
+	}
+	return true
+}
+
+// poprositPravaPriStarte — хук вместо прямого internal/prava.PoprositPriStarte,
+// подменяется в тесте (см. main_test.go), чтобы не дёргать настоящий UAC.
+var poprositPravaPriStarte = prava.PoprositPriStarte
+
+// sprositPravaNaStarte исполняет решение nuzhnoSprositPravaNaStarte: просит
+// права и в любом случае (согласие или отказ) метит настройки «уже
+// спрашивали» — тем же порядком, что и автозапрос при первом подключении
+// (sluzhba.go: zaprositPravaAvtomaticheskiEsliNado) — отметку пишем ДО ухода,
+// иначе следующий, уже обычный запуск снова увидит файл без отметки и
+// спросит ещё раз, а человек просил ровно один раз.
+//
+// Возвращает true, если эта копия должна немедленно уйти: человек согласился
+// в UAC, новая, уже повышенная копия поднимется сама. В этой точке main ещё
+// не открыл окно и не поднял службу (вызов стоит ДО adresKopii) — уйти можно
+// простым return, снимать нечего.
+func sprositPravaNaStarte(papka string) bool {
+	nastroyki, err := hranenie.Zagruzit()
+	if err != nil {
+		log.Printf("запрос прав при старте: не прочитал настройки, не спрашиваю: %v", err)
+		return false
+	}
+	oshibka := poprositPravaPriStarte(os.Getpid())
+	if oshibka != nil {
+		log.Printf("запрос прав администратора при старте: отказ или ошибка: %v — продолжаю без прав", oshibka)
+	} else {
+		log.Printf("человек согласился на права администратора при старте, перезапускаюсь")
+	}
+	nastroyki.OtmetitPravaZaprosheny()
+	if err := hranenie.Sohranit(nastroyki); err != nil {
+		log.Printf("запрос прав при старте: не сохранил отметку об автозапросе: %v", err)
+	}
+	return oshibka == nil
+}
+
 // podnyatSluzhbuOtdelno запускает службу отдельным процессом (zapusk_windows.go
 // / zapusk_other.go) и ждёт, пока она отметится меткой копии — так же, как
 // это видит следующий двойной щелчок пользователя.
@@ -476,6 +563,18 @@ func lovitPaniku(putZhurnala string, snyatProksi bool) {
 func tihiyZapusk(args []string) bool {
 	for _, a := range args {
 		if a == argTiho {
+			return true
+		}
+	}
+	return false
+}
+
+// priStarteZapusk — тот же разбор, что и tihiyZapusk, но для argPriStarte:
+// эта копия поднята запросом прав СРАЗУ ПРИ СТАРТЕ (sprositPravaNaStarte), а
+// не кнопкой «Включить для всех программ» (см. её комментарий у константы).
+func priStarteZapusk(args []string) bool {
+	for _, a := range args {
+		if a == argPriStarte {
 			return true
 		}
 	}
