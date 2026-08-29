@@ -109,25 +109,40 @@
   /* Верхний отступ живёт здесь, а не на .lenta: у скроллящегося контейнера
      top-padding даёт спорную полосу над содержимым при долгой прокрутке.
      Обычный padding на нескроллящемся предке — просто часть потока. */
-  /* height — не косметика, лечит вторую беду забора oblik_obrezka_kadra.py
-     (27.08): scrollIntoView на выбранном узле раньше скроллил .lenta ЦЕЛИКОМ
-     (общий скролл-контейнер круга и списка), и круг на первом кадре улетал
-     под верхнюю границу — 15 сцен из 26 (5_slomalos: видно 108px из 220).
-     calc(100% + var(--nizhnyaya)) — не 100%: 100% давало бы высоту .lenta БЕЗ
-     её нижнего padding (84px, --nizhnyaya, зарезервирован под нижнюю панель
-     вкладок), и на сценах с длинной бедой («ядро не ответило…») список узлов
-     упирался в этот искусственный потолок раньше времени, раздувая #uzly за
-     пределы реального окна и вытягивая скролл самой .lenta — круг снова ехал
-     вверх, только по новой причине. +var(--nizhnyaya) возвращает эти 84px
-     колонке #tab-set; тот же отступ теперь живёт как padding-bottom у #uzly
-     ниже — тот же зазор перед нижней панелью, просто внутри своего скролла,
-     а не пустым полем ПЕРЕД ним. */
+  /* height:calc(100% + var(--nizhnyaya)) — не 100%: 100% давало бы высоту
+     .lenta БЕЗ её нижнего padding (84px, --nizhnyaya, зарезервирован под
+     нижнюю панель вкладок для ОСТАЛЬНЫХ вкладок, см. .lenta выше). +nizhnyaya
+     возвращает эти 84px колонке #tab-set — ей самой нужен весь box .lenta
+     (56..594 в окне 420x660), не урезанный под чужой резерв. Раньше (до
+     29.08) это было нужно ещё и затем, чтобы scrollIntoView на выбранном узле
+     не скроллил .lenta целиком и не утаскивал круг за верхний край; узел
+     переехал в #uzly/.shtorka, тот довод умер, а сама передача 84px колонке
+     осталась нужна по новой причине — см. #tab-set ниже. */
   #karta-svyazi { padding-top:16px; height:calc(100% + var(--nizhnyaya)); }
   /* Сеть — единственная вкладка с этим приёмом: .tab-set становится колонкой
      фиксированной высоты, #tab-nastroyki (настройки) ниже её не трогает —
      остаётся обычным потоком и скроллится через .lenta, как раньше (список
      настроек может быть длиннее окна, ему это можно). */
-  #tab-set { height:100%; display:flex; flex-direction:column; }
+  /* overflow-y:auto и padding-bottom:var(--nizhnyaya) — эталон телефона,
+     HomeScreen.kt:236-240 (Column.verticalScroll на весь главный экран), а
+     не подгонка кусков под высоту. До 29.08 у .tab-set своего скролла не
+     было — переполнение молча утекало в .lenta, и на первом кадре её жёсткая
+     граница (594px в окне 420x660, см. .lenta выше) резала пополам то, что
+     оказалось у неё на пути. Диагноз oblik_obrezka_kadra.py (29.08, сцена
+     5_slomalos, «Windows не дал создать сетевой адаптер» — карточка беды на
+     несколько строк): резало не саму беду (обычный текст, забору
+     безразличен), а кнопку #karta-vyhod — она тогда стояла ПОСЛЕДНЕЙ, ниже
+     беды, и любой рост текста двигал её к границе. padding-bottom тут же
+     84px, что и у .lenta/.shtorka — тот же зазор перед нижней панелью,
+     просто внутри своего скролла. Но один только скролл беду не лечит:
+     кнопка стояла последней, поэтому чинит ещё и порядок разметки ниже. */
+  #tab-set {
+    height:100%; display:flex; flex-direction:column;
+    overflow-y:auto; overflow-x:hidden; padding-bottom:var(--nizhnyaya);
+  }
+  #tab-set::-webkit-scrollbar { width:8px; }
+  #tab-set::-webkit-scrollbar-thumb { background:var(--gran); border-radius:4px; }
+  #tab-set::-webkit-scrollbar-thumb:hover { background:var(--gran2); }
   /* Тот же капкан, что у .taby/.perekl-ryad/.zagolovok-bloka выше (см. их
      комментарии): ID-селектор #tab-set с явным display:flex ПЕРЕБИВАЕТ
      встроенное [hidden]{display:none} по специфичности, а не по порядку —
@@ -346,23 +361,79 @@
   .perekl.ustarela .knob { background:var(--zhdem); }
   .perekl:disabled { opacity:.55; cursor:default; }
 
+  /* Карточка «Выход» на главном экране — эталон телефона: HomeScreen.kt
+     293-325 (KCard, chevron=true, клик открывает шторку). До этой правки
+     тут всегда висели полоса режима и весь список узлов (Вова, 27.08:
+     «впринципе мне не нравится что ты туда натыкал Нидерланды прямой,
+     запасной, комната и тд, должно быть тупо выбор авто режим который сам
+     все определяет, или ручной и там сам выбираешь»). Строится на .karta —
+     новых визуальных сущностей не заводим, только новое сочетание внутри. */
+  .karta-vyhod {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    width:100%; text-align:left;
+  }
+  .vyhod-tekst { display:flex; flex-direction:column; min-width:0; }
+  /* label/title/subtitle — типографика KRowItem (Components.kt:236-291):
+     label RobotoMono 10sp Dim2 (моно-роли на компьютере идут системным
+     моно-стеком, см. комментарий у @font-face выше), title Montserrat
+     Medium 15sp Text, subtitle Montserrat 13sp Dim. */
+  .vyhod-label {
+    font-family:ui-monospace, Consolas, monospace; font-size:10px; letter-spacing:1.2px;
+    text-transform:uppercase; color:var(--slabyy); margin-bottom:6px;
+  }
+  .vyhod-title {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-weight:500; font-size:15px; color:var(--tekst);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .vyhod-subtitle {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size:13px; color:var(--tihiy); margin-top:3px;
+  }
+  .vyhod-shevron { flex:none; font-size:20px; color:var(--slabyy); }
+
+  /* Шторка выбора выхода — эталон телефона: HomeScreen.kt 374-443
+     (ModalBottomSheet). Фон затемняет всё окно и закрывает шторку по клику
+     МИМО неё; сама шторка — снизу, во всю ширину, своей прокруткой на всю
+     доступную высоту (в отличие от прежнего места на главном экране, тут
+     места хватает всегда — см. комментарий у бывшей podognatVysotuUzlov в
+     JS, функция удалена вместе с этим переездом). */
+  .shtorka-fon {
+    position:fixed; inset:0; z-index:5; background:rgba(6,7,5,.6);
+    display:flex; align-items:flex-end; justify-content:center;
+  }
+  .shtorka-fon[hidden] { display:none; }
+  .shtorka {
+    width:100%; max-width:480px; max-height:82vh; overflow-y:auto;
+    background:var(--fon2); border:1px solid var(--gran); border-bottom:0;
+    border-top-left-radius:var(--r-m); border-top-right-radius:var(--r-m);
+    padding:16px 16px calc(16px + var(--nizhnyaya));
+  }
+  .shtorka-shapka { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .shtorka-zagolovok {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-weight:650; font-size:16px; color:var(--tekst);
+  }
+  .shtorka-krest {
+    background:none; border:0; padding:4px; font-size:15px; line-height:1;
+    color:var(--tihiy); cursor:pointer;
+  }
+  .shtorka-krest:hover { color:var(--tekst); }
+  /* Подпись под полосой режима — эталон телефона, HomeScreen.kt 402-412. */
+  .shtorka-podskazka { margin:6px 4px 10px; font-size:12px; color:var(--tihiy); }
+
   /* Полоса выбора режима — образец: телефон, HomeScreen.kt ModeSwitch/ModeHalf
      (391-467): одна полоса, две половины, активная получает акцентный фон.
      Свои цвета не заводим — те же переменные, что и у остальных карточек
-     этого окна (--karta/--gran/--akcent/--akcent-tem/--r-m/--r-s). */
-  /* margin-top 4px, не 8px — полоса живёт на вкладке «Сеть» (#tab-set) с
-     29.08, прямо над списком узлов, и теснота с ним не выдумана: забор
-     oblik_geometriya.py (д) поймал сцену 5_slomalos (длинная беда о сети +
-     4 узла в ручном режиме) — выбранный узел вылезал за низ ленты на
-     2-3px именно из-за лишних 4px здесь. Урезка зазора, не перестройка
-     места — на 8px раньше сидели по недосмотру. */
+     этого окна (--karta/--gran/--akcent/--akcent-tem/--r-m/--r-s). Полоса
+     теперь живёт в шторке (.shtorka), не на вкладке «Сеть» напрямую — тот
+     же id и та же логика JS, переехало только место в разметке. */
   .rezhim-perekl {
-    display:flex; gap:4px; width:100%; margin-top:4px; padding:4px;
+    display:flex; gap:4px; width:100%; margin-top:0; padding:4px;
     border:1px solid var(--gran); border-radius:var(--r-m); background:var(--karta);
   }
-  /* padding 10→8→6 — тот же запас вертикали, что и margin-top выше (27.08:
-     6px всё ещё оставляет кнопке ~30px высоты тапа, «Автоматически»/
-     «Вручную» не мельчают на глаз). */
+  /* padding 10→8→6 — тот же запас вертикали (27.08: 6px всё ещё оставляет
+     кнопке ~30px высоты тапа, «Автоматически»/«Вручную» не мельчают на глаз). */
   .rezhim-pol {
     flex:1; padding:6px; border-radius:var(--r-s); background:none;
     color:var(--tihiy); font-size:13.5px; font-weight:500; transition:background .15s, color .15s;
@@ -370,21 +441,11 @@
   .rezhim-pol.aktivna { background:var(--akcent); color:var(--akcent-tem); font-weight:650; cursor:default; }
   .rezhim-pol:disabled { cursor:default; }
 
-  /* flex:1 + min-height:0 — берёт весь остаток колонки #tab-set (см. правило
-     #tab-set выше) и становится СВОИМ скролл-контейнером: без min-height:0
-     flex-элемент не сжимается ниже содержимого (спец-поведение auto-минимума
-     у flex), и overflow-y:auto никогда бы не включился. */
-  /* НЕ flex:1 — flex-grow игнорирует явный height у элемента (flex-basis у
-     сокращения flex:1 равен 0%, а не auto, и по спеке при этом width/height
-     для расчёта размера не смотрят вовсе — JS ниже мог бы выставлять
-     style.height хоть кол-во раз, итоговая высота коробки всё равно была бы
-     «весь остаток колонки», проверено на живой странице 27.08). flex:0 0
-     auto отдаёт размер целиком нам: JS (podognatVysotuUzlov) сам меряет,
-     сколько места осталось до низа #tab-set, и выставляет точную высоту,
-     кратную «шапка + N целых узлов» — без этого случайный остаток пикселей
-     то и дело попадал точно на середину узла (сцена 24_uzly_vse_gradacii:
-     97px резал второй узел на 2px). */
-  #uzly { flex:0 0 auto; overflow-y:auto; overflow-x:hidden; padding-bottom:var(--nizhnyaya); }
+  /* Список узлов — свой скролл был нужен, пока список жил в тесной колонке
+     #tab-set (JS считал ему высоту, см. историю usadit ниже). В шторке
+     скроллит вся .shtorka целиком, вложенный скролл-контейнер и подгонка
+     высоты под целое число узлов ему больше не нужны. */
+  #uzly { margin-top:10px; }
   .uzel {
     display:flex; align-items:center; gap:11px; width:100%; padding:11px 13px;
     margin-top:8px; border-radius:var(--r-m); border:1px solid var(--gran); background:var(--karta);
@@ -413,6 +474,12 @@
      серым, что и обычные мс — глазом не отличить «64 мс» от «нет ответа» без
      точки. Текст теперь того же цвета, что и точка рядом. */
   .uzel .ms.mertv { color:var(--beda); }
+  /* Галочка вместо «N мс» у выбранного узла — эталон телефона: ExitRow,
+     HomeScreen.kt 528-529. Раньше выбор нёс только еле заметную рамку и
+     цвет имени (.uzel.vybran выше) — на снимке два соседних узла глазом не
+     различались (Вова, 29.08: «ручной режим если тыкаешь то там выбор
+     сделан криво»). */
+  .uzel .galochka { margin-left:auto; color:var(--akcent); font-size:15px; }
   .uzel:disabled { cursor:default; opacity:.75; }
 
   button {
@@ -725,6 +792,32 @@
         <span id="podpiska-imya"></span><span class="srok" id="podpiska-srok"></span>
       </div>
 
+      <!-- Карточка «Выход» — эталон телефона: HomeScreen.kt 293-325 (KCard,
+           chevron, клик открывает шторку выбора). Полоса режима и весь
+           список узлов, раньше висевшие тут всегда, переехали в шторку
+           #shtorka-fon ниже — тут только состояние одной строкой (Вова,
+           27.08: «должно быть тупо выбор авто режим который сам все
+           определяет, или ручной и там сам выбираешь»).
+           Стоит СРАЗУ после подсказки/подписки, а не последней в колонке
+           (как было до 29.08) — на телефоне «Выход» тоже идёт сразу за
+           KHint, до любого другого блока (HomeScreen.kt:268-297). Беды/
+           заметки ниже — текст переменной длины (сетевые ошибки бывают на
+           несколько строк), и когда карта «Выход» стояла ПОСЛЕДНЕЙ, длинный
+           текст перед ней двигал её к нижней границе .tab-set и на первом
+           кадре резал пополам (oblik_obrezka_kadra.py, 29.08, сцена
+           5_slomalos: видно 91.6px из 98.1px). Позиция кнопки не должна
+           зависеть от длины чужого текста — переставлена перед ним, а не
+           подогнана числом (тот самый хрупкий приём, который уже один раз
+           подвёл этот экран, см. историю .beda margin-top/padding ниже). -->
+      <button class="karta karta-vyhod" id="karta-vyhod" type="button">
+        <span class="vyhod-tekst">
+          <span class="vyhod-label">Выход</span>
+          <span class="vyhod-title" id="vyhod-title"></span>
+          <span class="vyhod-subtitle" id="vyhod-subtitle"></span>
+        </span>
+        <span class="vyhod-shevron" aria-hidden="true">&#8250;</span>
+      </button>
+
       <div class="beda" id="beda-svyazi"></div>
       <div class="beda" id="zametka"></div>
 
@@ -734,25 +827,30 @@
            поэтому осталась на главном экране (Вова 28.08: «настройки нахуя
            переехали вниз основной»). -->
       <div class="beda" id="zametka-avtorezhim"></div>
+    </div>
 
-      <!-- Полоса выбора режима — живёт на вкладке «Сеть» (этот блок,
-           #tab-set) с 29.08. Вова дословно: «4 ему жить в вкладке сеть» —
-           это ответ на мой вопрос про её место, после того как 28.08 он же
-           просил унести её на «Настройки». Стоит перед списком
-           узлов не случайно: сам список виден только в ручном режиме (см.
-           #rezhim-avto/#rezhim-ruchnoy в JS), так что переключатель
-           логически предшествует ему. Форма полосы не менялась: образец
-           телефон, HomeScreen.kt ModeSwitch/ModeHalf (391-467), одна полоса
-           из двух половин, подписи дословно «Автоматически»/«Вручную».
-           Заголовок-рубрику «Сеть» здесь не повторяем — вкладка и так
-           подписана этим словом в нижней панели, а сосед сверху (круг с
-           подписью) обходится без внутренней рубрики. -->
-      <div class="rezhim-perekl" id="rezhim-perekl">
-        <button class="rezhim-pol" id="rezhim-avto" type="button">Автоматически</button>
-        <button class="rezhim-pol" id="rezhim-ruchnoy" type="button">Вручную</button>
+    <!-- Шторка выбора выхода — эталон телефона: HomeScreen.kt 374-443
+         (ModalBottomSheet, заголовок «Выбор выхода»). Полоса режима
+         (#rezhim-perekl) и список узлов (#uzly) переехали сюда с прежним id
+         и прежней логикой JS — новое тут только место в разметке.
+         Закрывается кликом по фону, крестиком и Esc (otkrytShtorku/
+         zakrytShtorku в JS). -->
+    <div class="shtorka-fon" id="shtorka-fon" hidden>
+      <div class="shtorka" id="shtorka">
+        <div class="shtorka-shapka">
+          <div class="shtorka-zagolovok">Выбор выхода</div>
+          <button class="shtorka-krest" id="shtorka-zakryt" type="button" aria-label="Закрыть">&#10005;</button>
+        </div>
+        <!-- Форма полосы не менялась: образец телефон, HomeScreen.kt
+             ModeSwitch/ModeHalf (391-467), одна полоса из двух половин,
+             подписи дословно «Автоматически»/«Вручную». -->
+        <div class="rezhim-perekl" id="rezhim-perekl">
+          <button class="rezhim-pol" id="rezhim-avto" type="button">Автоматически</button>
+          <button class="rezhim-pol" id="rezhim-ruchnoy" type="button">Вручную</button>
+        </div>
+        <div class="shtorka-podskazka" id="shtorka-podskazka"></div>
+        <div id="uzly"></div>
       </div>
-
-      <div id="uzly"></div>
     </div>
 
     <div id="tab-nastroyki" hidden>
@@ -1235,14 +1333,18 @@ async function obnovit() {
 
   // Полоса режима — единственное место, где режим включается/выключается
   // (Вова 27.08: «выбор авто режим который сам все определяет, или ручной и
-  // там сам выбираешь»). Список узлов #uzly виден ТОЛЬКО в ручном режиме —
-  // в авто он выбирает сам, показывать список нечего. Тихая строка
-  // обстановки под полосой — только пока авторежим включён (выключенному
-  // нечего показывать: служитель не крутится, обстановка не считается).
+  // там сам выбираешь»). Список узлов #uzly (в шторке) виден в ОБОИХ режимах
+  // — эталон телефона, HomeScreen.kt 413 (channels.forEach без условия по
+  // auto.auto): в авто он просто не подсвечен ни у одного узла (см.
+  // rezhimAvto внутри risovatUzly), но продолжает показывать, из чего
+  // автомат выбирает. Подпись под полосой — эталон 402-412.
   const rezhimAvto = !!s.avtorezhim_vklyuchen;
   $("rezhim-avto").classList.toggle("aktivna", rezhimAvto);
   $("rezhim-ruchnoy").classList.toggle("aktivna", !rezhimAvto);
-  $("uzly").hidden = rezhimAvto;
+  $("shtorka-podskazka").textContent = rezhimAvto
+      ? "выход подбирается под обстановку"
+      : "выход держится тот, что выбран";
+  obnovitKartuVyhoda();
   const zametkaAvtorezhim = $("zametka-avtorezhim");
   // Про обстановку говорит ОДНО место, а не два. Большая заметка #zametka
   // (zametkaAvtorezhima выше) уже называет обстановку словами — «Вы дома —
@@ -1279,108 +1381,18 @@ function signalKlass(u) {
   return "medlenno";
 }
 
-// #uzly — свой скролл-контейнер (flex:0 0 auto в колонке #tab-set, CSS
-// выше, высоту выставляет эта функция), остаток пикселей над ним каждый раз
-// разный (короткая заметка/беда — много места, длинная — мало). Резиновая
-// высота то и дело попадает серединой узла — CSS не умеет округлить «до
-// целого узла», а JS, зная реальный размер шапки и строки на этой самой
-// странице, умеет.
-//
-// Мало округлить высоту под то, что видно БЕЗ прокрутки: если выбранный
-// узел (vybranEl) в эту высоту не попадает, дальше risovatUzly всё равно
-// зовёт scrollIntoView — а прокрутка внутри уже подогнанной коробки СНОВА
-// может выровнять выбранный узел серединой соседа (та же беда, только после
-// скролла, а не до). Первая попытка функции — раздать ровно столько узлов,
-// чтобы выбранный вошёл БЕЗ прокрутки вовсе: тогда scrollIntoView увидит
-// его уже видимым и не тронет #uzly. Не помещается (реально мало места,
-// длинная беда над списком) — тогда честная граница по максимуму доступного
-// места, прокрутка неизбежна, но остаётся кратной целому узлу.
-function podognatVysotuUzlov(vybranEl) {
-  const uz = $("uzly");
-  const zag = uz.querySelector(".zagolovok-bloka");
-  const uzly_knopki = [...uz.querySelectorAll(".uzel")];
-  zag && (zag.style.marginBottom = ""); // сброс более ранней подгонки перед новым замером
-  uz.style.paddingBottom = ""; // сброс скрытия отступа с прошлого вызова (см. конец функции)
-  if (!zag || uzly_knopki.length === 0) { uz.style.height = ""; return; } // пустой список — округлять нечего
-  uz.style.height = "auto";
-  const uzTop = uz.getBoundingClientRect().top;
-  const itemH = uzly_knopki[0].getBoundingClientRect().height;
-  const stroka = uzly_knopki.length > 1
-      ? uzly_knopki[1].getBoundingClientRect().top - uzly_knopki[0].getBoundingClientRect().top
-      : itemH + 8; // запасной шаг, если узел всего один (margin-top .uzel — 8px)
-  const gap = stroka - itemH;
-  // Шапка «Выбор узла» — свой, отдельный от узлов кусок высоты (заметно
-  // короче шага строки). Это раскалывает «безопасные» границы на ДВА разных
-  // набора: один — если коробку не прокручивали (виден верх с шапкой),
-  // другой — если scrollIntoView прокрутил список к выбранному узлу ниже
-  // (тогда верх коробки садится на верх какого-то УЗЛА, не шапки). Высота,
-  // безопасная для первого набора, резала узел пополам во втором (диагноз
-  // 27.08: «Нидерланды 178 мс» — сосед выбранного — резалась ВЕРХНЕЙ
-  // границей после прокрутки). Растягиваем нижний отступ шапки, пока она не
-  // займёт РОВНО один шаг строки — тогда оба набора границ совпадают, и
-  // единая арифметика ниже безопасна для обоих случаев сразу.
-  const shapkaSeychas = uzly_knopki[0].getBoundingClientRect().top - uzTop;
-  const dobavit = stroka - shapkaSeychas;
-  if (dobavit > 0) {
-    const tekMargin = parseFloat(getComputedStyle(zag).marginBottom) || 0;
-    zag.style.marginBottom = (tekMargin + dobavit) + "px";
-  }
-  // Доступное место — не собственная (только что растянутая) высота #uzly,
-  // а низ #tab-set (фиксирован высотой 100% колонки, CSS выше) минус верх
-  // #uzly: сам #uzly — последний ребёнок колонки, его позиция top не
-  // зависит от его же height, а низ #tab-set не меняется от того, что мы
-  // сейчас временно раздули список на всю длину.
-  const dostupno = $("tab-set").getBoundingClientRect().bottom - uzTop;
-  // Шапка теперь — ровно один «слот» (stroka), каждый узел — тоже один
-  // слот. slots «целых слотов» = N*stroka - gap ещё умещается в доступное.
-  // Формула одна и та же что для «шапка+узлы», что для «узлы без шапки» —
-  // растянутая шапка занимает ровно stroka, как и любой узел, поэтому
-  // slotsMax можно раздать любому из двух режимов ниже.
-  let slotsMax = Math.max(0, Math.floor((dostupno + gap) / stroka));
-  const idxVybran = vybranEl ? uzly_knopki.indexOf(vybranEl) : -1;
-  // Вова 27.08: «ноль хуже узла, обрезанного пополам» — человек читает
-  // пустой список как «настройки потерялись». Раньше при slotsMax<2 функция
-  // прятала список ЦЕЛИКОМ (height:0) — на 5 штатных сценах («сломалось»,
-  // «занят порт», «нет сети», «битый конфиг», «ручной прокси» — не
-  // редкость) человек не видел НИ ОДНОГО узла. slotsMax===1 — ровно один
-  // «слот» помещается: отдаём его узлу, а не шапке (без подписи «Выбор
-  // узла» список всё ещё узнаваем и кликабелен, без единого узла — нет).
-  // Прячем шапку (display:none, не просто схлопнутый marginBottom — иначе
-  // её пустое место всё равно съедало бы часть узкого запаса) и показываем
-  // ОДИН узел; коробка теперь РОВНО его высоты (itemH), scrollIntoView ниже
-  // сам донесёт до него прокрутку без остатка серёдки.
-  const bezShapki = slotsMax < 2;
-  zag.style.display = bezShapki ? "none" : "";
-  let slots;
-  if (bezShapki) {
-    slots = 1; // хотя бы один узел — ноль запрещён, пока список не пуст
-  } else {
-    // +1 слот на саму шапку, +1 на сам выбранный узел (его индекс 0-based).
-    const slotsNado = idxVybran >= 0 ? idxVybran + 2 : 1;
-    slots = Math.min(slotsMax, Math.max(Math.min(slotsNado, slotsMax), Math.min(slotsMax, 2)));
-  }
-  // dostupno < itemH (совсем крайний случай, экрана честно не хватает даже
-  // на один узел без шапки) — коробке отдаём весь доступный остаток, а не
-  // мнимую «безопасную» высоту: узел покажется чуть обрезанным, но список
-  // не исчезнет (правило 27.08: ноль — только если узлов в DOM нет вовсе).
-  const bezopasno = bezShapki ? itemH : slots * stroka - gap;
-  uz.style.height = Math.max(0, Math.min(dostupno, bezopasno)) + "px";
-  // padding-bottom (var(--nizhnyaya), 84px, зазор перед нижней панелью —
-  // см. CSS #uzly) у border-box считается ЧАСТЬЮ height: height:0 его не
-  // убирает, коробка всё равно рисовалась 84px пустого места, и в эти
-  // «пустые» 84px всё ещё падал прокрученный узел (диагноз 27.08, сцены с
-  // длинной бедой над списком — 5_slomalos/7_ruchnoy_proksi и другие: узел
-  // резался ровно в этом «невидимом» паддинге). В тесной коробке без шапки
-  // запас нужен ещё сильнее — прячем паддинг ровно тем же условием.
-  uz.style.paddingBottom = bezShapki ? "0px" : "";
-}
-
 // Задержки берёт только живое ядро (замер — запрос ЧЕРЕЗ него). Пока ядро
 // стоит, список узлов уже виден (та же конфигурация, что и в подключённом
 // состоянии — Вова, снимок 21.08: список пустовал, хотя показывать было что),
 // а вот цифры честно неизвестны. Прочерк вместо тишины или лживого «0 мс».
 function risovatUzly(gruppy) {
   const podklyucheno = !!(poslednee && poslednee.sost === "rabotaet");
+  // Эталон телефона: HomeScreen.kt 424 — selected = !auto.auto && ch.selected.
+  // В авторежиме список остаётся видимым (человек видит, из чего автомат
+  // выбирает), но подсветку не получает НИКТО — раньше в авто подсвечивался
+  // узел, который выбрал сам автомат, и список читался как ручной выбор,
+  // которого не было.
+  const rezhimAvto = !!(poslednee && poslednee.avtorezhim_vklyuchen);
   const koren2 = $("uzly");
   koren2.innerHTML = "";
   let vybranEl = null;
@@ -1391,38 +1403,60 @@ function risovatUzly(gruppy) {
       // висела бы без имени узла до следующего опроса.
       if (poslednee) $("podzagolovok").textContent = podzagolovok(poslednee);
     }
-    const zag = document.createElement("div");
-    zag.className = "zagolovok-bloka";
-    const levo = document.createElement("span");
-    levo.textContent = g.imya;
-    zag.appendChild(levo);
-    if (g.sam) {
-      const pravo = document.createElement("span");
-      pravo.className = "sprava";
-      pravo.textContent = "выбирает сам";
-      zag.appendChild(pravo);
+    // Имя группы («Выбор узла») рисуем только когда групп в профиле больше
+    // одной — тогда оно разделяет списки. При единственной группе (обычный
+    // случай) оно вставало сразу под заголовком шторки «Выбор выхода» и
+    // дублировало его: на телефоне такой рубрики в шторке нет вовсе
+    // (HomeScreen.kt 374-443 — заголовок, полоса режима, подпись, сразу
+    // ExitRow). Метка «выбирает сам» уходит вместе с ней: режим уже сказан
+    // полосой и подписью под ней, второй раз его не повторяем.
+    if (gruppy.length > 1) {
+      const zag = document.createElement("div");
+      zag.className = "zagolovok-bloka";
+      const levo = document.createElement("span");
+      levo.textContent = g.imya;
+      zag.appendChild(levo);
+      if (g.sam) {
+        const pravo = document.createElement("span");
+        pravo.className = "sprava";
+        pravo.textContent = "выбирает сам";
+        zag.appendChild(pravo);
+      }
+      koren2.appendChild(zag);
     }
-    koren2.appendChild(zag);
     for (const u of g.uzly) {
       const b = document.createElement("button");
-      const vybran = u.imya === g.seychas;
+      const jestSeychas = u.imya === g.seychas;
+      if (jestSeychas) vybranEl = b; // для scrollIntoView — верно в обоих режимах
+      const vybran = !rezhimAvto && jestSeychas; // подсветку и галочку в авто не получает никто
       b.className = "uzel" + (vybran ? " vybran" : "");
-      if (vybran) vybranEl = b;
       const signal = document.createElement("span");
       signal.className = "signal " + signalKlass(u);
       const imya = document.createElement("span");
       imya.className = "imya";
       imya.textContent = u.imya;
-      const ms = document.createElement("span");
-      ms.className = "ms" + (u.beda ? " mertv" : "");
-      ms.textContent = u.beda ? u.beda
-          : u.zaderzhka ? u.zaderzhka + " мс"
-          : podklyucheno ? "" : "—";
-      b.append(signal, imya, ms);
+      // Галочка вместо «N мс» у выбранного — эталон ExitRow (HomeScreen.kt
+      // 528-529). Невыбранный узел, как и раньше, показывает мс/прочерк.
+      if (vybran) {
+        const galochka = document.createElement("span");
+        galochka.className = "galochka";
+        galochka.textContent = "✓";
+        b.append(signal, imya, galochka);
+      } else {
+        const ms = document.createElement("span");
+        ms.className = "ms" + (u.beda ? " mertv" : "");
+        ms.textContent = u.beda ? u.beda
+            : u.zaderzhka ? u.zaderzhka + " мс"
+            : podklyucheno ? "" : "—";
+        b.append(signal, imya, ms);
+      }
       if (g.sam) b.disabled = true;
       else b.onclick = async () => {
         try { await api("vybrat", {gruppa: g.imya, uzel: u.imya}); uzlySlepok = ""; }
         catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
+        // Клик по узлу закрывает шторку — эталон телефона, HomeScreen.kt 436
+        // (showExits = false внутри onClick, безусловно).
+        zakrytShtorku();
         obnovitUzly();
       };
       koren2.appendChild(b);
@@ -1455,71 +1489,84 @@ function risovatUzly(gruppy) {
       koren2.appendChild(ryad);
     }
   }
-  // Сперва подгоняем высоту коробки под целое число узлов (см. функцию
-  // выше) — иначе следующий шаг сам мог бы прокрутить список ровно на
-  // огрызок узла.
   usadit(vybranEl);
+  obnovitKartuVyhoda();
 }
 
-// ПОСАДКА СПИСКА: подгонка высоты коробки + доводка выбранного узла в видимую
-// часть. Вынесено из risovatUzly, потому что зовётся ДВУМЯ путями: отрисовкой
-// списка и наблюдателем за высотой того, что стоит НАД списком (ниже).
+// Доводка выбранного узла в видимую часть шторки. Раньше тут же жила
+// podognatVysotuUzlov (подгонка высоты #uzly под целое число узлов — нужна
+// была, пока список стоял в тесной колонке #tab-set). Список переехал в
+// шторку (.shtorka, 29.08), она сама единственный скролл-контейнер и берёт
+// всю доступную высоту окна — округлять больше нечего, осталась только
+// сама доводка.
 let vybranTekushchiy = null;
 function usadit(vybranEl) {
   if (vybranEl !== undefined) vybranTekushchiy = vybranEl;
   const v = vybranTekushchiy && vybranTekushchiy.isConnected ? vybranTekushchiy : null;
-  // Сперва подгоняем высоту коробки под целое число узлов (см. функцию
-  // выше) — иначе следующий шаг сам мог бы прокрутить список ровно на
-  // огрызок узла.
-  podognatVysotuUzlov(v);
   // Выбранный узел обязан быть виден ЦЕЛИКОМ, не только верхушкой букв:
-  // #uzly клипает контент своей собственной границей (overflow-y:auto), и
-  // текущий выбор мог оказаться ниже видимой области — например когда над
-  // списком встаёт длинная беда (диагноз 24.08, снимки
-  // 11_beda_port.png/12_beda_seti.png: «Нидерланды 2» обрезана ровно
-  // посередине текста). block:"nearest" не дёргает список, если узел и так
-  // виден целиком — прокрутка случается только когда он правда обрезан.
-  // Круг/подсказка/подписка выше #uzly не двигаются никогда — они вне этого
-  // скролл-контейнера (диагноз 27.08, забор oblik_obrezka_kadra.py: раньше
-  // скроллилась вся .lenta целиком, и круг на первом кадре улетал за
-  // верхнюю границу на 15 сценах из 26).
+  // .shtorka клипает контент своей собственной границей (overflow-y:auto), и
+  // текущий выбор мог оказаться ниже видимой области. block:"nearest" не
+  // дёргает список, если узел и так виден целиком — прокрутка случается
+  // только когда он правда обрезан.
   if (v) v.scrollIntoView({block: "nearest"});
 }
 
-// Высота списка считается ОДНИМ замером — в момент его отрисовки. А всё, что
-// стоит над списком, приезжает своей ручкой API и своим временем: /api/uzly и
-// /api/sostoyanie идут врозь, и порядок их приезда не гарантирован ничем.
-// 27.08 состояние опоздало на полсекунды: список сел по экрану БЕЗ блока беды,
-// затем блок встал над ним и сдвинул список на 95px вниз — выбранный узел
-// уехал под панель вкладок и висел там до следующего опроса (до 2 секунд, см.
-// setInterval внизу). Человек в это время не видит, что у него выбрано, — та
-// же беда, что он назвал 24.08 на снимках 11_beda_port/12_beda_seti.
-// Поэтому следим за высотой СОСЕДЕЙ списка и пересаживаем его. За самим #uzly
-// не следим намеренно: усадка меняет его собственную высоту, это был бы цикл.
-function sleditZaVysotoyNadSpiskom() {
-  const uz = $("uzly");
-  if (!uz || !uz.parentElement || typeof ResizeObserver === "undefined") return;
-  const sosedi = [...uz.parentElement.children].filter((e) => e !== uz);
-  let bylo = null;
-  const nabl = new ResizeObserver(() => {
-    // Пересаживаем только когда высота НАД списком правда изменилась: без
-    // этого любая ответная перекладка соседей гоняла бы наблюдателя по кругу.
-    const stalo = sosedi.map((e) => Math.round(e.getBoundingClientRect().height)).join(",");
-    if (stalo === bylo) return;
-    bylo = stalo;
-    if ($("uzly")) usadit();
-  });
-  for (const sosed of sosedi) nabl.observe(sosed);
+// Карточка «Выход» на главном экране — эталон телефона, HomeScreen.kt
+// 293-325. Зовётся и из обновления состояния (obnovit), и из перерисовки
+// списка узлов (risovatUzly): имя текущего узла и пустота списка приезжают
+// с /api/uzly, а домашний режим/авторежим — с /api/sostoyanie, порядок их
+// приезда не гарантирован (та же гонка, что была у бывшей
+// sleditZaVysotoyNadSpiskom) — читаем оба последних известных слепка.
+let poslednyayaGruppy = [];
+function obnovitKartuVyhoda() {
+  const s = poslednee;
+  if (!s) return;
+  const rezhimAvto = !!s.avtorezhim_vklyuchen;
+  const podklyucheno = s.sost === "rabotaet";
+  const vsegoUzlov = poslednyayaGruppy.reduce((n, g) => n + (g.uzly ? g.uzly.length : 0), 0);
+  const title = s.ozhidanie_doma ? "Не нужен"
+      : tekushchiyUzel ? tekushchiyUzel
+      : rezhimAvto ? "Автоматически" : "Не выбран";
+  const subtitle = s.ozhidanie_doma ? "дома работает роутер"
+      : (vsegoUzlov === 0 && !podklyucheno) ? "определится при подключении"
+      : rezhimAvto ? "выбирается сам"
+      : !tekushchiyUzel ? "нажмите, чтобы выбрать"
+      : "выбран вами";
+  $("vyhod-title").textContent = title;
+  $("vyhod-subtitle").textContent = subtitle;
 }
+
+// Шторка выбора выхода — эталон телефона, HomeScreen.kt 374-443
+// (ModalBottomSheet). Открывается кликом по карточке «Выход», закрывается
+// кликом по фону (мимо самой шторки), крестиком, Esc и выбором узла
+// (см. risovatUzly выше — тот же приём, что и на телефоне, 436).
+function otkrytShtorku() {
+  $("shtorka-fon").hidden = false;
+  usadit(); // выбранный узел мог остаться вне видимой части с прошлого раза
+}
+function zakrytShtorku() {
+  $("shtorka-fon").hidden = true;
+}
+$("karta-vyhod").onclick = otkrytShtorku;
+$("shtorka-zakryt").onclick = zakrytShtorku;
+$("shtorka-fon").addEventListener("click", (e) => {
+  if (e.target === $("shtorka-fon")) zakrytShtorku(); // клик МИМО самой шторки
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("shtorka-fon").hidden) zakrytShtorku();
+});
 
 async function obnovitUzly() {
   let d;
   try { d = await api("uzly"); } catch (e) { return; }
-  // «rabotaet или нет» — часть слепка: сами группы могут не измениться ни на
-  // байт (тот же список, тот же выбор), а вот доступность замера и подпись
-  // задержки («—» против чисел) зависят именно от этого поля.
-  const slepok = JSON.stringify(d.gruppy) + "|" + (poslednee && poslednee.sost);
-  if (slepok === uzlySlepok) return;
+  poslednyayaGruppy = d.gruppy || [];
+  // «rabotaet/avtorezhim или нет» — часть слепка: сами группы могут не
+  // измениться ни на байт (тот же список, тот же выбор), а вот доступность
+  // замера, подпись задержки («—» против чисел) и подсветка выбранного узла
+  // (см. rezhimAvto в risovatUzly) зависят именно от этих двух полей.
+  const slepok = JSON.stringify(d.gruppy) + "|" + (poslednee && poslednee.sost) +
+      "|" + (poslednee && poslednee.avtorezhim_vklyuchen);
+  if (slepok === uzlySlepok) { obnovitKartuVyhoda(); return; }
   uzlySlepok = slepok;
   risovatUzly(d.gruppy);
 }
@@ -1676,7 +1723,6 @@ $("knopka-kopirovat").onclick = async () => {
   setTimeout(() => { knopka.textContent = "Скопировать журнал"; }, 2500);
 };
 
-sleditZaVysotoyNadSpiskom();
 obnovit();
 obnovitUzly();
 setInterval(() => { obnovit(); obnovitUzly(); }, 2000);

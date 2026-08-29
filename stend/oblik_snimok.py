@@ -219,6 +219,22 @@ SCENY = {
     # (proverit_gradacii_signala) может их сравнить.
     "24_uzly_vse_gradacii": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
                                  zametka=ZAMETKI["ZametkaBezTunnelya"], uzly=UZLY_VSE_GRADACII),
+    # 29.08: полоса режима и список узлов переехали с главного экрана в
+    # шторку (.shtorka-fon), открывающуюся кликом по карточке «Выход» —
+    # без своей сцены снимок никогда её не откроет, и новый экран не увидит
+    # никто, я включая (см. SHTORKA_SCENY ниже — клик перед снимком).
+    # Ручной режим: узел «Нидерланды 2» (см. UZLY выше) обязан нести и
+    # рамку/цвет (.uzel.vybran), и явную галочку ✓ (Вова 29.08: «ручной режим
+    # если тыкаешь то там выбор сделан криво» — рамки одной было мало).
+    "25_shtorka_ruchnoy": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
+                               vniz_bayt=418_365_440, vverh_bayt=21_495_808,
+                               mozhno_tun=True, zametka=ZAMETKI["ZametkaBezPrav"]),
+    # Авторежим: та же площадка, но ни один узел не смеет нести подсветку —
+    # эталон телефона, HomeScreen.kt 424 (selected = !auto.auto && ch.selected).
+    "26_shtorka_avto": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                            vniz_bayt=204_800_000, vverh_bayt=9_961_472,
+                            avtorezhim_vklyuchen=True, avtorezhim_obstanovka="вне дома",
+                            zametka=ZAMETKI["ZametkaVes"]),
 }
 
 # 27.08: сцена 24 несла rezhim="proksi" и при этом заметку ПОЛНОГО режима —
@@ -241,6 +257,12 @@ for _imya, _s in SCENY.items():
 # «Сеть», где автозапуска попросту нет — то же немое исчезновение, что уже
 # было 20.08 с этим самым переключателем.
 NASTROYKI_SCENY = {"8_avtozapusk_vykl", "9_avtozapusk_vkl", "10_avtozapusk_ustarela"}
+
+# Шторка выбора выхода (29.08, см. комментарий у сцен 25/26 выше) закрыта по
+# умолчанию — снимок без клика по карточке «Выход» показал бы главный экран,
+# а не новый экран вовсе. Тот же приём, что и у NASTROYKI_SCENY: список
+# сцен, а не разовый костыль на конкретное имя.
+SHTORKA_SCENY = {"25_shtorka_ruchnoy", "26_shtorka_avto"}
 
 sostoyanie = {"tek": SCENY["2_otklyucheno"]}
 
@@ -337,7 +359,17 @@ DOSTUP_JS = """() => {
     const cy = Math.min(Math.max(r.top + r.height / 2, 0), H - 1);
     const sverhu = document.elementFromPoint(cx, cy);
     if (!sverhu || (!el.contains(sverhu) && !sverhu.contains(el))) {
-      bedy.push(`«${imya}» не тыкается: в его центре (${Math.round(cx)},${Math.round(cy)}) лежит «${klichka(sverhu)}»`);
+      // Открытая шторка выбора выхода (.shtorka-fon, с 29.08) намеренно
+      // накрывает собой весь остальной экран — та же роль, что у настоящего
+      // ModalBottomSheet на телефоне: фон не тыкается, пока шторка открыта,
+      // и это её работа, а не брак вёрстки. Бедой остаётся только обратное —
+      // кнопка САМОЙ шторки, накрытая чем-то ещё.
+      const modalka = document.getElementById("shtorka-fon");
+      const elVModalke = modalka && modalka.contains(el);
+      const sverhuVModalke = modalka && (sverhu === modalka || modalka.contains(sverhu));
+      if (!(sverhuVModalke && !elVModalke)) {
+        bedy.push(`«${imya}» не тыкается: в его центре (${Math.round(cx)},${Math.round(cy)}) лежит «${klichka(sverhu)}»`);
+      }
     }
   }
   document.querySelectorAll("*").forEach((el) => { if (el.scrollTop) el.scrollTop = 0; });
@@ -360,23 +392,23 @@ def proverit_geometriyu(str_, imya_sceny):
 # 27.08: числа 140/150/160/200px, подобранные на глаз под старую вёрстку,
 # умерли молча — «ЩУП «ДОСТИЖИМОСТИ» МЁРТВ». Причина не в очередном сдвиге
 # константы, а в том, что константа вообще перестала иметь отношение к делу.
-# `#uzly` получил СВОЙ скролл-контейнер (index.html: `#uzly{overflow-y:auto}`)
-# и JS `podognatVysotuUzlov`, который подгоняет его высоту под целые узлы.
-# Замер (playwright, сцена 4_rabotaet) показал: после честного
-# `el.scrollIntoView({block:'center'})` — ровно то, что делает DOSTUP_JS —
-# кнопка узла садится на y≈394, а НЕ у нижнего края окна, как было в старой
-# вёрстке (там панель росла от 594px и легко перекрывала посадку). `#vkladki`
-# — `position:fixed; bottom:0`, её рост НИКАК не двигает точку посадки
-# кнопки (замерено: r.top кнопки одинаков при высоте панели 200/250/300/500px
-# — 394px во всех случаях), поэтому единственное, что решает, сработает ли
-# порча — переросла ли ВЕРХНЯЯ граница панели точку посадки. Любое число,
-# вписанное здесь на глаз, снова умрёт при следующей правке вёрстки, которая
-# подвинет эту точку хоть на 10px. Поэтому порча меряет посадку ЖИВЬЁМ прямо
-# перед собой — тем же вызовом scrollIntoView, каким её измерит DOSTUP_JS —
-# и растит панель настолько, чтобы её верх гарантированно врезался в
-# СЕРЕДИНУ приземлившейся кнопки (запас в половину высоты узла, а не впритык
-# к краю — переживает пиксельные колебания шрифта/DPI так же, как
+# Любое число, вписанное здесь на глаз, снова умрёт при следующей правке
+# вёрстки, которая подвинет точку посадки хоть на 10px. Поэтому порча меряет
+# посадку ЖИВЬЁМ прямо перед собой — тем же вызовом scrollIntoView, каким её
+# измерит DOSTUP_JS — и растит панель настолько, чтобы её верх гарантированно
+# врезался в СЕРЕДИНУ приземлившейся кнопки (запас в половину высоты узла, а
+# не впритык к краю — переживает пиксельные колебания шрифта/DPI так же, как
 # KOEFF_SEREDINY_UZLA в oblik_obrezka_kadra.py).
+#
+# 29.08: щуп-пробник был кнопкой узла (`#uzly .uzel`) — с переездом списка
+# в шторку выбора выхода (index.html: .shtorka-fon) она подчиняется СВОЕЙ
+# прокрутке и СВОЕМУ отступу (calc(16px + var(--nizhnyaya))), а не общей
+# `.lenta`/`#vkladki`, и растущая `#vkladki` больше её не касается вовсе —
+# шторка лежит поверх панели вкладок (z-index 5 против 3), а не рядом с ней.
+# Риск «панель переросла зазор» остался ровно тем же для содержимого,
+# которое НЕ переехало в шторку (`.lenta` всё так же несёт `padding-bottom:
+# var(--nizhnyaya)`), поэтому пробник взял карточку «Выход» (`#karta-vyhod`)
+# — она стоит в той же колонке `#tab-set` → `.lenta`, что раньше несла узлы.
 KOEFF_ZAPASA_POSADKI = 0.5  # доля высоты узла, добавляемая поверх точки посадки
 
 
@@ -396,12 +428,13 @@ def kontrol_shchupa(br, port):
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
-    # Живая точка посадки ДО порчи: куда РЕАЛЬНО прокрутка (внешняя .lenta +
-    # внутренний скролл #uzly) доносит кнопку узла — тем же вызовом, каким её
-    # ищет DOSTUP_JS. У всех узлов сцены точка посадки совпадает (оба скролла
-    # уже исчерпаны), поэтому первого попавшегося узла достаточно.
+    # Живая точка посадки ДО порчи: куда РЕАЛЬНО прокрутка (.lenta) доносит
+    # карточку «Выход» — тем же вызовом, каким её ищет DOSTUP_JS. С 29.08
+    # пробник — не кнопка узла (переехала в свою шторку, см. комментарий у
+    # KOEFF_ZAPASA_POSADKI выше), а `#karta-vyhod` — она осталась в той же
+    # `.lenta`, что раньше несла список, и подвержена той же беде.
     r_top, item_h = str_.evaluate(
-        "() => { const el = document.querySelector('#uzly .uzel');"
+        "() => { const el = document.querySelector('#karta-vyhod');"
         " el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});"
         " const r = el.getBoundingClientRect(); return [r.top, r.height]; }"
     )
@@ -1034,6 +1067,9 @@ def snyat():
                 str_.wait_for_timeout(700)
                 if imya in NASTROYKI_SCENY:
                     str_.click("#vkladka-nastroyki")
+                    str_.wait_for_timeout(200)
+                if imya in SHTORKA_SCENY:
+                    str_.click("#karta-vyhod")
                     str_.wait_for_timeout(200)
                 # Журнал переехал на вкладку «Настройки» (спека 04.08: круг
                 # и ошибка живут на «Сети», журнал — «всё остальное» на
