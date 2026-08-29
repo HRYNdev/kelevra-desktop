@@ -164,4 +164,27 @@ if [ "$SHA_MOY" != "$SHA_TAM" ]; then
 fi
 echo "   скачал как посторонний: sha256 совпал со сборкой"
 
+# Эта же сверка сама создаёт +1 в download_count ассета — счётчик не отличает
+# меня от постороннего. Пишу это скачивание СЕБЕ в зачёт, чтобы потом можно
+# было вычесть его из «скачано», а не путать со спросом (см. телесный навык
+# doehalo). Каталог telo — моё тело, у постороннего форка его нет: тогда молча
+# пропускаю запись, выпуск от этого падать не должен.
+DANNYE_TELO="/opt/jarvis-goal/telo/dannye"
+if [ -d "$DANNYE_TELO" ]; then
+  (
+    SCHET=$(api "https://api.github.com/repos/$REPO/releases/tags/$TEG" \
+      | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+a=[x for x in d.get("assets",[]) if x["name"]=="Kelevra.exe"]
+print(a[0]["download_count"] if a else 0)' 2>/dev/null)
+    KOGDA=$(python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())')
+    python3 -c 'import json,sys
+zap = {"teg": sys.argv[1], "kogda": sys.argv[2], "skachal_sam": 1,
+       "schet_posle_sverki": int(sys.argv[3] or 0)}
+with open(sys.argv[4], "a", encoding="utf-8") as f:
+    f.write(json.dumps(zap, ensure_ascii=False) + "\n")' \
+      "$TEG" "$KOGDA" "$SCHET" "$DANNYE_TELO/vypusk_sverki.jsonl"
+  ) || echo "   (не записал сверку в vypusk_sverki.jsonl — выпуск это не останавливает)"
+fi
+
 echo "✓ https://github.com/$REPO/releases/tag/$TEG"
