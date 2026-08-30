@@ -53,6 +53,18 @@ func gotovStendLestnicy(t *testing.T) *Sluzhba {
 	if err := os.WriteFile(s.Yadro.Bin, []byte("stub"), 0o755); err != nil {
 		t.Fatalf("не подложил бинарь ядра: %v", err)
 	}
+	// KELEVRA_PRAVA=net выше гасит prava.Est(), а свежий Nastroyki (файла ещё
+	// не было) — это ровно «СВЕЖИЙ инсталл, права ещё не спрошены». Любой
+	// успешный /api/podklyuchit в этих тестах поэтому сам заводит
+	// zaprositPravaAvtomaticheskiEsliNado — НЕОЖИДАЕМУЮ горутину, которая
+	// пишет hranenie.Sohranit уже ПОСЛЕ того, как этот тест вернулся и
+	// t.Setenv(KELEVRA_DIR) откатил переменную назад: попадает в ОТНОСИТЕЛЬНЫЙ
+	// путь ".kelevra" прямо в дереве исходников (см. hranenie.Papka, когда ни
+	// KELEVRA_DIR, ни $HOME не заданы). Стенду самой лестницы правил вопрос
+	// прав администратора не интересен — отмечаем «уже спрошены» заранее,
+	// чтобы гонка не могла случиться вовсе. Тесты, которым нужен именно
+	// свежий вопрос прав (prava_avto_test.go), сбрасывают эту отметку сами.
+	s.Nastroyki.OtmetitPravaZaprosheny()
 	return s
 }
 
