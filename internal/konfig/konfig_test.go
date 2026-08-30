@@ -107,14 +107,14 @@ func TestSPravamiOstayotsyaTunnel(t *testing.T) {
 	}
 }
 
-// route.rules боевого профиля — whitelist («что пустить в туннель» через
-// rule_set), а route.final у подписки == "direct": всё, чего нет ни в одном
-// rule_set, сегодня уходит мимо VPN. В режиме полной защиты (права есть,
-// tun остался) Prigotovit обязан перевернуть страховку — final должен стать
-// туннельным выходом, а не direct, при этом сам список route.rules (и
-// правило {"ip_is_private":true,"outbound":"direct"} в нём — прямая дорога
-// домой) трогать нельзя.
-func TestSPolnoyZashchitoyFinalUhoditVTunnel(t *testing.T) {
+// route.final боевого профиля — "direct" и в режиме полной защиты (Prava:
+// true) остаётся direct: переключение final на туннельный выход (правка
+// 7bf3374) отправляло в туннель ВСЁ неопознанное, включая приложения
+// пользователя, не связанные с VPN, — откачено. route.rules (whitelist того,
+// что рулится в туннель через rule_set, и правило
+// {"ip_is_private":true,"outbound":"direct"} в нём — прямая дорога домой)
+// эта правка не трогает вовсе.
+func TestSPolnoyZashchitoyFinalOstaetsyaDirect(t *testing.T) {
 	// Базой берём тот же Prigotovit в режиме прокси (Prava:false), а не сырой
 	// профиль: dobavitPravilomRezhimQuic вставляет своё udp/443-правило
 	// независимо от Prava, и это не имеет отношения к нашей правке —
@@ -137,8 +137,8 @@ func TestSPolnoyZashchitoyFinalUhoditVTunnel(t *testing.T) {
 		t.Fatal("route пропал из конфига")
 	}
 	final, _ := r["final"].(string)
-	if final != "Соединение" {
-		t.Fatalf("route.final = %q, ожидал тег селектора «Соединение» — трафик, не попавший ни в один rule_set, пойдёт мимо VPN", final)
+	if final != "direct" {
+		t.Fatalf("route.final = %q, ожидал direct как в профиле подписки — final трогать не должны", final)
 	}
 
 	pravila, _ := r["rules"].([]any)
