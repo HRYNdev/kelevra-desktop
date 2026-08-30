@@ -151,6 +151,12 @@ func TestSluzhitelKolbekNaSmenuObstanovki(t *testing.T) {
 	}
 
 	sluzh := novyySluzhitelDlyaTesta(dns, sl, posle, kolbek)
+	// Заход, подтвердивший уже принятую обстановку (i>0 ниже), запускает
+	// добивающую пачку быстрых опросов независимо от slep (см. Krutit,
+	// case <-ozhidaniye) — с одним повтором это ровно один лишний вызов
+	// Posle, который тест ниже детерминированно сливает, не подбирая число
+	// по факту (гонка недопустима: fakePosle хранит только последний канал).
+	sluzh.PovtorovBystrogo = 1
 	dns.ustanovit(false) // "вне дома" — совпадает со стартовой обстановкой Zadvizhka
 
 	ctx, otmena := context.WithCancel(context.Background())
@@ -172,6 +178,18 @@ func TestSluzhitelKolbekNaSmenuObstanovki(t *testing.T) {
 		zhdatZvonok(t, posle.vyzvan)
 		posle.srabotat()
 		zhdatZvonok(t, dns.zvonok)
+
+		if i > 0 {
+			// Первое событие (i==0) сменило обстановку (izmenilos=true) —
+			// добивать нечего. Начиная со второго событие лишь ПОДТВЕРЖДАЕТ
+			// уже принятую Doma (izmenilos=false), и Krutit сам стартует
+			// добивающую пачку из PovtorovBystrogo=1 раунда — сливаем его,
+			// иначе неслитый Posle останется в очереди и собьёт
+			// синхронизацию со следующим событием цикла.
+			zhdatZvonok(t, posle.vyzvan)
+			posle.srabotat()
+			zhdatZvonok(t, dns.zvonok)
+		}
 	}
 
 	otmena()
