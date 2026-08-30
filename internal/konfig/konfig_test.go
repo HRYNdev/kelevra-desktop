@@ -2,7 +2,9 @@ package konfig
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -102,6 +104,106 @@ func TestSPravamiOstayotsyaTunnel(t *testing.T) {
 	}
 	if !estTun {
 		t.Fatal("туннель пропал, хотя права есть")
+	}
+}
+
+// route.rules боевого профиля — whitelist («что пустить в туннель» через
+// rule_set), а route.final у подписки == "direct": всё, чего нет ни в одном
+// rule_set, сегодня уходит мимо VPN. В режиме полной защиты (права есть,
+// tun остался) Prigotovit обязан перевернуть страховку — final должен стать
+// туннельным выходом, а не direct, при этом сам список route.rules (и
+// правило {"ip_is_private":true,"outbound":"direct"} в нём — прямая дорога
+// домой) трогать нельзя.
+func TestSPolnoyZashchitoyFinalUhoditVTunnel(t *testing.T) {
+	// Базой берём тот же Prigotovit в режиме прокси (Prava:false), а не сырой
+	// профиль: dobavitPravilomRezhimQuic вставляет своё udp/443-правило
+	// независимо от Prava, и это не имеет отношения к нашей правке —
+	// сравнивать нужно только то, что мог поменять именно final-переключатель.
+	baza, _, err := Prigotovit(profil(t), Vybor{Prava: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dDo := razobrat(t, baza)
+	pravilaDo, _ := dDo["route"].(map[string]any)["rules"].([]any)
+	chisloPravilDo := len(pravilaDo)
+
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := razobrat(t, gotovyy)
+	r, ok := d["route"].(map[string]any)
+	if !ok {
+		t.Fatal("route пропал из конфига")
+	}
+	final, _ := r["final"].(string)
+	if final != "Соединение" {
+		t.Fatalf("route.final = %q, ожидал тег селектора «Соединение» — трафик, не попавший ни в один rule_set, пойдёт мимо VPN", final)
+	}
+
+	pravila, _ := r["rules"].([]any)
+	if len(pravila) != chisloPravilDo {
+		t.Fatalf("число route.rules изменилось: было %d, стало %d — правку нельзя трогать список правил", chisloPravilDo, len(pravila))
+	}
+	var nashlosIpPrivate bool
+	for i, p := range pravila {
+		pr, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		if pr["ip_is_private"] == true {
+			nashlosIpPrivate = true
+			if pr["outbound"] != "direct" {
+				t.Fatalf("правило ip_is_private[%d].outbound = %v, ожидал direct — домашняя сеть должна остаться прямой", i, pr["outbound"])
+			}
+		}
+		prDo, ok := pravilaDo[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		// "inbound" правила про udp/443 естественно отличается набором тегов
+		// входов (с правами остаётся tun-in) — это dobavitPravilomRezhimQuic,
+		// чужое поведение, не наша правка. Сравниваем без него.
+		prCopy, prDoCopy := maps.Clone(pr), maps.Clone(prDo)
+		delete(prCopy, "inbound")
+		delete(prDoCopy, "inbound")
+		if !reflect.DeepEqual(prCopy, prDoCopy) {
+			t.Fatalf("route.rules[%d] изменилось: было %v, стало %v — порядок и содержимое правил трогать нельзя", i, prDo, pr)
+		}
+	}
+	if !nashlosIpPrivate {
+		t.Fatal("правило ip_is_private→direct пропало — страховка для домашней сети исчезла")
+	}
+}
+
+// Режим прокси (нет прав) route.final не трогаем — там как и раньше "direct":
+// решает уже система через set_system_proxy, а не route.final ядра.
+func TestBezPravFinalOstayotsyaDirect(t *testing.T) {
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := razobrat(t, gotovyy)
+	r, _ := d["route"].(map[string]any)
+	final, _ := r["final"].(string)
+	if final != "direct" {
+		t.Fatalf("route.final = %q, в режиме прокси (без прав) ожидал direct как раньше", final)
+	}
+}
+
+// Комплект (BezSetevyhPravil) главнее и без него взводится независимо —
+// проверяем, что при Prava:true+BezSetevyhPravil final по-прежнему туннель
+// (это поведение уже было, новая правка его не должна задеть).
+func TestSPolnymiPravamiIBezSetevyhPravilFinalTunnel(t *testing.T) {
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true, BezSetevyhPravil: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := razobrat(t, gotovyy)
+	r, _ := d["route"].(map[string]any)
+	final, _ := r["final"].(string)
+	if final != "Соединение" {
+		t.Fatalf("route.final = %q, ожидал тег селектора «Соединение»", final)
 	}
 }
 

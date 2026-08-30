@@ -213,6 +213,22 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	if estPrava && k.EstTunnel {
 		k.Rezhim = Tunnel
 		k.Zametka = ZametkaVes
+		// route.rules — это WHITELIST «что пустить в туннель» (rule_set гоняет
+		// подписку), а не blacklist того, что оставить снаружи: route.final в
+		// профиле подписки — "direct", и всё, чего нет ни в одном rule_set
+		// (например ещё не размеченный домен), сегодня тихо уходит мимо VPN и
+		// режется провайдером. В режиме полной защиты (права есть, tun
+		// поднят) переворачиваем страховку — final должен быть туннелем, а
+		// не direct; правило {"ip_is_private":true,"outbound":"direct"} чуть
+		// выше в route.rules никуда не делось и по-прежнему держит домашнюю
+		// сеть прямой. Если в профиле нет ни одного туннельного выхода
+		// (tunnelnyyVyhod вернул ""), final не трогаем — профиль без выхода
+		// работал так и раньше, это не наш случай.
+		if r, ok := d["route"].(map[string]any); ok {
+			if teg := tunnelnyyVyhod(d); teg != "" {
+				r["final"] = teg
+			}
+		}
 	} else {
 		k.Rezhim = Proksi
 		if k.ProksiAdres == "" {
