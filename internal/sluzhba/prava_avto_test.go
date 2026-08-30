@@ -20,6 +20,8 @@ import (
 // отмечены в Nastroyki.
 func TestPervoePodklyuchenieSamoSprashivaetPrava(t *testing.T) {
 	s := gotovStendLestnicy(t)
+	svezho := false // gotovStendLestnicy отмечает «уже спрошены» по умолчанию — этому тесту нужны именно СВЕЖИЕ настройки
+	s.Nastroyki.PravaZaprosheny = &svezho
 	s.zapustitYadro = func(ctx context.Context) error { return nil }
 
 	sprosheno := make(chan int, 8)
@@ -82,6 +84,8 @@ func TestPervoePodklyuchenieSamoSprashivaetPrava(t *testing.T) {
 // горутины. Порядок ловим прямой записью двух синхронных меток.
 func TestAvtozaprosSohranyaetDoUhoda(t *testing.T) {
 	s := gotovStendLestnicy(t)
+	svezho := false // gotovStendLestnicy отмечает «уже спрошены» по умолчанию — этому тесту нужны именно СВЕЖИЕ настройки
+	s.Nastroyki.PravaZaprosheny = &svezho
 	s.zapustitYadro = func(ctx context.Context) error { return nil }
 	s.poprositPrava = func(smenaPID int) error { return nil } // согласие
 	s.vyhod = func() {}                                       // не гасить тестовый процесс
