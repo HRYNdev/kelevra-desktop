@@ -29,6 +29,43 @@ const (
 // на пакет (объявлен в trey_windows.go, тот же build-тег windows).
 var procSendMessageW = user32TreyDLL.NewProc("SendMessageW")
 
+// dwmapiDLL/procDwmSetWindowAttribute — своя DLL этого файла (dwmapi.dll,
+// нужна только тёмному заголовку, больше нигде в пакете не используется).
+// DWMWA_USE_IMMERSIVE_DARK_MODE = 20 — актуальное значение с Windows 10
+// версии 1903 (build 18985+/20H1) и во всей Windows 11; на более старых
+// сборках 1903/1909 тот же атрибут был под номером 19. Пробуем 20 первым
+// (это подавляющее большинство живых машин), и если DWM его не понял (hr
+// не S_OK), откатываемся на 19 — без проверки версии сборки числом, как
+// советует сама документация Microsoft для этого атрибута.
+const (
+	dwmwaUseImmersiveDarkMode    = 20
+	dwmwaUseImmersiveDarkModeOld = 19
+)
+
+var procDwmSetWindowAttribute = syscall.NewLazyDLL("dwmapi.dll").NewProc("DwmSetWindowAttribute")
+
+// vklyuchitTemnyyZagolovok красит системный заголовок окна (title bar) под
+// тёмную тему — иначе на тёмном облике приложения (index.html: --fon:
+// #111310) висит белая системная полоса сверху (хозяин, 30.08: «покрасить под
+// цвет приложения а не тупо белая ерунда»). DWM красит заголовок целиком —
+// собственный цвет ему не передать, тёмный/светлый режим это максимум,
+// что даёт эта грань API (DwmSetWindowAttribute), но этого достаточно,
+// чтобы полоса перестала быть белым пятном на тёмном окне.
+func vklyuchitTemnyyZagolovok(hwnd syscall.Handle) {
+	if hwnd == 0 {
+		return
+	}
+	temno := int32(1)
+	razmer := uintptr(unsafe.Sizeof(temno))
+	hr, _, _ := procDwmSetWindowAttribute.Call(
+		uintptr(hwnd), dwmwaUseImmersiveDarkMode, uintptr(unsafe.Pointer(&temno)), razmer)
+	if hr != 0 {
+		hr, _, _ = procDwmSetWindowAttribute.Call(
+			uintptr(hwnd), dwmwaUseImmersiveDarkModeOld, uintptr(unsafe.Pointer(&temno)), razmer)
+	}
+	log.Printf("тёмный заголовок окна: DwmSetWindowAttribute hr=%#x", hr)
+}
+
 // pokazatOkno открывает окно приложения на встроенном WebView2 (он есть в
 // Windows 10/11 из коробки) и не возвращается, пока пользователь его не закроет.
 func pokazatOkno(url string) {
@@ -59,7 +96,9 @@ func pokazatOkno(url string) {
 	// регистрирует класс сам, см. trey_windows.go). Window() отдаёт HWND
 	// напрямую (common.go: «when using Win32 backend the pointer is HWND
 	// pointer»), поэтому достаём его и ставим значок вручную.
-	ustanovitZnachokOkna(syscall.Handle(uintptr(w.Window())))
+	hwndOkna := syscall.Handle(uintptr(w.Window()))
+	ustanovitZnachokOkna(hwndOkna)
+	vklyuchitTemnyyZagolovok(hwndOkna)
 	// Окно живёт ровно столько, сколько живёт его служба: без неё показывать
 	// нечего, а осиротевшее окно человек принимает за вторую копию приложения
 	// (см. storozh_okna.go). Terminate по документации go-webview2 можно звать
