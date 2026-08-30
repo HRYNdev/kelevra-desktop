@@ -125,3 +125,74 @@ func TestSluzhitelBystrayaPachkaDobivayetSlepoyZahodPosleSobytiya(t *testing.T) 
 		t.Fatalf("SetevoyAdres спрошен %d раз, хочу минимум 3 — событие смены сети обязано повлечь несколько опросов подряд с коротким шагом", got)
 	}
 }
+
+// TestSluzhitelBystrayaPachkaDobivayetZryachiyNoUstarevshiyZahodPosleSobytiya
+// — боевая жалоба хозяина 30.08, пережившая первый фикс (см. пакетный
+// комментарий Krutit): ВПН включается корректно при уходе из дома, но не
+// выключается при быстром возврате. В отличие от
+// TestSluzhitelBystrayaPachkaDobivayetSlepoyZahodPosleSobytiya (там первые
+// заходы слепые, ZondSlep) здесь физический адаптер опознан сразу — заход
+// ЗРЯЧИЙ, но DNS/DHCP ещё не успели устаканиться и честно подтверждают
+// СТАРУЮ обстановку (VneDoma). Раньше добивающая пачка запускалась только по
+// признаку "слепой" (!slep) и на такой заход не реагировала вовсе — оставляя
+// только страховочный тикер (Podtverzhdeniy=3 подряд по
+// IntervalTikeraPoUmolchaniyu=2 мин, то есть ~6 минут). Тест доказывает, что
+// смена обстановки долетает добивающей пачкой за секунды (Interval здесь
+// взведён на час — если бы подтверждение зависело от тикера, тест просто не
+// дождался бы его и упал по таймауту zhdatZvonok).
+func TestSluzhitelBystrayaPachkaDobivayetZryachiyNoUstarevshiyZahodPosleSobytiya(t *testing.T) {
+	dns := &schitayushchiyDns{zvonok: make(chan struct{}, 64)}
+	sl := novyyFakeSledchik()
+	posle := novyyFakePosle()
+
+	var mu sync.Mutex
+	var kolbekZvali []Sostoyanie
+	kolbek := func(ctx context.Context, s Sostoyanie) {
+		mu.Lock()
+		kolbekZvali = append(kolbekZvali, s)
+		mu.Unlock()
+	}
+
+	sluzh := novyySluzhitelDlyaTesta(dns, sl, posle, kolbek)
+	dns.ustanovit(false) // "вне дома" — совпадает со стартовой обстановкой Zadvizhka
+
+	ctx, otmena := context.WithCancel(context.Background())
+	defer otmena()
+	gotovo := make(chan struct{})
+	go func() { sluzh.Krutit(ctx); close(gotovo) }()
+
+	zhdatZvonok(t, dns.zvonok) // заход на старте — подтверждает VneDoma, без смены
+
+	// Хозяин вернулся домой — пришло событие смены сети (NotifyAddrChange),
+	// но DNS ещё не подхватил домашнюю сеть: заход по событию ЗРЯЧИЙ (адрес
+	// физического адаптера тут не запрашивается вовсе — TunnelPodnyat не
+	// задан), но зонд честно застал устаревшую картину "вне дома".
+	sl.sobytiya <- struct{}{}
+	zhdatZvonok(t, posle.vyzvan)
+	posle.srabotat() // "прошла секунда тишины" — заход по событию
+	zhdatZvonok(t, dns.zvonok)
+
+	mu.Lock()
+	pozvaliRano := len(kolbekZvali)
+	mu.Unlock()
+	if pozvaliRano != 0 {
+		t.Fatalf("колбэк позван раньше времени (%d раз) — заход по событию честно подтвердил устаревшую VneDoma, менять обстановку было не на чём", pozvaliRano)
+	}
+
+	// Секунды спустя DNS наконец видит домашнюю сеть — узнать об этом
+	// должна ДОБИВАЮЩАЯ ПАЧКА быстрых опросов, а не следующее внешнее
+	// событие и не страховочный тикер (Interval=час).
+	dns.ustanovit(true)
+	zhdatZvonok(t, posle.vyzvan) // пачка уже стартовала сама после захода выше
+	posle.srabotat()
+	zhdatZvonok(t, dns.zvonok)
+
+	otmena()
+	<-gotovo
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(kolbekZvali) != 1 || kolbekZvali[0] != Doma {
+		t.Fatalf("колбэк(и): %+v, хочу ровно один вызов с Doma — добивающая пачка обязана поймать смену за секунды после зрячего, но устаревшего захода по событию", kolbekZvali)
+	}
+}
