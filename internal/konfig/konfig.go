@@ -178,7 +178,6 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	if r, ok := d["route"].(map[string]any); ok {
 		delete(r, "override_android_vpn")
 	}
-	dobavitPravilomRezhimQuic(d)
 
 	vhody, _ := d["inbounds"].([]any)
 	k := Kartina{}
@@ -243,6 +242,12 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	if len(udalennyeTegi) > 0 {
 		pochistitPravila(d, udalennyeTegi)
 	}
+	// Тегами входов — уже после того, как выброшенные входы (например,
+	// tun-in без прав) отфильтрованы: правило про udp/443 не должно
+	// ссылаться на вход, которого в итоговом конфиге больше нет — это та же
+	// беда, что чинит pochistitPravila чуть выше, и мы намеренно ставим свой
+	// вызов после неё, а не до.
+	dobavitPravilomRezhimQuic(d, tegiVhodov(ostavshiesya))
 	if len(v.PravilaIzKomplekta) > 0 {
 		// Комплект главнее BezSetevyhPravil (см. комментарий поля): он не
 		// жертвует разбором трафика, а BezSetevyhPravil жертвует.
@@ -278,10 +283,43 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 // googlevideo.com уже попадает в свой rule_set и уходит в туннель как
 // положено.
 //
-// Идемпотентно: если в route.rules уже есть правило с "protocol":"quic" (то
-// ли своё же, вставленное прошлым прогоном, то ли профиль сам решил про
-// QUIC), ничего не делает — профиль главнее.
-func dobavitPravilomRezhimQuic(d map[string]any) {
+// Диагноз 30.08: правило {"protocol":"quic","action":"reject"} само зависело
+// от того же ненадёжного сниффа — на retry/coalescing пакетах снифф не
+// узнаёт QUIC, поле protocol не проставляется, и наше же reject-правило не
+// срабатывает ровно там, где сниффер промахнулся. Заменено на матч по
+// транспорту и порту напрямую (network:udp, port:443) — HTTP/3 всегда ходит
+// по udp/443, и решение больше не зависит от результата сниффа: снифф может
+// вообще не отработать (retry/coalescing), правило сработает всё равно,
+// потому что смотрит на транспорт пакета, а не на то, что о нём решил
+// снифф. У обычных клиентских приложений легитимного не-QUIC udp/443
+// практически не бывает — это то же допущение, на котором стоял исходный
+// фикс.
+//
+// Риск самоотстрела (проверено на internal/konfig/testdata/profil_telefona.json,
+// 30.08): выход профиля — vless с tls+reality на server_port 443, транспорт
+// TCP (никакого поля transport, "network" в самом vless-outbound не udp), и
+// socks — тоже TCP. Ни hysteria2, ни tuic, ни wireguard, чей канал к серверу
+// сам является UDP/443, в профиле нет. Дальше: даже будь такой outbound,
+// route.rules матчит только траффик, ВОШЕДШИЙ через inbound (метаданные
+// соединения несут Inbound-тег) — собственный dial исходящего до его же
+// сервера идёт мимо таблицы маршрутизации внутри реализации outbound'а и под
+// это правило в принципе не попадает. Тем не менее ограничиваем правило
+// явным списком "inbound" — тегами входов, реально оставшихся в профиле
+// ПОСЛЕ фильтрации (вызывающая сторона передаёт их отдельным параметром,
+// см. Prigotovit — вызов стоит после d["inbounds"] = ostavshiesya и после
+// pochistitPravila): это и защита на будущее (если когда-то появится
+// UDP-транспортный outbound или служебный inbound не для трафика
+// пользователя, правило его не заденет), и требование по заданию — теги
+// берутся из профиля, а не хардкодятся.
+//
+// Идемпотентно: если в route.rules уже есть правило с network:"udp" и
+// port:443 (то ли своё же, вставленное прошлым прогоном, то ли профиль сам
+// решил про QUIC/443), ничего не делает — профиль главнее. Идемпотентность
+// проверяется только по network+port, без учёта "inbound": состав входов
+// между прогонами не меняется (см. вызов в Prigotovit), а если бы поменялся
+// — новый список всё равно был бы правильнее старого, перезаписывать
+// чужое/своё правило поверх не наша забота этой функции.
+func dobavitPravilomRezhimQuic(d map[string]any, tegiVhodovPolzovatelya []string) {
 	r, ok := d["route"].(map[string]any)
 	if !ok {
 		return
@@ -292,7 +330,7 @@ func dobavitPravilomRezhimQuic(d map[string]any) {
 		if !ok {
 			continue
 		}
-		if proto, _ := pr["protocol"].(string); proto == "quic" {
+		if praviloUdp443(pr) {
 			return
 		}
 	}
@@ -313,12 +351,77 @@ func dobavitPravilomRezhimQuic(d map[string]any) {
 		break
 	}
 
-	novoye := map[string]any{"protocol": "quic", "action": "reject"}
+	novoye := map[string]any{"network": "udp", "port": 443, "action": "reject"}
+	if len(tegiVhodovPolzovatelya) > 0 {
+		novoye["inbound"] = tegiVhodovPolzovatelya
+	}
 	obnovlennye := make([]any, 0, len(pravila)+1)
 	obnovlennye = append(obnovlennye, pravila[:vstavka]...)
 	obnovlennye = append(obnovlennye, novoye)
 	obnovlennye = append(obnovlennye, pravila[vstavka:]...)
 	r["rules"] = obnovlennye
+}
+
+// tegiVhodov собирает теги входов из уже отфильтрованного списка inbounds
+// (тех, что реально останутся в конфиге) — используется, чтобы ограничить
+// защитное правило про udp/443 входами пользователя, а не хардкодить имена
+// вроде "tun-in"/"mixed-in".
+func tegiVhodov(vhody []any) []string {
+	var tegi []string
+	for _, v := range vhody {
+		vh, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if teg, _ := vh["tag"].(string); teg != "" {
+			tegi = append(tegi, teg)
+		}
+	}
+	return tegi
+}
+
+// praviloUdp443 сообщает, матчит ли правило route.rules udp/443 напрямую —
+// это форма нашего защитного правила (см. dobavitPravilomRezhimQuic), не
+// зависящая от сниффа. Совпадение по network+port, action не проверяется —
+// профиль может решить про udp/443 иначе (не обязательно reject), и это
+// тоже повод не вставлять своё правило поверх.
+func praviloUdp443(pr map[string]any) bool {
+	if !setevoyEstUdp(pr["network"]) {
+		return false
+	}
+	return portChislom(pr["port"]) == 443
+}
+
+// setevoyEstUdp проверяет поле network route.rule — sing-box кодирует его
+// либо одиночной строкой, либо списком строк (badoption.Listable).
+func setevoyEstUdp(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return x == "udp"
+	case []any:
+		for _, s := range x {
+			if str, _ := s.(string); str == "udp" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// portChislom приводит поле port route.rule к float64 для сравнения — после
+// json.Marshal/Unmarshal числа приходят как float64, а наше же только что
+// вставленное правило хранит его как int.
+func portChislom(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case int:
+		return float64(x)
+	case json.Number:
+		f, _ := x.Float64()
+		return f
+	}
+	return -1
 }
 
 // Razobrat — только прочитать профиль, ничего не меняя: нужно, когда конфиг
