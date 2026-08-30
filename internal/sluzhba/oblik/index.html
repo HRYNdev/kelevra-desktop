@@ -102,9 +102,43 @@
     bottom:0; padding-bottom:18px;
     display:flex; flex-direction:column; justify-content:center;
   }
-  .lenta::-webkit-scrollbar { width:8px; }
-  .lenta::-webkit-scrollbar-thumb { background:var(--gran); border-radius:4px; }
-  .lenta::-webkit-scrollbar-thumb:hover { background:var(--gran2); }
+  /* Полоса прокрутки — один общий блок на все четыре скролл-контейнера
+     (.lenta, #tab-set, .shtorka ниже, #zhurnal), а не четыре разрозненных
+     копии (было так до этой правки — у .shtorka своих правил не было вовсе).
+     Chromium без них рисует свою дефолтную: светлую (~#f0f0f0 трек,
+     ~#a8a8a8 ползунок), ~15px, с треугольными кнопками-стрелками на концах —
+     поперёк тёмного интерфейса это и есть «эта *** полосочка... ***
+     ***... выглядит криво» (хозяин, 30.08, дословно). headless Chromium эту
+     полосу вообще не рисует (в кадре её пикселей просто нет), поэтому щуп,
+     который её ловит (stend/oblik_polosa_prokrutki.py), гоняется headed,
+     под Xvfb — headless тут был бы слепым зелёным. */
+  /* ЩУП-ПОЛОСА-ПРОКРУТКИ: НАЧАЛО (сентинел для stend/oblik_polosa_prokrutki.py
+     --kontrol — по нему щуп вырезает ровно этот блок целиком, не трогая
+     соседние правила построчным regex по слову "scrollbar"). */
+  .lenta, #tab-set, .shtorka, #zhurnal {
+    scrollbar-width:thin; scrollbar-color:var(--gran) transparent;
+  }
+  .lenta::-webkit-scrollbar, #tab-set::-webkit-scrollbar,
+  .shtorka::-webkit-scrollbar, #zhurnal::-webkit-scrollbar { width:8px; }
+  .lenta::-webkit-scrollbar-track, #tab-set::-webkit-scrollbar-track,
+  .shtorka::-webkit-scrollbar-track, #zhurnal::-webkit-scrollbar-track,
+  .lenta::-webkit-scrollbar-corner, #tab-set::-webkit-scrollbar-corner,
+  .shtorka::-webkit-scrollbar-corner, #zhurnal::-webkit-scrollbar-corner { background:transparent; }
+  /* Кнопки-стрелки на концах полосы — та самая деталь с фото: убираем совсем,
+     а не просто красим, иначе останется дефолтный светлый треугольник. */
+  .lenta::-webkit-scrollbar-button, #tab-set::-webkit-scrollbar-button,
+  .shtorka::-webkit-scrollbar-button, #zhurnal::-webkit-scrollbar-button {
+    display:none; width:0; height:0;
+  }
+  .lenta::-webkit-scrollbar-thumb, #tab-set::-webkit-scrollbar-thumb,
+  .shtorka::-webkit-scrollbar-thumb, #zhurnal::-webkit-scrollbar-thumb {
+    background:var(--gran); border-radius:4px;
+  }
+  .lenta::-webkit-scrollbar-thumb:hover, #tab-set::-webkit-scrollbar-thumb:hover,
+  .shtorka::-webkit-scrollbar-thumb:hover, #zhurnal::-webkit-scrollbar-thumb:hover {
+    background:var(--gran2);
+  }
+  /* ЩУП-ПОЛОСА-ПРОКРУТКИ: КОНЕЦ */
 
   /* Верхний отступ живёт здесь, а не на .lenta: у скроллящегося контейнера
      top-padding даёт спорную полосу над содержимым при долгой прокрутке.
@@ -142,9 +176,6 @@
     height:100%; display:flex; flex-direction:column;
     overflow-y:auto; overflow-x:hidden; padding-bottom:var(--nizhnyaya);
   }
-  #tab-set::-webkit-scrollbar { width:8px; }
-  #tab-set::-webkit-scrollbar-thumb { background:var(--gran); border-radius:4px; }
-  #tab-set::-webkit-scrollbar-thumb:hover { background:var(--gran2); }
   /* Тот же капкан, что у .taby/.perekl-ryad/.zagolovok-bloka выше (см. их
      комментарии): ID-селектор #tab-set с явным display:flex ПЕРЕБИВАЕТ
      встроенное [hidden]{display:none} по специфичности, а не по порядку —
@@ -694,8 +725,6 @@
     font:11.5px/1.45 ui-monospace, Consolas, monospace; color:var(--tihiy);
     white-space:pre-wrap; word-break:break-word; text-align:left; user-select:text;
   }
-  #zhurnal::-webkit-scrollbar { width:8px; }
-  #zhurnal::-webkit-scrollbar-thumb { background:var(--gran); border-radius:4px; }
 
   /* Экран кода — единственный, у него нет нижней панели: центрируем по окну.
      52px + те же 16px, что раньше давал padding-top у .lenta (он переехал в
