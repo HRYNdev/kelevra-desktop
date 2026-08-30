@@ -211,25 +211,41 @@ echo "── настоящий клик мышью: правая кнопка �
 DISPLAY="$DISPLAY_TREYA" xdotool mousemove $KOORD click 3
 sleep 1.5
 IKONKA_X=${KOORD%% *}; IKONKA_Y=${KOORD##* }
-naiti_menyu() { # печатает "X Y WxH" popup-окна TrackPopupMenu рядом с иконкой
-  DISPLAY="$DISPLAY_TREYA" xwininfo -root -tree 2>/dev/null \
+# Признак окна снят ЖИВЬЁМ 30.08 дампом xwininfo -root -tree в момент открытого
+# меню: popup TrackPopupMenu — окно САМОГО ПРОЦЕССА kelevra.exe (WM_CLASS =
+# ("kelevra.exe" "kelevra.exe")), а не explorer.exe. Хост трея и подсказка
+# значка («Kelevra: VPN включён») — окна explorer.exe, у них другой WM_CLASS;
+# единственное окно kelevra.exe крупнее его же Default IME (1x1) — и есть
+# popup (в дампе: 128x63+13+39). Геометрия (h>40,w>20) здесь — только отсев
+# крошечного Default IME, а не основной признак, как было раньше.
+EXE_CLASS=$(basename "$EXE" | tr '[:upper:]' '[:lower:]')
+naiti_menyu() { # печатает "X Y WxH" popup-окна TrackPopupMenu; на STDERR — ошибка+дерево при неоднозначности
+  local tree kandidaty n
+  tree=$(DISPLAY="$DISPLAY_TREYA" xwininfo -root -tree 2>/dev/null)
+  kandidaty=$(printf '%s\n' "$tree" \
+    | grep -F "(\"$EXE_CLASS\" \"$EXE_CLASS\")" \
     | grep -oE '[0-9]+x[0-9]+\+[0-9]+\+[0-9]+' \
     | while IFS='x+' read -r w h x y; do
-        # popup меню — окно ЗАМЕТНО выше строки иконок (>40px) и не 1x1 служебное
-        if [ "$h" -gt 40 ] && [ "$w" -gt 20 ] && [ "$x" -ge $((IKONKA_X - 20)) ]; then
-          echo "$x $y $w $h"
-          break
-        fi
-      done
+        { [ "$h" -gt 40 ] && [ "$w" -gt 20 ]; } && echo "$x $y $w $h"
+      done)
+  n=$(printf '%s\n' "$kandidaty" | grep -c '[0-9]')
+  if [ "$n" -ne 1 ]; then
+    echo "ОШИБКА: окон-кандидатов меню (WM_CLASS=$EXE_CLASS, h>40 w>20) = $n, нужно ровно 1" >&2
+    printf '%s\n' "$tree" >&2
+    return 1
+  fi
+  printf '%s\n' "$kandidaty"
 }
 MENYU=""
+OSHIBKA_MENYU="$STEND/naiti_menyu_poslednyaya_oshibka.log"
 for _ in $(seq 1 8); do
-  MENYU=$(naiti_menyu)
+  MENYU=$(naiti_menyu 2>"$OSHIBKA_MENYU")
   [ -n "$MENYU" ] && break
   sleep 0.5
 done
 if [ -z "$MENYU" ]; then
-  echo "🔴 ПРОВАЛ: контекстное меню не появилось после правого клика по $KOORD"
+  echo "🔴 ПРОВАЛ: контекстное меню не появилось/окно не однозначно после правого клика по $KOORD"
+  cat "$OSHIBKA_MENYU" 2>/dev/null
   exit 1
 fi
 read -r MX MY MW MH <<<"$MENYU"
