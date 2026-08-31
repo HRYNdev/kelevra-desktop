@@ -13,6 +13,7 @@ package proksi
 
 import (
 	"log"
+	"os"
 	"runtime"
 	"strings"
 	"syscall"
@@ -23,9 +24,29 @@ import (
 
 const putNastroek = `Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 
+// tolkoSmotrim — KELEVRA_PROKSI=net: НИЧЕГО не менять в настройках сети этой
+// машины, только читать. Той же природы переменная, что KELEVRA_PRAVA=net в
+// internal/prava, и заведена по той же причине.
+//
+// Замер 31.08: проверки, собранные под Windows и запущенные на НАСТОЯЩЕЙ
+// Windows (а не под wine, как на стенде), доходят до Postavit — и системный
+// прокси машины уезжает на 127.0.0.1:2412, порт, за которым в этот момент
+// никого нет. Это ровно та авария, из-за которой у человека дважды пропадал
+// интернет, только устроенная не приложением, а его же проверками. Ставит
+// переменную TestMain пакета internal/sluzhba; у пользователя её нет.
+func tolkoSmotrim() bool { return os.Getenv("KELEVRA_PROKSI") == "net" }
+
 // Snyat выключает системный прокси, если он включён.
 // Возвращает true, если что-то действительно было выключено.
 func Snyat() bool {
+	if tolkoSmotrim() {
+		log.Printf("системный прокси: KELEVRA_PROKSI=net — настройки сети машины не трогаю")
+		UbratMetku()
+		return false
+	}
+	// Метку читаем ДО всякого UbratMetku: в ней лежит адрес, который поставили
+	// МЫ, и только он даёт право стереть строку ProxyServer (см. pribratSled).
+	nash, estMetka := ProchestMetku()
 	k, err := registry.OpenKey(registry.CURRENT_USER, putNastroek, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		log.Printf("системный прокси: не открыть настройки: %v", err)
@@ -35,6 +56,9 @@ func Snyat() bool {
 
 	vkl, _, err := k.GetIntegerValue("ProxyEnable")
 	if err == nil && vkl == 0 {
+		if estMetka {
+			pribratSled(k, nash) // галочка уже снята, а наша строка адреса могла остаться
+		}
 		UbratMetku() // уже снят (в т.ч. этим же Snyat() с прошлого раза) — метка стала лишней
 		return false // никто ничего не включал — не трогаем чужие настройки
 	}
@@ -50,16 +74,53 @@ func Snyat() bool {
 	if err := cherezOpciyu75("", flagPryamo); err != nil {
 		log.Printf("системный прокси: опция 75 не сняла (%v) — сняли реестром", err)
 	}
-	// Адрес не стираем: выключенная галочка сайты уже не ломает, а стирать
-	// строку незачем. Оговорка честности: если адрес в реестре наш (его
-	// поставил Postavit или ядро), то чужой адрес, стоявший там до нас, уже
-	// затёрт — вернуть его «одной галочкой» человек не сможет, ему придётся
-	// вписать свой прокси заново. Пока никто на это не жаловался, но
-	// считать, что мы ничего не трогали, нельзя.
+	// Свой адрес из реестра стираем. До 31.08 он оставался лежать: сайты
+	// выключенная галочка не ломает, и казалось, что строка безобидна. Она не
+	// безобидна — она врёт при разборе аварии. 31.08 по строке
+	// «ProxyServer=http://127.0.0.1:2412» при ProxyEnable=0 дважды искали
+	// причину пропавшего интернета, которой там не было. За собой прибираем
+	// целиком, а не наполовину.
+	if estMetka {
+		pribratSled(k, nash)
+	}
 	soobshchitSisteme()
 	UbratMetku()
 	log.Printf("системный прокси снят")
 	return true
+}
+
+// nashSled отвечает на единственный вопрос, который даёт право стереть чужую
+// с виду строку из реестра: «то, что лежит в ProxyServer, — это ровно тот
+// адрес, который поставили МЫ?». Сравнение через Contains по той же причине,
+// что и в Stoit: ядро пишет адрес со схемой («http://127.0.0.1:2412»), а в
+// метке он лежит без неё («127.0.0.1:2412»).
+//
+// Пустая метка (её нет) или пустая строка в реестре — всегда «нет»: без
+// доказательства чужую настройку не трогаем никогда, даже выключенную.
+func nashSled(vReestre, nash string) bool {
+	vReestre, nash = strings.TrimSpace(vReestre), strings.TrimSpace(nash)
+	if vReestre == "" || nash == "" {
+		return false
+	}
+	return strings.Contains(vReestre, nash)
+}
+
+// pribratSled стирает строку ProxyServer, если в ней стоит наш адрес nash.
+// Чужой адрес оставляет как есть и говорит об этом в журнал.
+func pribratSled(k registry.Key, nash string) {
+	server, _, err := k.GetStringValue("ProxyServer")
+	if err != nil {
+		return // строки нет вовсе — прибирать нечего
+	}
+	if !nashSled(server, nash) {
+		log.Printf("системный прокси: в реестре не наш адрес (%q против нашего %q) — не трогаю", server, nash)
+		return
+	}
+	if err := k.DeleteValue("ProxyServer"); err != nil {
+		log.Printf("системный прокси: свою строку адреса стереть не вышло: %v", err)
+		return
+	}
+	log.Printf("системный прокси: убрал за собой строку адреса (%s)", server)
 }
 
 // Stoit сообщает, стоит ли прямо сейчас в системе прокси на адрес adres.
@@ -99,6 +160,10 @@ func Stoit(adres string) bool {
 //
 // Возвращает true, если хотя бы один из путей прошёл.
 func Postavit(adres string) bool {
+	if tolkoSmotrim() {
+		log.Printf("системный прокси: KELEVRA_PROKSI=net — %s в настройки сети машины не пишу", adres)
+		return false
+	}
 	poOpcii := cherezOpciyu75(adres, flagCherezProksi|flagPryamo)
 	if poOpcii != nil {
 		// Под wine (наш стенд) опция 75 не реализована и падает с 12009 —
