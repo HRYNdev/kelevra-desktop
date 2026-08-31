@@ -133,40 +133,19 @@ type Nastroyki struct {
 	// (миграция ставит true, «уже спрашивали»); nil при отсутствии файла —
 	// подлинно чистый инсталл, спросить НУЖНО (миграция ставит false).
 	PravaZaprosheny *bool `json:"prava_zaprosheny,omitempty"`
-	// OtpravlyatZhurnaly — раз в сутки отдавать свои логи разработчику
-	// (internal/zhurnaly). По умолчанию ВКЛЮЧЕНО — и поэтому указатель, а не
-	// голый bool, ровно по той же причине, что и у PravaZaprosheny выше:
-	// json.Unmarshal превращает отсутствующее поле в false, и на bool
-	// «человек выключил сам» было бы неотличимо от «файл настроек старше
-	// этой возможности». nil читается как «включено» (см. ZhurnalyOtpravlyat).
-	OtpravlyatZhurnaly *bool `json:"otpravlyat_zhurnaly,omitempty"`
+	// Поля otpravlyat_zhurnaly здесь БОЛЬШЕ НЕТ. Оно держало тумблер
+	// «Отправлять логи разработчику» в настройках; 01.09 хозяин: «есть зачем то
+	// кнопка не отправлять данные разработчику, я вроде говорил об этом» —
+	// тем же днём тумблер убрали и на телефоне. Отправка безусловна.
+	// Старый файл настроек с этим полем читается как и раньше: лишние ключи
+	// json.Unmarshal молча пропускает, а Sohranit перепишет файл уже без него.
+	// Ключ намеренно НЕ переиспользовать под другой смысл — на дисках у людей
+	// он ещё лежит со старым значением.
 	// OtpravkaZhurnalovKogda — когда отправка удалась в последний раз, unix.
 	// Живёт на диске, а не в памяти процесса: приложение висит в трее
 	// неделями, но и перезапускается (обновлением, UAC) — без диска каждый
 	// перезапуск означал бы «сегодня ещё не слали» и повторную посылку.
 	OtpravkaZhurnalovKogda int64 `json:"otpravka_zhurnalov_kogda,omitempty"`
-}
-
-// ZhurnalyOtpravlyat — включена ли суточная отправка журналов. nil, то есть
-// отсутствие поля в файле настроек, значит ВКЛЮЧЕНО: это состояние по
-// умолчанию, и старая установка обязана получить его при обновлении, а не
-// молчаливое «выключено».
-//
-// Под тем же zamok, что и остальные поля-указатели: читает HTTP-обработчик
-// sostoyanie, а пишет ручка тумблера и фоновая горутина отправки.
-func (n *Nastroyki) ZhurnalyOtpravlyat() bool {
-	zamok.Lock()
-	defer zamok.Unlock()
-	return n.OtpravlyatZhurnaly == nil || *n.OtpravlyatZhurnaly
-}
-
-// UstanovitOtpravkuZhurnalov — тумблер из окна. Сохранение на диск делает
-// вызывающий (Sohranit берёт тот же zamok, держать его тут нельзя).
-func (n *Nastroyki) UstanovitOtpravkuZhurnalov(vklyuchit bool) {
-	zamok.Lock()
-	defer zamok.Unlock()
-	v := vklyuchit
-	n.OtpravlyatZhurnaly = &v
 }
 
 // OtmetitOtpravkuZhurnalov запоминает момент удавшейся отправки.
