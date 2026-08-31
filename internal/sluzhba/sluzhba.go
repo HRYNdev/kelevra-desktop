@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +35,10 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
 	"github.com/HRYNdev/kelevra-desktop/internal/pravila"
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
+	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
+	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+	"github.com/HRYNdev/kelevra-desktop/internal/zhurnaly"
 )
 
 //go:embed oblik/*
@@ -121,6 +125,24 @@ type Sluzhba struct {
 	// подключён (стенд-тесты внутри пакета).
 	MetkaObnovleniya func(versiya string)
 
+	// MetkaZashchity — как показать на значке трея, ЧТО именно сейчас
+	// защищено (cmd/kelevra/metka_zashchity.go: pometitZashchitu). Той же
+	// природы, что MetkaObnovleniya выше: состояние, а не событие.
+	//
+	// Зачем вообще. Подсказка значка до 31.08 была константой «Kelevra: VPN
+	// включён» и говорила её одинаково в обоих режимах. В прокси-режиме это
+	// прямая ложь: через Kelevra идут только программы, уважающие системный
+	// прокси, и только TCP — весь UDP, а значит и QUIC, а значит и YouTube,
+	// уходит к провайдеру мимо. Копия висит в трее неделями, и подсказка —
+	// единственное, что человек видит, не открывая окна. Она обязана
+	// различать полную защиту и половинную.
+	//
+	// chastichnaya — защита половинная (konfig.Kartina.Chastichnaya),
+	// pochemu — почему, словами человека (konfig.Kartina.PochemuChastichnaya).
+	// podnyata=false — защиты сейчас нет вовсе. nil — хук не подключён
+	// (стенд-тесты внутри этого пакета).
+	MetkaZashchity func(podnyata, chastichnaya bool, pochemu string)
+
 	// PerezapuskPosleObnovleniya — как поднять новую копию после того, как
 	// PostavitNaydennoe заменила .exe на диске: та же передача смены, что уже
 	// работает у prava.Poprosit после согласия на UAC (cmd/kelevra/main.go:
@@ -171,6 +193,24 @@ type Sluzhba struct {
 	avtorezhimOtmena context.CancelFunc     // не nil, пока служитель крутится
 	avtorezhimEkz    *avtorezhim.Avtorezhim // тот же экземпляр — источник обстановки для /api/sostoyanie
 
+	// avtorezhimPokolenie — номер ПОСЛЕДНЕГО решения человека про автомат.
+	// Растёт на каждое его слово: включил автомат (vklyuchitAvtorezhim,
+	// zapustitAvtorezhimSNachala) и выключил (OstanovitAvtorezhim — её же
+	// зовут ручка /api/avtorezhim и кнопка «Отключить»).
+	//
+	// Зачем. Заход авторежима идёт секундами (зонды), а подъём защиты — до
+	// 70 с (ядро стартует). Человек за это время успевает нажать «Отключить»,
+	// и заход, начатый ДО нажатия, доводил своё решение до конца уже ПОСЛЕ
+	// него: защита поднималась обратно сама. Со стороны это «нажал отключить,
+	// а оно само включилось» — кнопка выглядит сломанной, и хозяин на такое уже
+	// ругался («авто режим ваще *** не работает»).
+	//
+	// Служитель запоминает поколение, при котором был заведён, и приведение
+	// защиты сверяет его перед тем, как что-то сделать (avtorezhimAktualen).
+	// Слово человека всегда бьёт решение автомата, начатое раньше, и никакой
+	// синхронизации по времени для этого не нужно — только сравнение чисел.
+	avtorezhimPokolenie uint64
+
 	// avtorezhimKnopkaObstanovka — обстановка, увиденная последним заходом
 	// domaSeychas (кнопка «Подключиться»). Отдельно от avtorezhimEkz: тот
 	// живёт, только пока фоновый служитель поднят тумблером
@@ -178,6 +218,58 @@ type Sluzhba struct {
 	// тумблера не касаясь (заказ хозяина 28.08). /api/sostoyanie берёт отсюда,
 	// когда фонового служителя нет.
 	avtorezhimKnopkaObstanovka avtorezhim.Sostoyanie
+
+	// Суточная отправка журналов (internal/zhurnaly). Оба поля под общим
+	// s.zamok: читает их тикер, а пишет он же и ручка тумблера.
+	//
+	// zhurnalyPopytka — когда ПЫТАЛИСЬ в последний раз, удачно или нет. В
+	// памяти процесса, а не на диске, нарочно: она держит правило «повтор не
+	// чаще раза в час», а перезапуск копии — это и так новая попытка, ждать
+	// после него лишний час незачем. Удача, в отличие от попытки, живёт на
+	// диске (hranenie.Nastroyki.OtpravkaZhurnalovKogda).
+	zhurnalyPopytka time.Time
+	// zhurnalyIdut — посылка уже в пути. Тик каждые несколько минут не должен
+	// начать вторую отправку поверх первой: 25 МБ по слабому каналу уходят
+	// дольше, чем идёт тик.
+	zhurnalyIdut bool
+	// otpravshchikZhurnalovDlyaStenda — точка подмены для проверок: настоящий
+	// Otpravshchik ходит в сеть и читает живую папку приложения. nil в бою.
+	otpravshchikZhurnalovDlyaStenda *zhurnaly.Otpravshchik
+
+	// pravaDlyaStenda — точка подмены prava.Est() при СБОРКЕ КОНФИГА. nil в
+	// бою, и тогда спрашивается настоящий процесс.
+	//
+	// Зачем она есть. Лестница деградации режимов начинается с попытки поднять
+	// туннель, а туннель бывает только при правах администратора — то есть
+	// весь путь «туннель не поднялся → откат в режим браузеров» на стенде
+	// иначе не воспроизвести вовсе: prava.Est() отвечает про настоящий
+	// процесс, а гонять проверки от администратора значит поднимать на машине
+	// проверяющего настоящий сетевой адаптер (запрет трогать сеть). Тот же
+	// приём, что Adapter в internal/tunnel и zapustitYadro рядом: подменяем
+	// ровно один ответ системы, а проверяем своё решение по нему.
+	//
+	// Только сборка конфига: /api/sostoyanie про права отвечает человеку и
+	// обязано спрашивать систему само.
+	pravaDlyaStenda func() bool
+}
+
+// estPrava — единственное место, где сборка конфига спрашивает про права
+// администратора (см. поле pravaDlyaStenda).
+func (s *Sluzhba) estPrava() bool {
+	if s.pravaDlyaStenda != nil {
+		return s.pravaDlyaStenda()
+	}
+	return prava.Est()
+}
+
+// rezhimKartiny — режим, под который собран лежащий на диске конфиг ядра.
+// Отдельным методом, потому что спрашивают его из-под чужих замков и в разгар
+// подъёма защиты: s.kartina меняется каждой пересборкой конфига, и читать её
+// поле мимо s.zamok нельзя.
+func (s *Sluzhba) rezhimKartiny() konfig.Rezhim {
+	s.zamok.Lock()
+	defer s.zamok.Unlock()
+	return s.kartina.Rezhim
 }
 
 // Novaya собирает службу на настоящих путях приложения.
@@ -221,7 +313,7 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	if err != nil {
 		return err
 	}
-	dop.Prava = prava.Est()
+	dop.Prava = s.estPrava()
 	gotovyy, k, err := konfig.Prigotovit(syroy, dop)
 	if err != nil {
 		return err
@@ -234,7 +326,7 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	s.kartina = k
 	s.zamok.Unlock()
 	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s",
-		k.Rezhim, prava.Est(), k.EstTunnel, k.ClashAdres, zametka(k.Zametka))
+		k.Rezhim, dop.Prava, k.EstTunnel, k.ClashAdres, zametka(k.Zametka))
 	return nil
 }
 
@@ -281,6 +373,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
 	m.HandleFunc(pref+"/api/zhurnal", s.zhurnal)
+	m.HandleFunc(pref+"/api/zhurnaly_otpravka", s.zhurnalyOtpravkaRuchka)
 	m.HandleFunc(pref+"/api/obnovlenie", s.obnovlenieRuchka)
 	m.HandleFunc(pref+"/api/obnovlenie_proverit", s.obnovlenieProveritRuchka)
 	m.HandleFunc(pref+"/api/obnovlenie_postavit", s.obnovleniePostavitRuchka)
@@ -577,6 +670,172 @@ func (s *Sluzhba) SleditZaObnovleniem(ctx context.Context, period time.Duration)
 	}
 }
 
+// VecherOtpravkiZhurnalov — во сколько по МЕСТНОМУ времени клиент отдаёт свои
+// журналы разработчику. Конец дня выбран не случайно: за день уже случилось
+// всё, что случится, машина ещё не выключена, а канал человеку в этот час не
+// нужен. var, а не const — стенд двигает время, чтобы не ждать 23:30.
+var VecherOtpravkiZhurnalov = 23*time.Hour + 30*time.Minute
+
+// ShagSlezhkiZaZhurnalami — как часто тикер смотрит на часы. Само расписание
+// суточное; шаг нужен лишь чтобы не проспать вечер, если машина проснулась из
+// сна в 23:31, и чтобы повтор после отказа случился в ближайший подходящий
+// час, а не ровно через сутки.
+var ShagSlezhkiZaZhurnalami = 5 * time.Minute
+
+// PovtorPosleOtkaza — не чаще раза в час. Сервер мог лежать, канал мог
+// пропасть; долбиться в него каждые пять минут с посылкой на десятки
+// мегабайт — это не настойчивость, а трата чужого трафика.
+const PovtorPosleOtkaza = time.Hour
+
+// vecherOtpravki — момент «конца дня» для суток, в которые попадает t.
+func vecherOtpravki(t time.Time) time.Time {
+	den := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	return den.Add(VecherOtpravkiZhurnalov)
+}
+
+// poraOtpravlyatZhurnaly — всё расписание одной чистой функцией, чтобы оно
+// проверялось таблицей случаев, а не ожиданием настоящего вечера.
+//
+// Правило: у каждого НАСТУПИВШЕГО вечера есть свои сутки, чтобы посылка ушла.
+// Пока за последний наступивший вечер не отчитались — пробуем, но не чаще
+// раза в час. Наступил следующий вечер — прошлый долг сгорел сам собой
+// (srok уехал вперёд), гнаться за ним не надо.
+//
+// Отдельно это ловит машину, которая в 23:30 была выключена: утром srok — это
+// ВЧЕРАШНИЙ вечер, удачи за ним не было, и посылка уходит сразу, не дожидаясь
+// следующей ночи.
+func poraOtpravlyatZhurnaly(seychas, uspeh, popytka time.Time) bool {
+	srok := vecherOtpravki(seychas)
+	if seychas.Before(srok) {
+		srok = vecherOtpravki(seychas.AddDate(0, 0, -1))
+	}
+	if !uspeh.Before(srok) {
+		return false // за этот вечер уже отчитались
+	}
+	if !popytka.IsZero() && seychas.Sub(popytka) < PovtorPosleOtkaza {
+		return false // недавно пробовали и не вышло — ждём час
+	}
+	return true
+}
+
+// SleditZaZhurnalami крутит суточную отправку по расписанию, пока живёт
+// служба — тем же тикером и тем же ctx, что SleditZaObnovleniem выше.
+//
+// Первой проверки «сразу при старте», в отличие от обновлений, тут нет
+// сознательно: обновление человек ждёт, а посылка журналов — фоновая вещь,
+// которой незачем занимать канал в ту же секунду, когда он открыл приложение.
+// KELEVRA_BEZ_OTPRAVKI_ZHURNALOV=1 глушит слежку целиком — на нём стоят
+// стенды (stend/*.sh), которым сеть тут не нужна и не должна понадобиться.
+func (s *Sluzhba) SleditZaZhurnalami(ctx context.Context, shag time.Duration) {
+	if os.Getenv("KELEVRA_BEZ_OTPRAVKI_ZHURNALOV") == "1" {
+		return
+	}
+	if shag <= 0 {
+		shag = ShagSlezhkiZaZhurnalami
+	}
+	t := time.NewTicker(shag)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.OtpravitZhurnalyEsliPora(ctx, time.Now())
+		}
+	}
+}
+
+// OtpravitZhurnalyEsliPora — один тик расписания. seychas параметром, а не
+// time.Now() внутри: расписание так проверяется без ожидания вечера.
+func (s *Sluzhba) OtpravitZhurnalyEsliPora(ctx context.Context, seychas time.Time) {
+	if !s.Nastroyki.ZhurnalyOtpravlyat() {
+		return // человек выключил тумблер — молчим совсем
+	}
+	var uspeh time.Time
+	if u := s.Nastroyki.KogdaOtpravlyaliZhurnaly(); u > 0 {
+		uspeh = time.Unix(u, 0)
+	}
+	s.zamok.Lock()
+	if s.zhurnalyIdut || !poraOtpravlyatZhurnaly(seychas, uspeh, s.zhurnalyPopytka) {
+		s.zamok.Unlock()
+		return
+	}
+	s.zhurnalyIdut = true
+	s.zhurnalyPopytka = seychas
+	otpravshchik := s.otpravshchikZhurnalovDlyaStenda
+	s.zamok.Unlock()
+	defer func() {
+		s.zamok.Lock()
+		s.zhurnalyIdut = false
+		s.zamok.Unlock()
+	}()
+	if otpravshchik == nil {
+		otpravshchik = s.otpravshchikZhurnalov()
+	}
+	otchet, err := otpravshchik.Otpravit(ctx)
+	if err != nil {
+		// Не удалось — отметки на диске не тронуты, те же байты уйдут в
+		// следующую попытку (не раньше чем через час, см. poraOtpravlyatZhurnaly).
+		log.Printf("отправка журналов не удалась: %v", err)
+		return
+	}
+	if len(otchet.Kuski) == 0 {
+		log.Printf("отправка журналов: нового с прошлого раза нет")
+	} else {
+		log.Printf("журналы отправлены: %d файлов, %d байт (сжато %d), сервер принял %d",
+			len(otchet.Kuski), otchet.SyrykhBayt, otchet.SzhatoBayt, otchet.OtvetBayt)
+	}
+	// «Нечего слать» — тоже отчёт за этот вечер: без отметки тикер вернулся бы
+	// сюда через час и ходил бы впустую до самой ночи.
+	s.Nastroyki.OtmetitOtpravkuZhurnalov(seychas.Unix())
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("не сохранил отметку об отправке журналов: %v", err)
+	}
+}
+
+// otpravshchikZhurnalov собирает боевой отправщик на настоящих путях.
+//
+// Адрес складывается из тех же схемы и хоста, что у подписки: KELEVRA_PODPISKA
+// на стенде уводит и подписку, и журналы на подставной сервер разом — иначе
+// стенд отправлял бы свои выдуманные логи в живой коллектор.
+func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
+	shema := s.Podpiska.Shema
+	if shema == "" {
+		shema = "https"
+	}
+	host := s.Podpiska.Host
+	if host == "" {
+		host = podpiska.Host
+	}
+	return &zhurnaly.Otpravshchik{
+		Adres:     fmt.Sprintf("%s://%s/logs", shema, host),
+		DeviceID:  s.Nastroyki.DeviceID,
+		Versiya:   podpiska.Versiya,
+		Puti:      zhurnaly.Istochniki(hranenie.PutZhurnala(), hranenie.ZapasnayaPapkaZhurnala()),
+		PutMetok:  hranenie.PutOtmetokZhurnalov(),
+		Zagolovki: ustroystvo.Zagolovki,
+	}
+}
+
+// zhurnalyOtpravkaRuchka — тумблер «Отправлять логи разработчику», по образцу
+// avtozapuskRuchka и avtorezhimRuchka.
+func (s *Sluzhba) zhurnalyOtpravkaRuchka(w http.ResponseWriter, r *http.Request) {
+	var vhod struct {
+		Vklyuchit bool `json:"vklyuchit"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
+		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		return
+	}
+	s.Nastroyki.UstanovitOtpravkuZhurnalov(vhod.Vklyuchit)
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		otdat(w, nil, err)
+		return
+	}
+	log.Printf("отправка журналов разработчику: %v", vhod.Vklyuchit)
+	otdat(w, map[string]any{"gotovo": true}, nil)
+}
+
 // zhurnal отдаёт хвост журнала прямо в окно.
 //
 // Иначе единственный способ прислать причину — идти в %LOCALAPPDATA% через
@@ -737,6 +996,21 @@ type otvetSostoyaniya struct {
 	Prava      bool   `json:"prava"`                // запущены ли мы администратором
 	// RuchnoyProksi — система отказалась настроить прокси сама, адрес придётся вписать руками.
 	RuchnoyProksi bool `json:"ruchnoy_proksi,omitempty"`
+	// Chastichnaya — защита ПОЛОВИННАЯ: ядро стоит системным прокси, и мимо
+	// него идёт весь UDP (значит и QUIC, значит и YouTube). Окно по этому
+	// полю рисует круг жёлтым и словом «частично» вместо зелёного
+	// «подключено» — диагноз 31.08, дословно: «впн не выполняет свою
+	// основную функцию». Решение принимает konfig (Kartina.Chastichnaya) —
+	// тот же код, что собирает конфиг, — а не окно выводом из Rezhim:
+	// иначе окно и конфиг разъедутся в день появления третьего режима.
+	//
+	// Как и Zametka, доезжает до окна ТОЛЬКО пока ядро реально поднято: у
+	// опущенной защиты нет ни полной, ни половинной степени, есть «нет
+	// защиты» (см. TestSostoyanieNeNesetZametkuKogdaZashchitaOpushchena).
+	Chastichnaya bool `json:"chastichnaya,omitempty"`
+	// PochemuChastichnaya — почему половинная, словами человека
+	// (konfig.PrichinaBezPrav / PrichinaBezTunnelya). Идёт прямо в окно.
+	PochemuChastichnaya string `json:"pochemu_chastichnaya,omitempty"`
 	// Автозапуск с Windows. Podderzhivaetsya — ложь на не-Windows сборке (тумблер
 	// там нечестно показывать хоть включённым, хоть выключенным: он ничего не
 	// делает). Ustarela — запись есть, но ведёт на другой .exe (переустановка в
@@ -762,6 +1036,28 @@ type otvetSostoyaniya struct {
 	// «выключено вручную» неотличимы, и подсказка врёт «нажмите, чтобы
 	// включить» на то, что человек уже нажал (хозяин, 27.08).
 	OzhidanieDoma bool `json:"ozhidanie_doma"`
+	// AvtorezhimRuchnoy — человек САМ отказался от автомата (выключил тумблер
+	// или нажал «Отключить» при работающем автомате), и клиент больше ничего
+	// за него не решает, пока тот не вернёт тумблер. Отличается от простого
+	// !AvtorezhimVklyuchen тем, что различает «ещё не выбирал» (кнопка
+	// «Подключиться» включит автомат сама) и «выбрал руками» (не включит).
+	AvtorezhimRuchnoy bool `json:"avtorezhim_ruchnoy,omitempty"`
+	// AvtorezhimPolozhenie — вся схема одной строкой для окна: «дома — режим
+	// ожидания», «вне дома — защита включена», «ухожу из дома — поднимаю
+	// защиту» и т.д. хозяин просил (27.08, повторено 28.08 и 29.08), чтобы
+	// переход был ЗАМЕТЕН человеку, а не угадывался по цвету круга: окно
+	// склеивало бы эту строку из четырёх полей само и врало бы на переходах,
+	// потому что порядок их обновления знает только служба.
+	// Пусто — сказать нечего (обстановка неизвестна и автомат не крутится).
+	AvtorezhimPolozhenie string `json:"avtorezhim_polozhenie,omitempty"`
+	// VyhodAvto и VyhodImya — что окно пишет в строке выбора выхода. хозяин
+	// (27.08): «ты туда натыкал Нидерланды прямой, запасной, комната и тд,
+	// должно быть тупо выбор авто режим». Пока человек в список не лазил,
+	// выход ровно один — «Автоматически» (VyhodAvto == true), а конкретные
+	// узлы окно показывает, только если человек полез глубже: их отдаёт
+	// отдельная ручка /api/uzly, и грузить ими главный экран незачем.
+	VyhodAvto bool   `json:"vyhod_avto"`
+	VyhodImya string `json:"vyhod_imya,omitempty"`
 	// NovayaVersiyaDostupna — находка ФОНОВОЙ проверки (SleditZaObnovleniem,
 	// obnovlenieProveritRuchka), а не ручного нажатия кнопки «Проверить
 	// обновление» — та отвечает своим отдельным otvetObnovleniya.Novaya.
@@ -771,14 +1067,112 @@ type otvetSostoyaniya struct {
 	// администратора хоть раз, отдельно от Prava (есть ли они СЕЙЧАС): вместе
 	// эти два поля различают «ещё не спрашивали» и «спрашивали и отказали».
 	PravaUzheSprosheny bool `json:"prava_uzhe_sprosheny"`
+	// ChelovekImya и UstroystvoImya — как сервер называет ВЛАДЕЛЬЦА ключа и
+	// ИМЕННО ЭТУ машину (/info, поля person.name и device.name; вторую он
+	// узнаёт по заголовкам устройства, см. internal/ustroystvo). Пусто —
+	// сервер старый и таких полей не шлёт: окно тогда просто не рисует
+	// строку, пустоты на её месте не остаётся.
+	ChelovekImya   string `json:"chelovek_imya,omitempty"`
+	UstroystvoImya string `json:"ustroystvo_imya,omitempty"`
+	// Суточная отправка журналов разработчику. Vklyuchena по умолчанию
+	// истинна (hranenie.Nastroyki.ZhurnalyOtpravlyat), Kogda — unix последней
+	// удавшейся отправки, 0 — не отправляли ни разу.
+	ZhurnalyOtpravkaVklyuchena bool  `json:"zhurnaly_otpravka_vklyuchena"`
+	ZhurnalyOtpravkaKogda      int64 `json:"zhurnaly_otpravka_kogda,omitempty"`
 }
 
 // ozhidanieDoma — истинно ровно тогда, когда авторежим включён, обстановка
 // «дома» и ядро прямо сейчас не работает (защита осознанно опущена или ещё
 // не поднималась). Вынесена отдельной функцией от полей otvetSostoyaniya,
 // чтобы условие проверялось таблицей случаев без поднятия HTTP-стенда.
+// obyomZashchity — что окно узнаёт про ОБЪЁМ защиты: заметка (что именно
+// сейчас идёт через Kelevra), признак половинчатости и её причина.
+//
+// Отдельной чистой функцией от полей otvetSostoyaniya — по той же причине, по
+// которой рядом стоит ozhidanieDoma: правило проверяется таблицей случаев без
+// поднятия HTTP-стенда и без живого ядра.
+//
+// Единственное правило целиком: пока ядро НЕ работает, все три ответа пусты.
+// s.kartina заполняется при сборке конфига и переживает опускание защиты
+// молча — ни ручной тумблер (OpustitZashchitu), ни авторежим
+// (avtorezhimKolbek) её не чистят. Без этого условия окно продолжало бы
+// говорить про объём защиты, которой в этот момент нет вовсе (регрессия
+// 22.08, TestSostoyanieNeNesetZametkuKogdaZashchitaOpushchena) — а с
+// появлением половинчатости то же самое врало бы ещё и жёлтым кругом
+// «частично» на выключенном VPN.
+func obyomZashchity(sost string, k konfig.Kartina) (zametka string, chastichnaya bool, pochemu string) {
+	if sost != string(yadro.Rabotaet) {
+		return "", false, ""
+	}
+	return k.Zametka, k.Chastichnaya, k.PochemuChastichnaya
+}
+
 func ozhidanieDoma(avtorezhimVklyuchen bool, obstanovka string, sost string) bool {
 	return avtorezhimVklyuchen && obstanovka == avtorezhim.Doma.String() && sost != string(yadro.Rabotaet)
+}
+
+// ImyaAvtoVyhoda — как называется выбор выхода, пока человек не лазил в
+// список сам.
+const ImyaAvtoVyhoda = "Автоматически"
+
+// vyhodDlyaOkna — что окно пишет в строке выбора выхода (см. поля VyhodAvto
+// и VyhodImya). Пустой uzly значит «человек ничего не выбирал» — тогда выход
+// один и называется «Автоматически»; выбранный руками узел показывается как
+// есть, иначе человек не поймёт, почему автоматика вдруг перестала работать.
+//
+// Чистая функция, а не метод: правило «пока не выбирал — Автоматически»
+// проверяется таблицей, без HTTP-стенда и живого ядра.
+func vyhodDlyaOkna(uzly map[string]string) (avto bool, imya string) {
+	if len(uzly) == 0 {
+		return true, ImyaAvtoVyhoda
+	}
+	klyuchi := make([]string, 0, len(uzly))
+	for k := range uzly {
+		klyuchi = append(klyuchi, k)
+	}
+	sort.Strings(klyuchi)
+	return false, uzly[klyuchi[0]]
+}
+
+// polozhenieAvtorezhima — схема хозяина одной строкой для окна: где мы, что
+// автомат из этого делает и что человек сейчас увидит.
+//
+// Строка пишется для ЧЕЛОВЕКА, поэтому называет и обстановку, и следствие:
+// «дома — режим ожидания» вместо голого «дома». Переход обязан быть заметен
+// (хозяин, 27.08, повторено 28.08 и 29.08), а заметен он ровно в тот момент,
+// когда обстановка уже сменилась, а ядро ещё не догнало — отсюда отдельные
+// «опускаю защиту» и «поднимаю защиту».
+//
+// Чистая функция от четырёх фактов, а не сборка внутри обработчика: правило
+// проверяется таблицей случаев.
+func polozhenieAvtorezhima(vklyuchen, ruchnoy bool, obstanovka, sost, slepPrichina string) string {
+	if ruchnoy {
+		return "решаете вы: автомат выключен"
+	}
+	if !vklyuchen {
+		return ""
+	}
+	rabotaet := sost == string(yadro.Rabotaet) || sost == string(yadro.Podnimaem)
+	if slepPrichina != "" {
+		// Слепота дольше avtorezhim.PodryadDoPrichiny заходов: автомат
+		// честно признаётся, что не решает ничего, вместо того чтобы
+		// изображать работу молча.
+		return "не понимаю, где вы: " + slepPrichina
+	}
+	switch obstanovka {
+	case avtorezhim.Doma.String():
+		if rabotaet {
+			return "дома — опускаю защиту"
+		}
+		return "дома — режим ожидания"
+	case avtorezhim.VneDoma.String():
+		if rabotaet {
+			return "вне дома — защита включена"
+		}
+		return "вне дома — поднимаю защиту"
+	default:
+		return "определяю, где вы"
+	}
 }
 
 func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
@@ -797,6 +1191,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	o.KachaemBin = s.kachaemBin
 	if s.svedeniya != nil {
 		o.Imya, o.DoUnix = s.svedeniya.Imya, s.svedeniya.Do
+		o.ChelovekImya, o.UstroystvoImya = s.svedeniya.ImyaCheloveka(), s.svedeniya.ImyaUstroystva()
 	}
 	k := s.kartina
 	if s.naydennoeObnovlenie != nil {
@@ -812,9 +1207,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	// врать про объём защиты, которой в этот момент нет вовсе. Заметка
 	// авторежима (зачем защита опущена) — отдельный текст, живёт в JS
 	// (zametkaAvtorezhima, oblik/index.html) и этой правки не касается.
-	if o.Sost == string(yadro.Rabotaet) {
-		o.Zametka = k.Zametka
-	}
+	o.Zametka, o.Chastichnaya, o.PochemuChastichnaya = obyomZashchity(o.Sost, k)
 	o.Prava = prava.Est()
 	o.MozhnoTun = k.EstTunnel && !o.Prava
 	o.PravaUzheSprosheny = s.Nastroyki.UzheSprosiliPrava()
@@ -849,8 +1242,13 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		// на тумблер).
 		o.AvtorezhimObstanovka = s.avtorezhimKnopkaObstanovka.String()
 	}
+	o.AvtorezhimRuchnoy = s.Nastroyki.RuchnoyVybor
 	s.avtorezhimZamok.Unlock()
 	o.OzhidanieDoma = ozhidanieDoma(o.AvtorezhimVklyuchen, o.AvtorezhimObstanovka, o.Sost)
+	o.AvtorezhimPolozhenie = polozhenieAvtorezhima(o.AvtorezhimVklyuchen, o.AvtorezhimRuchnoy, o.AvtorezhimObstanovka, o.Sost, o.AvtorezhimSlepPrichina)
+	o.VyhodAvto, o.VyhodImya = vyhodDlyaOkna(s.Nastroyki.Uzly)
+	o.ZhurnalyOtpravkaVklyuchena = s.Nastroyki.ZhurnalyOtpravlyat()
+	o.ZhurnalyOtpravkaKogda = s.Nastroyki.KogdaOtpravlyaliZhurnaly()
 	otdat(w, o, nil)
 }
 
@@ -893,7 +1291,11 @@ func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		// Человек сам отказался от автомата — запоминаем это отдельным полем
+		// (hranenie.Nastroyki.RuchnoyVybor), чтобы кнопка «Подключиться»
+		// больше не включала автомат за него: с этой минуты решает он.
 		s.Nastroyki.Avtorezhim = false
+		s.Nastroyki.RuchnoyVybor = true
 		if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 			otdat(w, nil, err)
 			return
@@ -919,6 +1321,8 @@ func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
 // заход — см. TestPodklyuchitDomaNePodnimaetZashchitu.
 func (s *Sluzhba) vklyuchitAvtorezhim(nachalo avtorezhim.Sostoyanie) error {
 	s.Nastroyki.Avtorezhim = true
+	// Автомат включён — прежний ручной отказ снят: человек передумал.
+	s.Nastroyki.RuchnoyVybor = false
 	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 		return err
 	}
@@ -948,6 +1352,10 @@ func (s *Sluzhba) zapustitAvtorezhimSNachala(roditelskiy context.Context, nachal
 	}
 	ctx, otmena := context.WithCancel(roditelskiy)
 	s.avtorezhimOtmena = otmena
+	// Новое слово человека: всё, что решил предыдущий служитель и не успело
+	// примениться, с этой секунды недействительно.
+	s.avtorezhimPokolenie++
+	moyoPokolenie := s.avtorezhimPokolenie
 	s.avtorezhimEkz = s.avtorezhimBoevoy()
 	if nachalo != avtorezhim.Neizvestno {
 		s.avtorezhimEkz.Zadvizhka = avtorezhim.NovayaZadvizhka(nachalo)
@@ -955,7 +1363,16 @@ func (s *Sluzhba) zapustitAvtorezhimSNachala(roditelskiy context.Context, nachal
 	sluzh := &avtorezhim.Sluzhitel{
 		Avtorezhim: s.avtorezhimEkz,
 		Sledchik:   avtorezhim.NovySledchik(),
-		Kolbek:     s.avtorezhimKolbek,
+		// Primenit, а не Kolbek: колбэк смены обстановки молчит, когда
+		// обстановка УЖЕ стоит на нужном значении, а защита ему не отвечает —
+		// ровно та яма, из-за которой VPN не гас при возврате домой (жалоба
+		// хозяина 25.08, 28.08, 29.08, 30.08). См. avtorezhim.Sluzhitel.Primenit.
+		//
+		// Поколение зашито в замыкание: этот служитель применяет свои решения,
+		// только пока человек не сказал ничего нового (см. avtorezhimPokolenie).
+		Primenit: func(ctx context.Context, sost avtorezhim.Sostoyanie, povtor bool) {
+			s.avtorezhimPrimenit(ctx, moyoPokolenie, sost, povtor)
+		},
 	}
 	log.Printf("авторежим: включаю слежение за сетью")
 	go sluzh.Krutit(ctx)
@@ -970,9 +1387,42 @@ func (s *Sluzhba) OstanovitAvtorezhim() {
 		return
 	}
 	log.Printf("авторежим: выключаю слежение за сетью")
+	// Поколение растёт ДО отмены и под тем же замком, что его читает
+	// avtorezhimAktualen: заход, уже ушедший в полёт, после этой строки не
+	// применит ничего, даже если доберётся до защиты позже.
+	s.avtorezhimPokolenie++
 	s.avtorezhimOtmena()
 	s.avtorezhimOtmena = nil
 	s.avtorezhimEkz = nil
+}
+
+// avtorezhimAktualen — можно ли ЕЩЁ применять решение служителя поколения
+// pokolenie. Три условия, и все три про то, что человек с тех пор не
+// передумал: его ctx жив (служителя не гасили), автомат всё ещё включён и
+// поколение то же самое.
+//
+// Проверка стоит вплотную перед действием, а не в начале захода: между
+// опросом зондов и подъёмом ядра проходят секунды, и нажатие «Отключить»
+// приходится ровно на них.
+func (s *Sluzhba) avtorezhimAktualen(ctx context.Context, pokolenie uint64) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	s.avtorezhimZamok.Lock()
+	defer s.avtorezhimZamok.Unlock()
+	return s.Nastroyki.Avtorezhim && s.avtorezhimPokolenie == pokolenie
+}
+
+// avtorezhimPrimenit — приведение защиты от имени служителя поколения
+// pokolenie: сначала сверка с последним словом человека, потом действие.
+// Кнопки («Подключиться», «Отключить») зовут avtorezhimKolbek напрямую —
+// им сверяться не с чем, они и есть слово человека.
+func (s *Sluzhba) avtorezhimPrimenit(ctx context.Context, pokolenie uint64, sost avtorezhim.Sostoyanie, povtor bool) {
+	if !s.avtorezhimAktualen(ctx, pokolenie) {
+		log.Printf("авторежим: заход решил «%s», но человек с тех пор передумал — решение не применяю", sost)
+		return
+	}
+	s.avtorezhimKolbek(ctx, sost, povtor)
 }
 
 // tunnelPodnyat — стоит ли сейчас НАШ туннель на пути зондов авторежима.
@@ -992,24 +1442,66 @@ func (s *Sluzhba) tunnelPodnyat() bool {
 	return rezhim == konfig.Tunnel
 }
 
-// avtorezhimKolbek — что делать при реальной смене обстановки: дома —
-// опустить защиту (обход уже делает роутер), вне дома — поднять (нужен
-// полный туннель). Neizvestno нарочно не делает ничего — неизвестность не
-// повод дёргать чужой туннель.
-func (s *Sluzhba) avtorezhimKolbek(ctx context.Context, sost avtorezhim.Sostoyanie) {
-	switch sost {
-	case avtorezhim.Doma:
-		log.Printf("авторежим: обстановка «дома» — опускаю защиту")
+// zashchitaPodnyata — работает ли прямо сейчас ядро. Именно «работает», а не
+// «поднимается»: пока Sost == Podnimaem, ядро уже порождено, и авторежиму
+// нечего добавить — второй PodnyatZashchitu на том же круге только породил бы
+// второй процесс.
+func (s *Sluzhba) zashchitaPodnyata() bool {
+	if s.Yadro == nil {
+		return false
+	}
+	sost := s.Yadro.Sost()
+	return sost == yadro.Rabotaet || sost == yadro.Podnimaem
+}
+
+// avtorezhimKolbek — ПРИВЕДЕНИЕ защиты к обстановке (avtorezhim.Sluzhitel.
+// Primenit): дома защита опущена, вне дома поднята. Зовётся после каждого
+// зрячего захода, а не только при смене обстановки, поэтому обязан быть
+// идемпотентным — что и обеспечивает чистое правило avtorezhim.Nuzhno:
+// когда защита уже отвечает обстановке, оно возвращает NeTrogat, и ядро
+// никто не дёргает.
+//
+// Почему приведение, а не реакция на смену. Обстановка может УЖЕ стоять на
+// Doma, пока защита поднята: кнопка «Подключиться» дома заводит задвижку
+// сразу на Doma (podklyuchit → vklyuchitAvtorezhim), опускание могло не
+// удаться с первого раза, защиту могли поднять руками поверх работающего
+// автомата. Событийный колбэк в таких случаях молчал вечно — отсюда жалоба
+// хозяина, повторённая четырежды (25.08, 28.08, 29.08, 30.08): «при
+// переключении обратно на вайфай впн не выключился». Телефонный эталон
+// делает ровно это же — apply() на каждом круге, включая repeat = true
+// (AutoMode.kt:1262-1275, ветка Situation.Home → suspendTunnel).
+//
+// Neizvestno сюда не доходит вовсе (Sluzhitel отсеивает его вместе со
+// слепыми заходами), но правило avtorezhim.Nuzhno всё равно отвечает на неё
+// NeTrogat — неизвестность не повод дёргать чужой туннель.
+func (s *Sluzhba) avtorezhimKolbek(ctx context.Context, sost avtorezhim.Sostoyanie, povtor bool) {
+	switch avtorezhim.Nuzhno(sost, s.zashchitaPodnyata()) {
+	case avtorezhim.Opustit:
+		if povtor {
+			// Отдельная строка: это НЕ смена обстановки, а расхождение
+			// защиты с обстановкой, которая стоит уже давно. На живой машине
+			// хозяина различить эти два случая по журналу обязательно —
+			// именно второй четыре раза оставался незамеченным.
+			log.Printf("авторежим: обстановка «дома» стоит, а защита поднята — опускаю (приведение)")
+		} else {
+			log.Printf("авторежим: обстановка «дома» — опускаю защиту")
+		}
 		if err := s.OpustitZashchitu(); err != nil {
 			log.Printf("авторежим: не опустил защиту: %v", err)
 		}
-	case avtorezhim.VneDoma:
-		log.Printf("авторежим: обстановка «вне дома» — поднимаю защиту")
+	case avtorezhim.Podnyat:
+		if povtor {
+			log.Printf("авторежим: обстановка «вне дома» стоит, а защиты нет — поднимаю (приведение)")
+		} else {
+			log.Printf("авторежим: обстановка «вне дома» — поднимаю защиту")
+		}
 		if err := s.PodnyatZashchitu(ctx); err != nil {
 			log.Printf("авторежим: не поднял защиту: %v", err)
 		}
 	default:
-		// Neizvestno — ничего не делаем нарочно, см. комментарий выше.
+		// NeTrogat — защита уже отвечает обстановке. Молчим: лишний рестарт
+		// ядра рвёт живые соединения, а лишняя строка в журнале на каждом
+		// заходе (а их сотни в сутки) топит в шуме те две, что выше.
 	}
 }
 
@@ -1096,6 +1588,23 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	zapustit := s.Yadro.Zapustit
 	if s.zapustitYadro != nil {
 		zapustit = s.zapustitYadro
+	}
+	// Отменённый ctx обязан обрывать лестницу подстраховок, а не проходить её
+	// до конца. Ступеней у неё до четырёх, каждая до 70 с — за это время
+	// человек успевает нажать «Отключить», и авторежим (единственный, кто
+	// зовёт этот метод с отменяемым ctx — см. avtorezhimKolbek) продолжал бы
+	// поднимать защиту, с которой человек уже попрощался. Обёртка вокруг
+	// zapustit, а не проверка в начале метода: ступени зовут его по одной, и
+	// оборваться нужно на ближайшей, а не только на входе.
+	//
+	// Кнопкам это ничего не меняет: podklyuchit зовёт PodnyatZashchitu с
+	// context.Background(), который не отменяется никогда.
+	iskhodnyyZapusk := zapustit
+	zapustit = func(c context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("подъём защиты прерван: %w", err)
+		}
+		return iskhodnyyZapusk(c)
 	}
 	zctx, otmena := context.WithTimeout(ctx, 70*time.Second)
 	defer otmena()
@@ -1197,6 +1706,50 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			}
 		}
 	}
+	// Последняя ступень лестницы деградации: туннель не поднялся ВООБЩЕ.
+	//
+	// До 31.08 этой ступени не было, и дыра в лестнице была самая дорогая из
+	// всех. Права у приложения есть, значит конфиг собран под полный режим;
+	// ядро на нём падает (сетевой адаптер не создался, драйвера нет, система
+	// не дала) — и человек оставался с кругом «связь не поднялась» и БЕЗ
+	// ВСЯКОЙ защиты, хотя половинная тут же рядом и поднимается без прав
+	// вовсе. Ступенькой ниже спуститься честнее, чем упасть с лестницы.
+	//
+	// Порядок внутри важен и повторяет уборку из ветки err != nil ниже:
+	// сперва убрать за НЕудавшейся попыткой (погасить ядро, если оно всё-таки
+	// живо, снять след туннеля и системный прокси, который ядро могло успеть
+	// прописать), и только потом поднимать следующую ступень. Иначе след
+	// неудачной попытки переживёт удачную и соврёт следующему запуску, что
+	// туннель поднимали мы (internal/tunnel, snyatOsirotevshiySledTunnelya).
+	otkatVProksi := false
+	if err != nil && s.rezhimKartiny() == konfig.Tunnel {
+		log.Printf("полный режим не поднялся (%v) — убираю следы попытки и опускаюсь на ступень ниже", err)
+		_ = s.Yadro.Ostanovit()
+		tunnel.UbratMetku()
+		proksi.Snyat()
+		vyborProksi := vybor
+		vyborProksi.BezTunnelya = true
+		if e := s.perestroit(vyborProksi); e != nil {
+			log.Printf("откат в режим браузеров: конфиг не собрался: %v", e)
+		} else {
+			zctx5, otmena5 := context.WithTimeout(ctx, 70*time.Second)
+			defer otmena5()
+			errOtkat := zapustit(zctx5)
+			errOtkat = bezProksiEsliNado(&vyborProksi, errOtkat)
+			if errOtkat == nil {
+				log.Printf("откат удался: полный режим не вышел, работаю частично — через Kelevra идут только браузеры")
+				err = nil
+				vybor = vyborProksi
+				otkatVProksi = true
+			} else {
+				// И половина не поднялась — тогда это честная беда, и врать
+				// про неё нечем. Наверх идёт ПЕРВАЯ причина (почему не вышел
+				// полный режим): она главная, вторая приписана к ней рядом.
+				log.Printf("откат тоже не удался: %v", errOtkat)
+				err = fmt.Errorf("%w; и вполовину подняться не вышло: %v", err, errOtkat)
+			}
+		}
+	}
 	// Зелёный поверх пустоты. До 23.08 «ядро поднялось без ошибки» само по
 	// себе считалось доказательством, что системный прокси в реестре стоит:
 	// проверка Stoit/Postavit висела ТОЛЬКО внутри ветки-подстраховки, то
@@ -1209,8 +1762,27 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	if err == nil {
 		s.zamok.Lock()
 		proksiRezhim := s.kartina.Rezhim == konfig.Proksi && s.kartina.ProksiAdres != ""
+		tunnelRezhim := s.kartina.Rezhim == konfig.Tunnel
 		adres, estTunnel := s.kartina.ProksiAdres, s.kartina.EstTunnel
+		tunImya := s.kartina.TunImya
 		s.zamok.Unlock()
+		// Туннель поднялся — системному прокси в реестре взяться неоткуда, и
+		// остаться он тоже не имеет права. Разбор 31.08: в туннельном режиме
+		// konfig выбрасывает вход mixed целиком, то есть порт 2412 больше
+		// никто не слушает. Запись «прокси 127.0.0.1:2412», оставшаяся от
+		// ПРОШЛОГО прокси-режима (его жёсткая смерть — ровно та авария, из-за
+		// которой у человека пропал интернет), в этот момент указывает на
+		// мёртвый порт: туннель работал бы, а браузеры молчали бы все до
+		// одного. Snyat() чужого не трогает — при ProxyEnable=0 он ничего не
+		// делает (internal/proksi).
+		//
+		// След туннеля на диске — то же самое, чем proksi.Otmetit страхует
+		// прокси-режим: жёсткую смерть процесса не переживёт ни один defer,
+		// и следующий запуск должен УВИДЕТЬ, что туннель поднимали мы, и
+		// проверить приборно, не остался ли висеть адаптер (internal/tunnel).
+		if tunnelRezhim {
+			zakrepitTunnel(tunImya)
+		}
 		if proksiRezhim {
 			stoit := proksi.Stoit(adres)
 			if !stoit {
@@ -1222,7 +1794,14 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			s.zamok.Lock()
 			s.kartina.RuchnoyProksi = !stoit
 			if stoit {
-				s.kartina.Zametka = konfig.ZametkaProksiRezhima(estTunnel)
+				// Откат с неудавшегося полного режима говорит о себе своими
+				// словами (konfig.ZametkaTunnelNePodnyalsya, их поставила
+				// сборка конфига) — обычная заметка прокси-режима тут соврала
+				// бы человеку, что так и было задумано, и послала бы его на
+				// кнопку, которой при наличии прав на экране нет.
+				if !otkatVProksi {
+					s.kartina.Zametka = konfig.ZametkaProksiRezhima(estTunnel)
+				}
 			} else {
 				s.kartina.Zametka = fmt.Sprintf(konfig.ZametkaRuchnoyProksi, adres)
 			}
@@ -1237,6 +1816,10 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		// что был на «Отключить» и закрытии окна (хозяин, 20.08), только на
 		// неудачном подключении.
 		proksi.Snyat()
+		// Тем же движением снимаем след туннеля: защита не поднялась, значит
+		// и туннеля нет, а оставленный след заставил бы СЛЕДУЮЩИЙ запуск
+		// искать несуществующий адаптер и тревожить человека впустую.
+		tunnel.UbratMetku()
 	} else {
 		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
 		// применяем прямо сейчас: раньше выбор до подключения был декорацией —
@@ -1260,7 +1843,50 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			proksi.Otmetit(adres)
 		}
 	}
+	s.soobshchitTreyuProZashchitu(err == nil)
 	return err
+}
+
+// zakrepitTunnel — всё, что приложение делает в системе после того, как
+// туннель ДЕЙСТВИТЕЛЬНО поднялся. Отдельной функцией, а не тремя строками
+// внутри PodnyatZashchitu: подъём туннеля с правами на стенде не
+// воспроизвести (prava.Est() отвечает про настоящий процесс), а проверять
+// эти два действия надо — цена ошибки в каждом из них равна пропавшему
+// интернету у человека.
+//
+// Первое: снять системный прокси. В туннельном режиме konfig выбрасывает
+// вход mixed целиком, то есть порт 2412 больше никто не слушает. Запись
+// «прокси 127.0.0.1:2412», оставшаяся от ПРОШЛОГО прокси-режима (его жёсткая
+// смерть — авария 31.08, из-за которой у человека пропал интернет), в этот
+// момент указывает на мёртвый порт: туннель работал бы, а браузеры молчали
+// бы все до одного. Snyat() чужого не трогает — при ProxyEnable=0 он не
+// делает ничего (internal/proksi).
+//
+// Второе: оставить след на диске. Жёсткую смерть процесса не переживёт ни
+// один defer, и следующий запуск должен узнать, что туннель поднимали мы, и
+// проверить приборно, не остался ли висеть адаптер (internal/tunnel).
+func zakrepitTunnel(tunImya string) {
+	proksi.Snyat()
+	tunnel.Otmetit(tunImya, os.Getpid())
+	log.Printf("поднят туннель (адаптер %q), системный прокси снят за ненадобностью", tunImya)
+}
+
+// soobshchitTreyuProZashchitu отдаёт значку в трее то же самое состояние,
+// которое окно получает полями Chastichnaya/PochemuChastichnaya. Отдельным
+// методом, а не строкой в двух местах: подъём и опускание защиты обязаны
+// говорить значку одно и то же, и разъехаться этим двум местам нельзя —
+// именно так подсказка «Kelevra: VPN включён» и висела на опущенной защите.
+func (s *Sluzhba) soobshchitTreyuProZashchitu(podnyata bool) {
+	if s.MetkaZashchity == nil {
+		return // хук не подключён (стенд-тесты внутри пакета) — значка нет
+	}
+	s.zamok.Lock()
+	chastichnaya, pochemu := s.kartina.Chastichnaya, s.kartina.PochemuChastichnaya
+	s.zamok.Unlock()
+	if !podnyata {
+		chastichnaya, pochemu = false, ""
+	}
+	s.MetkaZashchity(podnyata, chastichnaya, pochemu)
 }
 
 // domaSeychas — один доверенный заход авторежима перед подъёмом защиты
@@ -1348,8 +1974,23 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 	// держится до смены сети; гашение дома живёт ТОЛЬКО в авторежиме.
 	s.avtorezhimZamok.Lock()
 	avtorezhimVklyuchen := s.Nastroyki.Avtorezhim
+	ruchnoyVybor := s.Nastroyki.RuchnoyVybor
 	s.avtorezhimZamok.Unlock()
-	if !avtorezhimVklyuchen {
+	// Схема, которую просил хозяин (27.08): «жму подключить → сам определяет →
+	// дома "режим ожидания", вне дома включается». Одно нажатие — и дальше
+	// решает клиент. Поэтому автомат тут по умолчанию ВКЛЮЧАЕТСЯ сам, а не
+	// ждёт, пока человек найдёт отдельный тумблер: пока он тумблер не трогал
+	// (RuchnoyVybor == false), нажатие «Подключиться» — это просьба «сделай
+	// как надо», а не «подними туннель что бы ни было».
+	//
+	// Ручной режим при этом не отнят и отнят быть не может (регрессия #84,
+	// хозяин 28.08: «когда программа определила что я дома, она не даёт
+	// включить защиту вручную»): осознанный отказ от автомата — выключенный
+	// тумблер /api/avtorezhim или нажатая «Отключить» — ставит RuchnoyVybor,
+	// и с этой минуты кнопка поднимает защиту безусловно, ничего не
+	// спрашивая. Тот же расклад, что Settings.autoModeEnabled (по умолчанию
+	// автомат) + chooseManually() (осознанный ручной) в AutoMode.kt.
+	if !avtorezhimVklyuchen && ruchnoyVybor {
 		// Ручной режим: поднимаем защиту безусловно, без захода domaSeychas
 		// (это лишние секунды ожидания на пустом месте) и не трогая
 		// авторежим — человек сам решил не доверять автомату.
@@ -1361,7 +2002,25 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.avtorezhimZamok.Lock()
+	pokolenieNaVhode := s.avtorezhimPokolenie
+	s.avtorezhimZamok.Unlock()
+
 	tekushcheye := s.domaSeychas(context.Background())
+
+	// Заход обстановки занимает до KnopkaTaimautPoUmolchaniyu (8 с) — за это
+	// время человек успевает нажать «Отключить». Гонка того же рода, что у
+	// фонового авторежима (см. avtorezhimPokolenie): решение, начатое ДО
+	// нажатия, не смеет примениться ПОСЛЕ него. Сверяемся тем же числом.
+	s.avtorezhimZamok.Lock()
+	peredumal := s.avtorezhimPokolenie != pokolenieNaVhode
+	s.avtorezhimZamok.Unlock()
+	if peredumal {
+		log.Printf("«Подключиться»: пока спрашивал обстановку, человек решил иначе — защиту не трогаю")
+		otdat(w, map[string]any{"gotovo": true}, nil)
+		return
+	}
+
 	// Авторежим уже включён — «Подключиться» лишь подтверждает его тем же
 	// заходом обстановки, каким живёт сам автомат (nachalo), см. комментарий
 	// у vklyuchitAvtorezhim выше. Ошибку сохранения настройки только
@@ -1373,6 +2032,13 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 	}
 	if tekushcheye == avtorezhim.Doma {
 		log.Printf("«Подключиться»: обстановка «дома» — защиту не поднимаю, обход блокировок уже делает роутер; автомат включён и сам поднимет её, когда обстановка сменится")
+		// Если защита СЕЙЧАС поднята (прошлый сеанс, автоподключение при
+		// запуске, нажатие руками) — опускаем прямо здесь, не дожидаясь
+		// первого захода служителя. Человек только что нажал кнопку и вправе
+		// увидеть ответ немедленно, а не через страховочный тикер. Вызов
+		// идемпотентный (avtorezhim.Nuzhno вернёт NeTrogat, если опускать
+		// нечего), поэтому обычный путь «дома, защиты нет» он не трогает.
+		s.avtorezhimKolbek(r.Context(), avtorezhim.Doma, true)
 		otdat(w, map[string]any{"gotovo": true}, nil)
 		return
 	}
@@ -1393,11 +2059,54 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 func (s *Sluzhba) OpustitZashchitu() error {
 	err := s.Yadro.Ostanovit()
 	proksi.Snyat()
+	// След туннеля снимаем тем же безусловным движением и по той же причине:
+	// ядро могло умереть само ещё до вызова, а след на диске остался бы и
+	// заставил следующий запуск искать адаптер, которого давно нет.
+	tunnel.UbratMetku()
+	s.soobshchitTreyuProZashchitu(false)
 	return err
 }
 
+// otklyuchit — «Отключить» руками. Кроме опускания защиты гасит автомат:
+// иначе нажатие ничего не значит — вне дома приведение (avtorezhimKolbek)
+// поднимет защиту обратно на ближайшем же заходе, и кнопка будет выглядеть
+// сломанной. Ровно то же делает телефон: chooseManually() ставит
+// Settings.autoModeEnabled = false, и круг перестаёт решать за человека
+// (AutoMode.kt:1035, ветка round() :1177-1237).
+//
+// Ручной отказ запоминается на диске (RuchnoyVybor), поэтому и следующее
+// нажатие «Подключиться» уже не включит автомат обратно молча — вернуть его
+// можно только тумблером /api/avtorezhim, то есть тем же осознанным
+// движением, каким его выключили.
 func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 	log.Printf("человек нажал «Отключить»")
+
+	s.avtorezhimZamok.Lock()
+	bylVklyuchen := s.Nastroyki.Avtorezhim
+	if bylVklyuchen {
+		s.Nastroyki.Avtorezhim = false
+		s.Nastroyki.RuchnoyVybor = true
+	}
+	// Поколение растёт БЕЗУСЛОВНО, а не только когда автомат был включён:
+	// «Отключить» — это слово человека про защиту, и любое решение, начатое
+	// до него (заход авторежима, длинный заход обстановки внутри
+	// «Подключиться»), обязано после него замолчать.
+	s.avtorezhimPokolenie++
+	nastroyki := s.Nastroyki
+	s.avtorezhimZamok.Unlock()
+
+	if bylVklyuchen {
+		log.Printf("«Отключить»: человек решил сам — автомат выключаю, больше за него не решаю")
+		s.OstanovitAvtorezhim()
+		if err := hranenie.Sohranit(nastroyki); err != nil {
+			// Настройку не сохранили — но автомат уже остановлен в этом
+			// процессе, а значит нажатие сработало здесь и сейчас. Валить
+			// из-за этого весь ответ нельзя: человек нажал «Отключить», и
+			// главное для него — что защита опустилась.
+			log.Printf("«Отключить»: не сохранил ручной выбор: %v", err)
+		}
+	}
+
 	err := s.OpustitZashchitu()
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
