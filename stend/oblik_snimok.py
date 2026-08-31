@@ -149,6 +149,16 @@ SCENY = {
     "23_pravila_iz_komplekta": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                     vniz_bayt=134_217_728, vverh_bayt=9_437_184,
                                     zametka=ZAMETKI["ZametkaPravilaIzKomplekta"] % "23.08.2026"),
+    # 31.08: полный режим не поднялся (сетевой адаптер не создался), и клиент
+    # честно опустился ступенькой ниже вместо «нет связи» и пустоты
+    # (konfig.Vybor.BezTunnelya, sluzhba.PodnyatZashchitu). Человек обязан
+    # видеть: связь есть, но половинная, и не потому, что так задумано.
+    # mozhno_tun тут False нарочно — права у приложения ЕСТЬ, кнопки «Включить
+    # для всех программ» на экране нет, и заметка никуда не шлёт.
+    "24_tunnel_ne_podnyalsya": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
+                                    vniz_bayt=20_971_520, vverh_bayt=2_097_152,
+                                    chastichnaya=True,
+                                    zametka=ZAMETKI["ZametkaTunnelNePodnyalsya"]),
     "7_ruchnoy_proksi": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
                              vniz_bayt=5_242_880, vverh_bayt=524_288, ruchnoy_proksi=True,
                              zametka=ZAMETKI["ZametkaRuchnoyProksi"] % "127.0.0.1:2412"),
@@ -639,6 +649,90 @@ def proverit_obrezku(str_, imya_sceny):
     return [f"{imya_sceny}: {b}" for b in str_.evaluate(OBREZKA_JS)]
 
 
+# --- 31.08: 84px пустоты под областью прокрутки -----------------------------
+#
+# Класс беды, который не видит НИ ОДИН из щупов выше и который дошёл до глаз
+# человека: область прокрутки кончается ВЫШЕ нижней панели, под ней лежит
+# полоса неиспользуемой высоты, и по её краю режется содержимое — при том что
+# место под него есть. Дословно (стенд 31.08, окно 404x655): «даже
+# однострочная надпись „Любая программа идёт через Kelevra.“ срезана пополам».
+#
+# Почему молчали остальные. proverit_geometriyu меряет ДОСТИЖИМОСТЬ после
+# scrollIntoView — до срезанной надписи «дотянуться» можно, значит зелено.
+# proverit_obrezku смотрит scrollWidth/Height против client* внутри элемента —
+# надпись не переполняет свою рамку, её режет ЧУЖОЙ край. oblik_obrezka_kadra.py
+# судит только ЗНАЧИМЫЕ ИНТЕРАКТИВНЫЕ элементы (кнопки, узлы, тумблеры), а
+# заметка — обычный текст. Оба забора были зелёными и до правки, и после:
+# проверено прогоном против нетронутой копии облика (KELEVRA_OBLIK).
+#
+# Что мерим. Низ ПОЛЕЗНОЙ площади области прокрутки — её box снизу минус
+# собственный padding-bottom, то есть та линия, ниже которой содержимому
+# попасть уже нечем. И расстояние от неё до предела, куда содержимому дойти
+# МОЖНО: до верха панели вкладок (а при открытой шторке — до низа окна, шторка
+# лежит поверх панели). Это расстояние и есть мёртвая высота.
+#
+# Порог берём не с потолка и не из того же места, где живёт беда: это боковой
+# отступ самой ленты (padding-left, 18px). Зазор для дыхания внизу не имеет
+# права быть больше зазора по бокам — а раздутый резерв под несуществующую
+# нижнюю кнопку (84px, и 168px в сумме с таким же у #tab-set) в него не
+# влезет никогда, каким бы числом его ни вписали заново.
+MERTVAYA_VYSOTA_JS = """() => {
+  const vidno = (el) => { if (!el) return false; const s = getComputedStyle(el);
+    if (el.hidden || s.display === "none" || s.visibility === "hidden") return false;
+    for (let p = el.parentElement; p; p = p.parentElement) { const q = getComputedStyle(p);
+      if (p.hidden || q.display === "none" || q.visibility === "hidden") return false; }
+    return true; };
+  const lenta = document.querySelector(".lenta");
+  if (!lenta) return ["ленты нет вовсе — мерить нечем"];
+  const porog = parseFloat(getComputedStyle(lenta).paddingLeft) + 2;
+  const taby = document.getElementById("vkladki");
+  const modalka = document.getElementById("shtorka-fon");
+  // Шторка лежит ПОВЕРХ панели вкладок и доходит до низа окна — предел у неё
+  // свой. Панели вкладок нет (экран кода) — предел тоже низ окна.
+  const predel = (vidno(modalka) || !vidno(taby))
+      ? innerHeight : taby.getBoundingClientRect().top;
+  // Область прокрутки первого кадра — самая внутренняя из видимых.
+  let oblast = null;
+  for (const el of [modalka && modalka.querySelector(".shtorka"),
+                    document.getElementById("tab-set"), lenta]) {
+    if (el && vidno(el)) { oblast = el; break; }
+  }
+  if (!oblast) return ["видимой области прокрутки не нашлось"];
+  const r = oblast.getBoundingClientRect();
+  const svoy = parseFloat(getComputedStyle(oblast).paddingBottom) || 0;
+  const mertvo = predel - (r.bottom - svoy);
+  if (mertvo <= porog) return [];
+  const imya = oblast.id || (typeof oblast.className === "string" ? oblast.className.trim() : "?");
+  return [`под областью прокрутки «${imya}» ${Math.round(mertvo)}px мёртвой высоты ` +
+          `(порог ${Math.round(porog)}px): полезная площадь кончается на ` +
+          `${Math.round(r.bottom - svoy)}px, а дойти ей можно до ${Math.round(predel)}px ` +
+          `— по этому краю и режется содержимое, хотя место под него есть`];
+}"""
+
+
+def proverit_mertvuyu_vysotu(str_, imya_sceny):
+    """Область прокрутки обязана доходить до нижней панели, а не замирать выше."""
+    return [f"{imya_sceny}: {b}" for b in str_.evaluate(MERTVAYA_VYSOTA_JS)]
+
+
+def kontrol_mertvoy_vysoty(br, port):
+    """Щуп обязан покраснеть, если вернуть ленте прежний фантомный резерв.
+
+    Порча — ровно та, что была в вёрстке до 31.08: padding-bottom:84px у
+    .lenta (высота НИЖНЕЙ КНОПКИ, которой в окне нет с 21.08). Она поднимает
+    низ #tab-set на те же 84px, и мёртвая высота из 18px становится 84.
+    """
+    sostoyanie["tek"] = SCENY["4_rabotaet"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.add_style_tag(content=".lenta { padding-bottom: 84px !important; }")
+    str_.wait_for_timeout(200)
+    bedy = proverit_mertvuyu_vysotu(str_, "контроль-мёртвая-высота")
+    str_.close()
+    return bedy
+
+
 SLOVO_V_KRUGE_JS = """() => {
   const serdtse = document.querySelector(".krug-serdtse");
   // Границу берём у САМОЙ окружности, а не у её обёртки: обёртка 144px, а
@@ -1083,6 +1177,7 @@ def snyat():
                 bedy += proverit_zhargon(str_, imya)
                 bedy += proverit_pereliv(str_, imya)
                 bedy += proverit_obrezku(str_, imya)
+                bedy += proverit_mertvuyu_vysotu(str_, imya)
                 bedy += proverit_slovo_v_kruge(str_, imya)
                 bedy += proverit_net_versii_v_shapke(str_, imya)
                 if sost.get("sost"):
@@ -1129,6 +1224,8 @@ def snyat():
                           "слово, торчащее за окружность, его не разбудило"),
                 "обрезки": (kontrol_obrezki(br, port),
                             "строка, которой ужали рамку, его не разбудила"),
+                "мёртвой высоты": (kontrol_mertvoy_vysoty(br, port),
+                                   "вернувшийся фантомный резерв 84px под лентой его не разбудил"),
                 "перелива": (kontrol_pereliva(br, port),
                              "строка, которой запретили перенос, его не разбудила"),
                 "жаргона": (kontrol_zhargona(br, port),

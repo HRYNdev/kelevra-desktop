@@ -44,6 +44,21 @@ const (
 
 var procDwmSetWindowAttribute = syscall.NewLazyDLL("dwmapi.dll").NewProc("DwmSetWindowAttribute")
 
+// procSetWindowPos — им перерисовывается НЕКЛИЕНТСКАЯ часть окна (рамка и
+// заголовок) после смены темы заголовка. Живёт в user32, как и SendMessageW
+// выше.
+var procSetWindowPos = user32TreyDLL.NewProc("SetWindowPos")
+
+// Флаги SetWindowPos: ничего не двигаем и не меняем размер/порядок, только
+// просим систему пересчитать и перерисовать рамку.
+const (
+	swpNoSize       = 0x0001
+	swpNoMove       = 0x0002
+	swpNoZOrder     = 0x0004
+	swpNoActivate   = 0x0010
+	swpFrameChanged = 0x0020
+)
+
 // vklyuchitTemnyyZagolovok красит системный заголовок окна (title bar) под
 // тёмную тему — иначе на тёмном облике приложения (index.html: --fon:
 // #111310) висит белая системная полоса сверху (хозяин, 30.08: «покрасить под
@@ -63,7 +78,18 @@ func vklyuchitTemnyyZagolovok(hwnd syscall.Handle) {
 		hr, _, _ = procDwmSetWindowAttribute.Call(
 			uintptr(hwnd), dwmwaUseImmersiveDarkModeOld, uintptr(unsafe.Pointer(&temno)), razmer)
 	}
-	log.Printf("тёмный заголовок окна: DwmSetWindowAttribute hr=%#x", hr)
+	// ПЕРЕРИСОВКА РАМКИ. Без неё правка выше — тихий no-op на глаз: go-webview2
+	// показывает окно ещё внутри NewWithOptions (ShowWindow там же, где
+	// CreateWindowEx), то есть к моменту нашего вызова заголовок УЖЕ нарисован
+	// светлым, а DWM сам по себе перерисовывать неклиентскую часть по смене
+	// атрибута не обязан — он подхватывает её на следующем пересчёте рамки.
+	// В итоге белая полоса оставалась висеть до первого сворачивания-разворота
+	// окна: код «покрасить заголовок» есть, а человек видит ровно ту же
+	// «белую ерунду сверху» (хозяин, 30.08). SWP_FRAMECHANGED заставляет
+	// пересчитать рамку прямо сейчас, ничего не двигая и не меняя размер.
+	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, 0, 0,
+		swpNoSize|swpNoMove|swpNoZOrder|swpNoActivate|swpFrameChanged)
+	log.Printf("тёмный заголовок окна: DwmSetWindowAttribute hr=%#x, рамка перерисована", hr)
 }
 
 // pokazatOkno открывает окно приложения на встроенном WebView2 (он есть в
