@@ -234,12 +234,13 @@ func TestPravilaBezVybroshennogoVhoda(t *testing.T) {
 	}
 	d := razobrat(t, gotovyy)
 	pravila := d["route"].(map[string]any)["rules"].([]any)
-	// Своё правило про QUIC/udp443 (dobavitPravilomRezhimQuic) к этой
-	// проверке отношения не имеет — считаем только правила профиля.
+	// Свои правила — про QUIC/udp443 (dobavitPravilomRezhimQuic) и про
+	// локальную сеть (dobavitPravilomLokalnayaSetNapryamuyu) — к этой
+	// проверке отношения не имеют: считаем только правила профиля.
 	svoih := 0
 	for _, p := range pravila {
 		if pr, ok := p.(map[string]any); ok {
-			if praviloUdp443(pr) {
+			if praviloUdp443(pr) || praviloProLokalnuyuSet(pr) {
 				continue
 			}
 		}

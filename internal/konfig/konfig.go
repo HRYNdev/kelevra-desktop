@@ -58,6 +58,30 @@ type Kartina struct {
 	EstTunnel     bool   `json:"est_tunnel"`     // есть ли в профиле вход-туннель
 	RuchnoyProksi bool   `json:"ruchnoy_proksi"` // прокси придётся прописать в системе руками
 	Zametka       string `json:"zametka"`        // человеку: почему режим такой
+
+	// Chastichnaya — защита ПОЛОВИННАЯ, и это надо говорить вслух.
+	//
+	// Диагноз 31.08 (хозяин: «впн не выполняет свою основную функцию»): в
+	// режиме Proksi окно рисовало ровно тот же зелёный круг «подключено»,
+	// что и в режиме Tunnel. Между ними пропасть: системный прокси
+	// накрывает только те программы, которые его уважают, и только TCP.
+	// Весь UDP — а значит и QUIC, а значит и YouTube, который по нему ходит
+	// — идёт мимо, к провайдеру. Человек видел «защищено» и получал
+	// придушенное видео, не понимая, почему.
+	//
+	// Отдельным полем, а не выводом «Rezhim == Proksi» на стороне окна:
+	// решение о том, полная защита или половинная, принимает тот же код,
+	// что собирает конфиг, — иначе окно и конфиг разъедутся ровно в тот
+	// день, когда появится третий режим.
+	Chastichnaya bool `json:"chastichnaya"`
+	// PochemuChastichnaya — почему половинная, словами человека, а не кодом
+	// причины: строка идёт прямо в окно и в подсказку значка.
+	PochemuChastichnaya string `json:"pochemu_chastichnaya,omitempty"`
+	// TunImya — interface_name туннельного входа («tun125» в профиле хозяина).
+	// Нужен НЕ ядру (оно берёт его из конфига), а приложению: по этому имени
+	// след туннеля на диске (internal/tunnel) проверяет после жёсткой смерти
+	// копии, не остался ли висеть адаптер.
+	TunImya string `json:"tun_imya,omitempty"`
 }
 
 // ClashPoUmolchaniyu — адрес, если профиль про Clash API молчит.
@@ -96,9 +120,18 @@ const (
 	// Без «Защищены только браузеры» в начале (то же слово уже стоит в круге)
 	// и без повтора текста самой кнопки следом — она и так прямо под этой
 	// строкой, второй раз называть её не нужно.
-	ZametkaBezPrav = "Чтобы пустить через VPN все программы, нажмите ниже."
+	//
+	// 31.08 текст переписан. Старый («Чтобы пустить через VPN все программы,
+	// нажмите ниже.») говорил, что МОЖНО получить, и молчал о том, что
+	// человек прямо сейчас НЕ получает: игры и видео идут мимо Kelevra,
+	// потому что системный прокси не умеет UDP. Окно на этой строке к тому
+	// же её прятало (index.html: «кнопка справляется сама») — и человек не
+	// узнавал о половинчатости вообще ниоткуда.
+	ZametkaBezPrav = "Через Kelevra идут только браузеры — игры и видео Windows " +
+		"пускает мимо. Чтобы шло всё, нажмите ниже."
 	// ZametkaBezTunnelya — в самом ключе доступа полного режима нет.
-	ZametkaBezTunnelya = "Остальные программы идут напрямую — так настроен ваш ключ доступа."
+	ZametkaBezTunnelya = "Через Kelevra идут только браузеры — игры и видео идут " +
+		"напрямую. Так настроен ваш ключ доступа."
 	// ZametkaRuchnoyProksi — Windows не дал прописать себя в настройках сети.
 	// %s — адрес, который человеку придётся вписать руками. «Прокси», не
 	// «защиту»: круг над заметкой уже стоит словом «защищено» — тут второй
@@ -106,6 +139,20 @@ const (
 	// раз режет»), а «прокси» точнее — ровно то, что человек сейчас впишет.
 	ZametkaRuchnoyProksi = "Windows не прописал прокси сам. Откройте Параметры → " +
 		"Сеть и Интернет → Прокси и впишите там адрес %s"
+	// ZametkaTunnelNePodnyalsya — Vybor.BezTunnelya: права у приложения есть,
+	// полный режим в ключе тоже есть, а подняться в нём не вышло (ядро упало
+	// на создании сетевого адаптера, система его не дала, драйвер не
+	// установлен). Раньше в этом месте человек получал круг «связь не
+	// поднялась» и НИКАКОЙ защиты вовсе; теперь приложение честно опускается
+	// на ступень ниже, и заметка обязана сказать ровно это: работает половина,
+	// и не потому, что так настроено, а потому что сейчас не вышло.
+	//
+	// Кнопки «Включить для всех программ» под этой заметкой НЕТ (MozhnoTun =
+	// EstTunnel && !Prava, а права тут есть) — поэтому строка никуда не шлёт и
+	// ничего нажать не предлагает: единственное осмысленное действие человека
+	// — нажать «Подключиться» ещё раз, и оно и так на экране.
+	ZametkaTunnelNePodnyalsya = "Через Kelevra идут только браузеры — игры и видео " +
+		"идут напрямую. Пустить через неё всё сейчас не вышло."
 	// ZametkaBezSetevyhPravil — Vybor.BezSetevyhPravil: список правил не
 	// скачался, включён упрощённый режим (весь трафик через VPN, без разбора).
 	ZametkaBezSetevyhPravil = "Список правил не скачался — весь трафик идёт через VPN."
@@ -114,6 +161,31 @@ const (
 	// комплект — умная маршрутизация (что через VPN, что напрямую) жива. %s —
 	// дата снимка комплекта (Vybor.PravilaKomplektData, обычно internal/pravila.Data()).
 	ZametkaPravilaIzKomplekta = "Свежие правила не скачались — работают встроенные (от %s)."
+)
+
+// Причины половинной защиты — то, что окно и подсказка значка говорят
+// человеку РЯДОМ с заметкой о режиме, а не вместо неё: заметка отвечает на
+// «что сейчас идёт через Kelevra», причина — на «почему не всё» и «что
+// нажать». Обе строки читает не программист, поэтому ни «туннеля», ни
+// «прокси-режима», ни «QUIC» тут нет: человеку важно, что видео и игры идут
+// мимо, а не как называется протокол, которым они ходят.
+const (
+	// PrichinaBezPrav — туннель в ключе есть, а прав администратора нет.
+	// Ровно в этом случае окно показывает кнопку «Включить для всех
+	// программ» (sluzhba.go: MozhnoTun), и она сама просит права у Windows.
+	PrichinaBezPrav = "Windows не дал Kelevra прав администратора: без них " +
+		"через неё проходят только браузеры."
+	// PrichinaBezTunnelya — полного режима нет в самом ключе доступа,
+	// нажимать нечего и просить прав незачем.
+	PrichinaBezTunnelya = "В вашем ключе доступа полного режима нет."
+	// PrichinaTunnelNePodnyalsya — Vybor.BezTunnelya: права есть, полный режим
+	// в ключе есть, а поднять его сейчас не удалось. Отдельная причина, а не
+	// PrichinaBezPrav: про права тут врать нельзя — они у приложения есть, и
+	// человек, которому сказали «Windows не дал прав», пойдёт чинить то, что
+	// не сломано (а окно UAC ему больше никто и не покажет — кнопка
+	// «Включить для всех программ» при наличии прав спрятана).
+	PrichinaTunnelNePodnyalsya = "Пустить через Kelevra все программы сейчас не удалось — " +
+		"работают только браузеры. Попробуйте подключиться ещё раз."
 )
 
 // Поля профиля, которые ядро принимает только на Android. На компьютере они
@@ -126,6 +198,18 @@ type Vybor struct {
 	// поднять, и врать об этом нельзя: молча оставить туннель значит отдать
 	// пользователю ядро, которое упадёт при старте.
 	Prava bool
+	// BezTunnelya — собрать конфиг БЕЗ полного режима, даже если права на
+	// машине есть и туннель в профиле тоже. Последняя ступень лестницы
+	// деградации режимов (sluzhba.PodnyatZashchitu): попытка поднять туннель
+	// уже была и не удалась.
+	//
+	// Зачем отдельным полем, а не «соврать про Prava». Соврав, мы получили бы
+	// не только нужный режим, но и чужие тексты: заметку «нажмите ниже» под
+	// кнопкой, которой при наличии прав на экране нет, и причину «Windows не
+	// дал прав администратора», отправляющую человека чинить несломанное.
+	// Режим и слова о нём выбирает один и тот же код — этот, — и врать ему
+	// самому себе нельзя.
+	BezTunnelya bool
 	// BezSistemnogoProksi — не просить ядро прописывать себя системным прокси.
 	// Взводится после отказа системы: проверено живьём — ядро на такой отказ
 	// не жалуется, а ПАДАЕТ («initialize system proxy: unsupported desktop
@@ -181,9 +265,33 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 
 	vhody, _ := d["inbounds"].([]any)
 	k := Kartina{}
+
+	// Сперва только СМОТРИМ, что за входы в профиле, ничего не выбрасывая.
+	// Раньше решение и выброс шли одним проходом, и это годилось, пока
+	// выбрасывался ровно один вход (tun без прав). Теперь выброс разный в
+	// разных режимах — в режиме туннеля уходит локальный прокси, — а знать,
+	// какой режим, можно только осмотрев ВСЕ входы.
+	for _, v := range vhody {
+		vh, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch tip, _ := vh["type"].(string); tip {
+		case "tun":
+			k.EstTunnel = true
+			if imya, _ := vh["interface_name"].(string); imya != "" && k.TunImya == "" {
+				k.TunImya = imya
+			}
+		case "mixed", "http", "socks":
+			if k.ProksiAdres == "" {
+				k.ProksiAdres = adresVhoda(vh)
+			}
+		}
+	}
+	rezhimTunnelya := estPrava && k.EstTunnel && !v.BezTunnelya
+
 	var ostavshiesya []any
 	var udalennyeTegi []string
-
 	for _, v := range vhody {
 		vh, ok := v.(map[string]any)
 		if !ok {
@@ -194,27 +302,58 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		teg, _ := vh["tag"].(string)
 		switch tip {
 		case "tun":
-			k.EstTunnel = true
 			for _, p := range androidPolyaTun {
 				delete(vh, p)
 			}
-			if !estPrava {
+			if !rezhimTunnelya {
 				udalennyeTegi = append(udalennyeTegi, teg)
 				continue // вход выбрасываем целиком
 			}
+			// Туннель остаётся — значит через него сейчас пойдёт ВЕСЬ трафик
+			// машины, включая домашнюю сеть. Профиль присылает
+			// strict_route: true, и это ровно то, из-за чего на стенде 31.08
+			// с поднятым туннелем пропала локальная сеть (см.
+			// internal/konfig/lokalnaya_set.go).
+			nastroitTunPodLokalnuyuSet(vh)
 		case "mixed", "http", "socks":
-			if k.ProksiAdres == "" {
-				k.ProksiAdres = adresVhoda(vh)
+			// В режиме туннеля локальный прокси — лишняя дверь, и опасная.
+			// В профиле он стоит ради Android (`platform.http_proxy` у
+			// tun-входа указывает ровно на него, и это поле мы всё равно
+			// выкидываем — androidPolyaTun). На компьютере с поднятым
+			// туннелем через него не должно идти ничего: весь трафик машины
+			// и так заходит в ядро через tun. Оставленный вход означал бы
+			// открытый порт, на который может смотреть системный прокси, —
+			// то есть ровно ту аварию 31.08, когда прокси остался висеть на
+			// мёртвом порту и у человека пропал интернет. Нет двери — нечему
+			// висеть.
+			if rezhimTunnelya {
+				udalennyeTegi = append(udalennyeTegi, teg)
+				continue
 			}
 		}
 		ostavshiesya = append(ostavshiesya, vh)
 	}
 
-	if estPrava && k.EstTunnel {
+	if rezhimTunnelya {
 		k.Rezhim = Tunnel
 		k.Zametka = ZametkaVes
+		// Адрес прокси в этом режиме не просто не нужен — он не должен
+		// доехать до вызывающего: sluzhba.PodnyatZashchitu по непустому
+		// ProksiAdres пишет метку «системный прокси поставили мы».
+		k.ProksiAdres = ""
 	} else {
 		k.Rezhim = Proksi
+		k.Chastichnaya = true
+		switch {
+		case v.BezTunnelya:
+			// Откат после неудавшейся попытки полного режима — про права тут
+			// врать нельзя, они есть (см. поле Vybor.BezTunnelya).
+			k.PochemuChastichnaya = PrichinaTunnelNePodnyalsya
+		case k.EstTunnel:
+			k.PochemuChastichnaya = PrichinaBezPrav
+		default:
+			k.PochemuChastichnaya = PrichinaBezTunnelya
+		}
 		if k.ProksiAdres == "" {
 			return nil, k, fmt.Errorf("в профиле нет ни туннеля с правами, ни локального прокси — подключаться нечем")
 		}
@@ -231,9 +370,14 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 			}
 		}
 		k.RuchnoyProksi = v.BezSistemnogoProksi
-		if v.BezSistemnogoProksi {
+		switch {
+		case v.BezSistemnogoProksi:
+			// Прокси придётся вписать руками — это главнее всего остального:
+			// без этого шага человека трафик вообще никуда не пойдёт.
 			k.Zametka = fmt.Sprintf(ZametkaRuchnoyProksi, k.ProksiAdres)
-		} else {
+		case v.BezTunnelya:
+			k.Zametka = ZametkaTunnelNePodnyalsya
+		default:
 			k.Zametka = ZametkaProksiRezhima(k.EstTunnel)
 		}
 	}
@@ -242,12 +386,6 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	if len(udalennyeTegi) > 0 {
 		pochistitPravila(d, udalennyeTegi)
 	}
-	// Тегами входов — уже после того, как выброшенные входы (например,
-	// tun-in без прав) отфильтрованы: правило про udp/443 не должно
-	// ссылаться на вход, которого в итоговом конфиге больше нет — это та же
-	// беда, что чинит pochistitPravila чуть выше, и мы намеренно ставим свой
-	// вызов после неё, а не до.
-	dobavitPravilomRezhimQuic(d, tegiVhodov(ostavshiesya))
 	if len(v.PravilaIzKomplekta) > 0 {
 		// Комплект главнее BezSetevyhPravil (см. комментарий поля): он не
 		// жертвует разбором трафика, а BezSetevyhPravil жертвует.
@@ -261,6 +399,31 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		}
 		k.Zametka = ZametkaBezSetevyhPravil
 	}
+	// Правило про QUIC — ПОСЛЕ лестницы правил маршрутизации, а не до неё:
+	// оно ссылается на rule_set заблокированного, и знать, какие rule_set в
+	// конфиге в итоге остались, можно только когда решено про комплект и про
+	// BezSetevyhPravil (последний выбрасывает rule_set целиком).
+	//
+	// Теги входов — из уже отфильтрованного списка: правило не должно
+	// ссылаться на вход, которого в итоговом конфиге больше нет (та же беда,
+	// что чинит pochistitPravila выше).
+	dobavitPravilomRezhimQuic(d, tegiVhodov(ostavshiesya))
+	// Локальная сеть — ПОСЛЕ правила про QUIC, чтобы встать перед ним:
+	// оба правила вставляются сразу за ведущими sniff/hijack-dns, и первым
+	// в готовом конфиге окажется то, которое вставлено последним. Порядок
+	// именно такой: домашний NAS на udp/443 не должен попасть под срез QUIC,
+	// а срез QUIC про локальную сеть ничего не знает.
+	dobavitPravilomLokalnayaSetNapryamuyu(d)
+	// DNS правим ПОСЛЕДНИМ шагом, после лестницы правил: BezSetevyhPravil
+	// сама выбрасывает из dns.rules всё, что ссылается на rule_set (а
+	// правило про fakeip в боевом профиле — именно такое), и решать про
+	// fakeip надо по тому, что от dns осталось, а не по тому, что было.
+	if rezhimTunnelya {
+		soglasovatFakeip(d)
+	} else {
+		obezvreditFakeip(d)
+		pryamoyResolverCherezSistemu(d)
+	}
 	k.ClashAdres, k.ClashSekret = clash(d)
 	zapomnitVybor(d)
 
@@ -271,54 +434,68 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	return gotovyy, k, nil
 }
 
-// dobavitPravilomRezhimQuic режет QUIC в самом начале route.rules (после
-// уже существующих sniff/hijack-dns, до правил с rule_set).
+// dobavitPravilomRezhimQuic отбивает QUIC ТОЧЕЧНО — только там, где он и так
+// обязан идти в туннель, — и вставляет это правило в начало route.rules
+// (после уже существующих sniff/hijack-dns, до правил с rule_set).
 //
-// Диагноз 29.08: ядро sing-box опознаёт googlevideo.com сниффом по SNI, а
-// снифф QUIC (common/sniff/quic.go в ядре) разбирает только Initial-пакет и
-// промахивается на retry/coalescing — YouTube ходит по QUIC и часть его
-// соединений проваливается мимо ВСЕХ rule_set сразу на route.final=direct, к
+// Зачем правило вообще есть. Диагноз 29.08: ядро опознаёт googlevideo.com
+// сниффом по SNI, а снифф QUIC (common/sniff/quic.go) разбирает только
+// Initial-пакет и промахивается на retry/coalescing — часть QUIC-соединений
+// YouTube проваливалась мимо ВСЕХ rule_set сразу на route.final=direct, к
 // провайдеру, который душит видео. Chrome, не получив ответа по QUIC,
-// мгновенно откатывается на TCP/443, где снифф по SNI надёжен — там
-// googlevideo.com уже попадает в свой rule_set и уходит в туннель как
-// положено.
+// мгновенно откатывается на TCP/443, где снифф по SNI надёжен, и там домен
+// уже попадает в свой rule_set и уходит в туннель.
 //
-// Диагноз 30.08: правило {"protocol":"quic","action":"reject"} само зависело
-// от того же ненадёжного сниффа — на retry/coalescing пакетах снифф не
-// узнаёт QUIC, поле protocol не проставляется, и наше же reject-правило не
-// срабатывает ровно там, где сниффер промахнулся. Заменено на матч по
-// транспорту и порту напрямую (network:udp, port:443) — HTTP/3 всегда ходит
-// по udp/443, и решение больше не зависит от результата сниффа: снифф может
-// вообще не отработать (retry/coalescing), правило сработает всё равно,
-// потому что смотрит на транспорт пакета, а не на то, что о нём решил
-// снифф. У обычных клиентских приложений легитимного не-QUIC udp/443
-// практически не бывает — это то же допущение, на котором стоял исходный
-// фикс.
+// Вторая, более твёрдая причина (проверено 31.08 по самому ядру, а не по
+// документации): UDP через наш выход НЕ ХОДИТ. Основной выход профиля —
+// vless с flow "xtls-rprx-vision", а протокол vless запрещает UDP при этом
+// flow на стороне СЕРВЕРА: в бинаре ядра лежит строка «flow does not support
+// UDP», в исходнике sing-vmess (vless/service.go) это
+// `if request.Flow == FlowVision && request.Command == vmess.NetworkUDP`.
+// То есть QUIC, честно уведённый в туннель, там и умрёт — молча, таймаутом.
+// Быстрый reject лучше: браузер откатится на TCP сразу, а не через ожидание.
 //
-// Риск самоотстрела (проверено на internal/konfig/testdata/profil_telefona.json,
-// 30.08): выход профиля — vless с tls+reality на server_port 443, транспорт
-// TCP (никакого поля transport, "network" в самом vless-outbound не udp), и
-// socks — тоже TCP. Ни hysteria2, ни tuic, ни wireguard, чей канал к серверу
-// сам является UDP/443, в профиле нет. Дальше: даже будь такой outbound,
-// route.rules матчит только траффик, ВОШЕДШИЙ через inbound (метаданные
-// соединения несут Inbound-тег) — собственный dial исходящего до его же
-// сервера идёт мимо таблицы маршрутизации внутри реализации outbound'а и под
-// это правило в принципе не попадает. Тем не менее ограничиваем правило
-// явным списком "inbound" — тегами входов, реально оставшихся в профиле
-// ПОСЛЕ фильтрации (вызывающая сторона передаёт их отдельным параметром,
-// см. Prigotovit — вызов стоит после d["inbounds"] = ostavshiesya и после
-// pochistitPravila): это и защита на будущее (если когда-то появится
-// UDP-транспортный outbound или служебный inbound не для трафика
-// пользователя, правило его не заденет), и требование по заданию — теги
-// берутся из профиля, а не хардкодятся.
+// Матч по транспорту и порту, а не по protocol:"quic" (диагноз 30.08):
+// поле protocol проставляет тот же ненадёжный снифф, и своё же reject-правило
+// не срабатывало ровно там, где сниффер промахнулся. HTTP/3 всегда ходит по
+// udp/443, поэтому network:udp + port:443 решает то же самое, но без слепого
+// пятна сниффа.
+//
+// ПОЧЕМУ НЕ ВЕСЬ UDP/443 МАШИНЫ (правка 31.08). Раньше правило резало udp/443
+// без всяких условий. В режиме прокси это ещё почти не жгло (UDP в клиент
+// почти не заходит), а вот в режиме туннеля в клиент заходит ВЕСЬ UDP
+// машины — и правило рубило QUIC всему компьютеру: браузер молча откатится на
+// TCP, а игра, звонок и всё, что умеет только QUIC, просто перестанет
+// работать, в том числе к российским и нейтральным адресам, которым туннель
+// вообще не нужен. Поэтому правило сужено полем rule_set: теми же списками,
+// которые профиль и так уводит в туннель (см. tegiZablokirovannogo). Что
+// идёт напрямую — идёт напрямую и по QUIC, ядро его не трогает.
+//
+// Домен для сужения ядро знает и без сниффа: в режиме туннеля fakeip живёт
+// ровно на этих же rule_set (см. dns.go, soglasovatFakeip) — адрес назначения
+// сам несёт домен. Плюс часть списков (main-subnets, cloudflare, hetzner…)
+// матчится по IP и сниффа не требует вовсе.
+//
+// Единственный случай, когда правило остаётся широким, — упрощённый режим
+// BezSetevyhPravil: там rule_set выброшены целиком, а route.final переставлен
+// на туннель, то есть В ТУННЕЛЬ ИДЁТ ВСЁ и сужать не по чему. Широкий reject
+// там честнее тишины: без него весь UDP уходил бы в туннель, где UDP не
+// работает, и умирал бы по таймауту.
+//
+// Если в туннель по правилам не идёт ничего (route.final=direct и ни одного
+// rule_set в туннель — так выглядит чужой профиль-заглушка), правило не
+// вставляется вовсе: резать нечего.
+//
+// Риск самоотстрела (проверено на internal/konfig/testdata/profil_telefona.json):
+// route.rules матчит только траффик, ВОШЕДШИЙ через inbound, а собственный
+// dial исходящего до его же сервера идёт мимо таблицы маршрутизации. Тем не
+// менее ограничиваем правило явным списком "inbound" — тегами входов, реально
+// оставшихся в профиле ПОСЛЕ фильтрации: это защита на будущее (появится
+// UDP-транспортный outbound или служебный inbound — правило его не заденет).
 //
 // Идемпотентно: если в route.rules уже есть правило с network:"udp" и
-// port:443 (то ли своё же, вставленное прошлым прогоном, то ли профиль сам
-// решил про QUIC/443), ничего не делает — профиль главнее. Идемпотентность
-// проверяется только по network+port, без учёта "inbound": состав входов
-// между прогонами не меняется (см. вызов в Prigotovit), а если бы поменялся
-// — новый список всё равно был бы правильнее старого, перезаписывать
-// чужое/своё правило поверх не наша забота этой функции.
+// port:443 (своё же от прошлого прогона или собственное решение профиля про
+// QUIC/443), ничего не делает — профиль главнее.
 func dobavitPravilomRezhimQuic(d map[string]any, tegiVhodovPolzovatelya []string) {
 	r, ok := d["route"].(map[string]any)
 	if !ok {
@@ -333,6 +510,21 @@ func dobavitPravilomRezhimQuic(d map[string]any, tegiVhodovPolzovatelya []string
 		if praviloUdp443(pr) {
 			return
 		}
+	}
+
+	novoye := map[string]any{"network": "udp", "port": 443, "action": "reject"}
+	switch tegi := tegiZablokirovannogo(d); {
+	case len(tegi) > 0:
+		// Точечно: только то, что и так уводится в туннель.
+		novoye["rule_set"] = tegi
+	case finalVTunnel(d):
+		// Упрощённый режим: в туннель идёт всё, сужать не по чему.
+	default:
+		// В туннель не идёт ничего — резать нечего.
+		return
+	}
+	if len(tegiVhodovPolzovatelya) > 0 {
+		novoye["inbound"] = tegiVhodovPolzovatelya
 	}
 
 	// Вставляем после ведущих sniff/hijack-dns — снифф должен успеть
@@ -351,15 +543,113 @@ func dobavitPravilomRezhimQuic(d map[string]any, tegiVhodovPolzovatelya []string
 		break
 	}
 
-	novoye := map[string]any{"network": "udp", "port": 443, "action": "reject"}
-	if len(tegiVhodovPolzovatelya) > 0 {
-		novoye["inbound"] = tegiVhodovPolzovatelya
-	}
 	obnovlennye := make([]any, 0, len(pravila)+1)
 	obnovlennye = append(obnovlennye, pravila[:vstavka]...)
 	obnovlennye = append(obnovlennye, novoye)
 	obnovlennye = append(obnovlennye, pravila[vstavka:]...)
 	r["rules"] = obnovlennye
+}
+
+// tegiZablokirovannogo — теги rule_set, которые профиль уводит В ТУННЕЛЬ, в
+// порядке профиля и без повторов. Это и есть «список заблокированного» в
+// терминах человека: домены и подсети, ради которых VPN и включают.
+//
+// Берём их из самого профиля, а не хардкодим: сервер подписки список меняет
+// (22 rule_set на 31.08), и захардкоженный набор устарел бы молча. Правила с
+// action:"reject" (список рекламы) сюда не попадают — там и так reject,
+// сужать наше правило ими незачем.
+func tegiZablokirovannogo(d map[string]any) []string {
+	r, _ := d["route"].(map[string]any)
+	if r == nil {
+		return nil
+	}
+	pravila, _ := r["rules"].([]any)
+	var tegi []string
+	vidnye := map[string]bool{}
+	for _, p := range pravila {
+		pr, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		// Правило уводит трафик, только если это маршрутизация (action
+		// пустой или "route") в выход, который не прямой.
+		if act, _ := pr["action"].(string); act != "" && act != "route" {
+			continue
+		}
+		vyhod, _ := pr["outbound"].(string)
+		if vyhod == "" || vyhodPryamoy(d, vyhod) {
+			continue
+		}
+		for _, t := range spisokStrok(pr["rule_set"]) {
+			if t == "" || vidnye[t] {
+				continue
+			}
+			vidnye[t] = true
+			tegi = append(tegi, t)
+		}
+	}
+	return tegi
+}
+
+// finalVTunnel — весь неопознанный трафик уходит в туннель (route.final
+// переставлен на туннельный выход). Так выглядит упрощённый режим
+// BezSetevyhPravil; в боевом профиле final == "direct".
+func finalVTunnel(d map[string]any) bool {
+	r, _ := d["route"].(map[string]any)
+	if r == nil {
+		return false
+	}
+	final, _ := r["final"].(string)
+	if final == "" {
+		return false
+	}
+	return !vyhodPryamoy(d, final)
+}
+
+// vyhodPryamoy — ведёт ли выход с таким тегом мимо VPN. Смотрим на ТИП
+// выхода в outbounds, а не на имя: профиль хозяина зовёт туннельный выход
+// «Соединение», а прямой — "direct", но чужой профиль вправе назвать их как
+// угодно, и ошибка в эту сторону дорогая (лишний тег в правиле — срезанный
+// QUIC там, где он был не нужен). Если выхода с таким тегом в профиле нет
+// вовсе — судим по имени: это последнее, что осталось.
+func vyhodPryamoy(d map[string]any, teg string) bool {
+	vyhody, _ := d["outbounds"].([]any)
+	for _, v := range vyhody {
+		vh, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := vh["tag"].(string); t != teg {
+			continue
+		}
+		switch tip, _ := vh["type"].(string); tip {
+		case "direct", "block", "dns":
+			return true
+		default:
+			return false
+		}
+	}
+	return teg == "direct" || teg == "block" || teg == "dns"
+}
+
+// spisokStrok — поле правила, которое sing-box кодирует либо одиночной
+// строкой, либо списком строк (badoption.Listable).
+func spisokStrok(v any) []string {
+	switch x := v.(type) {
+	case string:
+		return []string{x}
+	case []string:
+		return x
+	case []any:
+		var out []string
+		for _, s := range x {
+			if str, ok := s.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // tegiVhodov собирает теги входов из уже отфильтрованного списка inbounds
