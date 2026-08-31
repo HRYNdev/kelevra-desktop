@@ -42,6 +42,15 @@ func (z *Zadvizhka) Tekushcheye() Sostoyanie { return z.tekushcheye }
 // сразу, без набора [Podtverzhdeniy] — та же логика, что needed=1 в
 // AutoModeGate.offer(trust=true) на телефоне (AutoModeGate.kt:68-72).
 //
+// Доверие НЕ распространяется на [Neizvestno]: доказанный сигнал смены сети
+// доказывает, что сеть шевельнулась, но «не знаю» — это не обстановка, в
+// которую можно прыгнуть с одного наблюдения. А приходит Neizvestno как раз
+// оттуда, где спешить опаснее всего: молчащий резолвер при роуминге между
+// репитером и роутером (см. Nablyudeniye.DnsMolchit, авария 28.08) —
+// событие смены сети там доверенное, а наблюдение построено на молчании и
+// стоит ровно ничего. Такому наблюдению нужны полные [Podtverzhdeniy]
+// подряд, как заходу страховочного тикера.
+//
 // Возвращает true, если обстановка сменилась именно этим вызовом.
 func (z *Zadvizhka) Predlozhit(nablyudeno Sostoyanie, dovereno bool) bool {
 	if nablyudeno == z.tekushcheye {
@@ -60,7 +69,7 @@ func (z *Zadvizhka) Predlozhit(nablyudeno Sostoyanie, dovereno bool) bool {
 	}
 
 	nuzhno := Podtverzhdeniy
-	if dovereno {
+	if dovereno && nablyudeno != Neizvestno {
 		nuzhno = 1
 	}
 	if z.hitov < nuzhno {
