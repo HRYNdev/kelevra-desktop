@@ -373,7 +373,6 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
 	m.HandleFunc(pref+"/api/zhurnal", s.zhurnal)
-	m.HandleFunc(pref+"/api/zhurnaly_otpravka", s.zhurnalyOtpravkaRuchka)
 	m.HandleFunc(pref+"/api/obnovlenie", s.obnovlenieRuchka)
 	m.HandleFunc(pref+"/api/obnovlenie_proverit", s.obnovlenieProveritRuchka)
 	m.HandleFunc(pref+"/api/obnovlenie_postavit", s.obnovleniePostavitRuchka)
@@ -748,9 +747,11 @@ func (s *Sluzhba) SleditZaZhurnalami(ctx context.Context, shag time.Duration) {
 // OtpravitZhurnalyEsliPora — один тик расписания. seychas параметром, а не
 // time.Now() внутри: расписание так проверяется без ожидания вечера.
 func (s *Sluzhba) OtpravitZhurnalyEsliPora(ctx context.Context, seychas time.Time) {
-	if !s.Nastroyki.ZhurnalyOtpravlyat() {
-		return // человек выключил тумблер — молчим совсем
-	}
+	// Тумблера «отправлять или нет» здесь БОЛЬШЕ НЕТ (был до 01.09, вместе с
+	// hranenie.Nastroyki.OtpravlyatZhurnaly). хозяин: «есть зачем то кнопка не
+	// отправлять данные разработчику, я вроде говорил об этом» — тем же днём
+	// выбор убрали и на телефоне. Отправка безусловна; единственное, что её
+	// сдерживает, — расписание (poraOtpravlyatZhurnaly).
 	var uspeh time.Time
 	if u := s.Nastroyki.KogdaOtpravlyaliZhurnaly(); u > 0 {
 		uspeh = time.Unix(u, 0)
@@ -815,25 +816,6 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 		PutMetok:  hranenie.PutOtmetokZhurnalov(),
 		Zagolovki: ustroystvo.Zagolovki,
 	}
-}
-
-// zhurnalyOtpravkaRuchka — тумблер «Отправлять логи разработчику», по образцу
-// avtozapuskRuchka и avtorezhimRuchka.
-func (s *Sluzhba) zhurnalyOtpravkaRuchka(w http.ResponseWriter, r *http.Request) {
-	var vhod struct {
-		Vklyuchit bool `json:"vklyuchit"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
-		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
-		return
-	}
-	s.Nastroyki.UstanovitOtpravkuZhurnalov(vhod.Vklyuchit)
-	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
-		otdat(w, nil, err)
-		return
-	}
-	log.Printf("отправка журналов разработчику: %v", vhod.Vklyuchit)
-	otdat(w, map[string]any{"gotovo": true}, nil)
 }
 
 // zhurnal отдаёт хвост журнала прямо в окно.
@@ -1074,11 +1056,31 @@ type otvetSostoyaniya struct {
 	// строку, пустоты на её месте не остаётся.
 	ChelovekImya   string `json:"chelovek_imya,omitempty"`
 	UstroystvoImya string `json:"ustroystvo_imya,omitempty"`
-	// Суточная отправка журналов разработчику. Vklyuchena по умолчанию
-	// истинна (hranenie.Nastroyki.ZhurnalyOtpravlyat), Kogda — unix последней
-	// удавшейся отправки, 0 — не отправляли ни разу.
-	ZhurnalyOtpravkaVklyuchena bool  `json:"zhurnaly_otpravka_vklyuchena"`
-	ZhurnalyOtpravkaKogda      int64 `json:"zhurnaly_otpravka_kogda,omitempty"`
+	// Остальное из /info — для вкладки «Подписка». Состав и порядок сняты со
+	// шторки подписки на телефоне (HomeScreen.kt 464-514): состояние
+	// (Активна/Приостановлена), под ним одной строкой срок и трафик, ниже
+	// «кто пользуется» и «устройство». Считать эту строку в окне нечем без
+	// самих чисел, поэтому сюда едут они, а не готовый текст: как именно
+	// склеивать «до 12 сентября · 12 из 50 ГБ» — дело облика, и на телефоне
+	// это тоже делает экран (Subscription.kt: note), а не сервер.
+	//
+	// PodpiskaEst отличает «сервер ещё не отвечал» от «ответил и подписка
+	// приостановлена»: без него окно на свежем запуске рисовало бы
+	// «Приостановлена» по нулевому Aktivna — то есть врало бы.
+	PodpiskaEst         bool  `json:"podpiska_est"`
+	PodpiskaAktivna     bool  `json:"podpiska_aktivna,omitempty"`
+	PodpiskaLimitBayt   int64 `json:"podpiska_limit_bayt,omitempty"`
+	PodpiskaSyedenoBayt int64 `json:"podpiska_syedeno_bayt,omitempty"`
+	// KodMaska — код доступа звёздочками и последними двумя знаками
+	// (podpiska.Maska). Самого кода в ответе НЕТ и быть не должно: окно не
+	// заперто ничем, кроме адреса, а снимок экрана с открытым ключом человек
+	// шлёт в поддержку не задумываясь.
+	KodMaska string `json:"kod_maska,omitempty"`
+	// ZhurnalyOtpravkaKogda — unix последней удавшейся суточной отправки
+	// журналов разработчику, 0 — не отправляли ни разу. Соседнего поля
+	// «включена» тут больше нет: выбор убран 01.09, отправка безусловна, и
+	// окно показывает эту дату справкой, а не подписью под тумблером.
+	ZhurnalyOtpravkaKogda int64 `json:"zhurnaly_otpravka_kogda,omitempty"`
 }
 
 // ozhidanieDoma — истинно ровно тогда, когда авторежим включён, обстановка
@@ -1180,6 +1182,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		Versiya:  podpiska.Versiya,
 		Sost:     string(s.Yadro.Sost()),
 		KodEst:   s.Nastroyki.Kod != "",
+		KodMaska: podpiska.Maska(s.Nastroyki.Kod),
 		YadroEst: s.Yadro.EstBinar(),
 		Beda:     s.Yadro.PoslednyayaBeda(),
 		PID:      s.Yadro.PID(),
@@ -1192,6 +1195,9 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	if s.svedeniya != nil {
 		o.Imya, o.DoUnix = s.svedeniya.Imya, s.svedeniya.Do
 		o.ChelovekImya, o.UstroystvoImya = s.svedeniya.ImyaCheloveka(), s.svedeniya.ImyaUstroystva()
+		o.PodpiskaEst = true
+		o.PodpiskaAktivna = s.svedeniya.Aktivna
+		o.PodpiskaLimitBayt, o.PodpiskaSyedenoBayt = s.svedeniya.LimitBayt, s.svedeniya.SyedenoB
 	}
 	k := s.kartina
 	if s.naydennoeObnovlenie != nil {
@@ -1247,7 +1253,6 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	o.OzhidanieDoma = ozhidanieDoma(o.AvtorezhimVklyuchen, o.AvtorezhimObstanovka, o.Sost)
 	o.AvtorezhimPolozhenie = polozhenieAvtorezhima(o.AvtorezhimVklyuchen, o.AvtorezhimRuchnoy, o.AvtorezhimObstanovka, o.Sost, o.AvtorezhimSlepPrichina)
 	o.VyhodAvto, o.VyhodImya = vyhodDlyaOkna(s.Nastroyki.Uzly)
-	o.ZhurnalyOtpravkaVklyuchena = s.Nastroyki.ZhurnalyOtpravlyat()
 	o.ZhurnalyOtpravkaKogda = s.Nastroyki.KogdaOtpravlyaliZhurnaly()
 	otdat(w, o, nil)
 }

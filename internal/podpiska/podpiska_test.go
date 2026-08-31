@@ -103,3 +103,42 @@ func TestSvedeniya(t *testing.T) {
 		t.Fatalf("сведения разобраны неверно: %+v", s)
 	}
 }
+
+// TestMaskaNikogdaNeOtdaetKodTselikom — гейт на утечку ключа. Маска живёт
+// ради одного: окно с открытым кодом человек снимает на телефон и шлёт в
+// поддержку, и вместе со снимком уезжает рабочий доступ к подписке. Поэтому
+// проверяется не «красиво ли», а свойство: в маске НЕТ ни одного знака кода,
+// кроме последних двух, и её длина не растёт с длиной ключа.
+func TestMaskaNikogdaNeOtdaetKodTselikom(t *testing.T) {
+	for _, kod := range []string{
+		"Hgh-QXAH8_8HQ_Et",
+		"короткий",
+		"abcdefghijklmnopqrstuvwxyz0123456789",
+		"  Hgh-QXAH8_8HQ_Et  ", // пробелы по краям сервер и человек шлют регулярно
+	} {
+		m := Maska(kod)
+		golyy := strings.TrimSpace(kod)
+		if m == golyy {
+			t.Errorf("Maska(%q) вернула сам код", kod)
+		}
+		if !strings.HasPrefix(m, "***") {
+			t.Errorf("Maska(%q) = %q — маска обязана начинаться со звёздочек", kod, m)
+		}
+		if len([]rune(m)) > 5 {
+			t.Errorf("Maska(%q) = %q — открыто больше двух знаков", kod, m)
+		}
+		// Хвост обязан совпасть: маска бесполезна, если по ней нельзя узнать
+		// СВОЙ ключ (ради этого она в окне и стоит).
+		if hvost := []rune(golyy); len(hvost) >= 3 && !strings.HasSuffix(m, string(hvost[len(hvost)-2:])) {
+			t.Errorf("Maska(%q) = %q — по ней не узнать свой ключ", kod, m)
+		}
+	}
+	if m := Maska("   "); m != "" {
+		t.Errorf("Maska(пустой код) = %q, ждали пустую строку: строки «Код доступа» в окне тогда нет вовсе", m)
+	}
+	// Код в один-два знака маскировать нечем — отдаём звёздочки без хвоста, а
+	// не сам код: пусть лучше строка бесполезна, чем выдаёт ключ целиком.
+	if m := Maska("ab"); m != "***" {
+		t.Errorf("Maska(%q) = %q, ждали ***", "ab", m)
+	}
+}
