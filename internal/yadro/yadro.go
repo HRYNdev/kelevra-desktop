@@ -119,7 +119,7 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 
 	cmd := exec.Command(y.Bin, "run", "-c", y.PutKonfiga(), "-D", y.Papka)
 	cmd.Dir = y.Papka
-	zhurnalYadra, err := os.Create(filepath.Join(y.Papka, "yadro.log"))
+	zhurnalYadra, err := sozdatZhurnalYadra(y.Papka)
 	if err != nil {
 		y.zamok.Unlock()
 		return err
