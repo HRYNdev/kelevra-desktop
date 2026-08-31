@@ -89,7 +89,8 @@ CX, CY = 54.0, 54.0
 RING_R = 27.0
 RING_W = 4.0
 GLOW_R = 19.0
-HINT_MIN_STROKE_PX = 1.5  # мин. толщина кольца на итоговом .ico-размере
+HINT_MIN_STROKE_PX = 3.0  # мин. толщина кольца на итоговом .ico-размере (31.08: было 1.5)
+HINT_FLAT_UPTO = 32       # на sz <= этого кольцо красится РОВНО RING_START, без градиента
 
 OUT_ICO = os.path.join(os.path.dirname(__file__), "znachok.ico")
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
@@ -113,12 +114,15 @@ def ring_color_at(px, py, s):
     return (r, g, b)
 
 
-def draw_canvas(s, ring_w=RING_W):
+def draw_canvas(s, ring_w=RING_W, flat=False):
     """Рисует холст VIEWPORT*s x VIEWPORT*s (RGBA).
 
     ring_w — толщина обводки кольца В ИСХОДНЫХ (viewport) единицах для
     ЭТОГО прохода; для мелких итоговых размеров build() передаёт сюда
     увеличенное значение (хинтинг, см. докстринг модуля).
+    flat — красить кольцо ровно RING_START вместо градиента: на мелких
+    размерах градиент не читается как градиент, зато его тёмный конец
+    (#7F9E4A) тянет половину кольца в серое.
     """
     size = int(VIEWPORT * s)
     base = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -173,7 +177,7 @@ def draw_canvas(s, ring_w=RING_W):
             px, py = x + 0.5, y + 0.5
             d = ((px - rcx) ** 2 + (py - rcy) ** 2) ** 0.5
             if r_in <= d <= r_out:
-                col = ring_color_at(px, py, s)
+                col = RING_START if flat else ring_color_at(px, py, s)
                 rpx[x, y] = (int(round(col[0])), int(round(col[1])), int(round(col[2])), 255)
     base = Image.alpha_composite(base, ring)
     return base
@@ -183,7 +187,7 @@ def render_size(sz):
     """Рендерит ОДИН итоговый размер sz отдельным проходом, с толщиной
     кольца, подобранной под sz (хинтинг), а не общим кропом-уменьшением."""
     ring_w = max(RING_W, HINT_MIN_STROKE_PX * FRAME / sz)
-    big = draw_canvas(SS, ring_w=ring_w)
+    big = draw_canvas(SS, ring_w=ring_w, flat=(sz <= HINT_FLAT_UPTO))
     # даунсемплим весь viewport 108 -> 108 с суперсэмплингом (сглаживание)
     smooth = big.resize((VIEWPORT, VIEWPORT), Image.LANCZOS)
     # кроп центрального квадрата FRAME из VIEWPORT (тот же кадр, что был у
@@ -196,11 +200,17 @@ def render_size(sz):
 def build():
     imgs = [render_size(sz) for sz in ICO_SIZES]
 
+    # append_images ОБЯЗАТЕЛЕН. Без него PIL берёт ОДИН переданный образ и сам
+    # ужимает его под каждый размер из sizes — то есть все отдельные проходы
+    # render_size() (хинтинг толщины, плоский цвет на мелких) выбрасываются, а в
+    # .ico ложатся простые уменьшения 256-го. Ровно так и было с 30.08 по 31.08:
+    # хинтинг был написан, .ico не менялся ни на байт. Стенд: stend/znachok_hint.py.
     largest = imgs[-1]
     largest.save(
         OUT_ICO,
         format="ICO",
         sizes=[(i.width, i.height) for i in imgs],
+        append_images=imgs[:-1],
     )
     return imgs
 
