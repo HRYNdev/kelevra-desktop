@@ -29,11 +29,6 @@ var (
 	metkaVersiya string
 )
 
-// podskazkaBezObnovleniya — то, что человек видит, наведя мышь на значок,
-// когда ставить нечего. Ровно та строка, что стояла в dobavitZnachokTreya
-// до появления метки.
-const podskazkaBezObnovleniya = "Kelevra: VPN включён"
-
 // zapomnitObnovlenie — фоновая проверка нашла версию новее нынешней.
 // Зовётся оттуда же, откуда показывается пузырь, и переживает его: пузырь
 // гаснет через секунды, метка держится до установки.
@@ -88,9 +83,15 @@ func pometitObnovlenie(versiya string) {
 func podskazkaTreya() string {
 	versiya := zhdushcheeObnovlenie()
 	if versiya == "" {
-		return podskazkaBezObnovleniya
+		return podskazkaZashchity()
 	}
-	return "Kelevra: вышла версия " + versiya + " — правый клик по значку, «Обновить»"
+	// Обновление НЕ вытесняет объём защиты, а дописывается к нему (31.08).
+	// Раньше находка версии подменяла подсказку целиком, и ровно то время,
+	// пока обновление ждёт тычка — а ждёт оно днями, — значок молчал о том,
+	// половинная у человека защита или полная. Ставить обновление важно, но
+	// не важнее, чем знать, что YouTube идёт мимо VPN.
+	return podskazkaZashchity() + " · вышла версия " + versiya +
+		" — правый клик по значку, «Обновить»"
 }
 
 // punktMenyuObnovleniya — первый пункт меню правого клика, когда

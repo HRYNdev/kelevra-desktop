@@ -440,3 +440,199 @@ func TestUbratHvostChistitOboiHvostaIMusor(t *testing.T) {
 		}
 	}
 }
+
+// Дальше — четыре сцены беды 28-29.08, ради которых Postavit и переписан
+// («нажал обновился, у меня теперь тупо 2 kelevra.exe.old висят и нихуя»;
+// «обновления все ещё как то через жопу работают так что я снёс тупо старую
+// версию и качнул с гитхаба новую»). Общее требование у всех одно: ПОСЛЕ
+// ЛЮБОГО ИСХОДА по пути putExe лежит работающий файл.
+
+// podmenitProverku подменяет проверку годности нового файла на время теста —
+// тем же приёмом, каким podmenitPovtory подменяет переименование.
+func podmenitProverku(t *testing.T, svoya func(novyy, obrazets string) error) {
+	t.Helper()
+	prezhnyaya := proveritNovyy
+	proveritNovyy = svoya
+	t.Cleanup(func() { proveritNovyy = prezhnyaya })
+}
+
+// TestNovyyNeSkachalsyaStaryyNaMeste — сцена «новый файл не скачался».
+// GitHub отдал 404 (релиз снесли, ссылка протухла): Postavit обязан не
+// тронуть ни putExe, ни завести .old, ни оставить временный файл.
+func TestNovyyNeSkachalsyaStaryyNaMeste(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY-RABOCHIY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer s.Close()
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: 100}, put)
+	if err == nil {
+		t.Fatal("404 при скачивании обязан вернуть ошибку")
+	}
+	if b, _ := os.ReadFile(put); string(b) != "STARYY-RABOCHIY" {
+		t.Fatalf("несостоявшаяся закачка тронула рабочее приложение: %q", b)
+	}
+	if _, err := os.Stat(put + ".old"); !os.IsNotExist(err) {
+		t.Fatal("хвост .old заведён на пустом месте — старое приложение никто не отодвигал")
+	}
+	musor, _ := filepath.Glob(filepath.Join(papka, ".kelevra-*.new"))
+	if len(musor) != 0 {
+		t.Fatalf("временные файлы остались мусором: %v", musor)
+	}
+}
+
+// TestSkachalasZaglushkaVmestoSborki — «скачалось, но это не приложение».
+// Ровно то, что подсовывает проксёр или упавший GitHub: вместо .exe приходит
+// HTML-страница нужного размера. До 31.08 она вставала на место рабочего
+// файла как есть. Теперь Postavit узнаёт её ДО того, как тронет putExe.
+func TestSkachalasZaglushkaVmestoSborki(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	// Настоящий Windows-.exe начинается с "MZ" — подделываем именно род файла,
+	// содержимое дальше не важно ни проверке, ни тесту.
+	staroe := "MZ\x90\x00STARAYA-SBORKA"
+	if err := os.WriteFile(put, []byte(staroe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zaglushka := "<html><body>502 Bad Gateway</body></html>"
+	s := server(t, zaglushka)
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(zaglushka))}, put)
+	if err == nil {
+		t.Fatal("страница-заглушка не должна вставать на место приложения")
+	}
+	if b, _ := os.ReadFile(put); string(b) != staroe {
+		t.Fatalf("заглушка добралась до рабочего приложения: %q", b)
+	}
+	if _, err := os.Stat(put + ".old"); !os.IsNotExist(err) {
+		t.Fatal("хвост .old заведён зря: до отодвигания старого файла дело дойти не должно")
+	}
+}
+
+// TestNovyyVstalNerabochimOtkatIHvostUbran — сцена «новый скачался, но не
+// запустился». Файл прошёл проверку до замены, встал на место, а на месте
+// оказался негодным (антивирус обрезал или подменил свежий .exe уже после
+// переименования). Требование: откат на старую сборку И убранный хвост .old
+// — 28.08 у человека не сработало ни то, ни другое.
+func TestNovyyVstalNerabochimOtkatIHvostUbran(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY-RABOCHIY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	novoe := "NOVYY-NO-MYORTVYY"
+	s := server(t, novoe)
+
+	// Проверка ДО замены (образец — putExe) проходит, проверка ПОСЛЕ замены
+	// (образец — уже отодвинутый .old) падает: различаем по имени образца.
+	podmenitProverku(t, func(novyy, obrazets string) error {
+		if strings.HasSuffix(obrazets, ".old") {
+			return fmt.Errorf("новая сборка не запускается")
+		}
+		return nil
+	})
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put)
+	if err == nil {
+		t.Fatal("нерабочая новая сборка обязана вернуть ошибку, а не тихо остаться на месте")
+	}
+	if b, _ := os.ReadFile(put); string(b) != "STARYY-RABOCHIY" {
+		t.Fatalf("отката не было, человек остался с нерабочим приложением: %q", b)
+	}
+	if _, err := os.Stat(put + ".old"); !os.IsNotExist(err) {
+		t.Fatal("хвост .old остался висеть после отката — ровно та картина 28.08")
+	}
+	musor, _ := filepath.Glob(filepath.Join(papka, ".kelevra-*.new"))
+	if len(musor) != 0 {
+		t.Fatalf("временные файлы остались мусором: %v", musor)
+	}
+}
+
+// TestOtkatKopieyTozheUbiraetHvost — тот же отказ проверки после замены, но
+// вдобавок откат переименованием не встаёт (putExe занят навсегда) и
+// работает только копия. Хвост .old обязан быть убран и в этом случае: он
+// больше не нужен, а уборка при следующем запуске 28.08 не случилась —
+// её код жил внутри исчезнувшего .exe.
+func TestOtkatKopieyTozheUbiraetHvost(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY-RABOCHIY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	novoe := "NOVYY-NO-MYORTVYY"
+	s := server(t, novoe)
+
+	podmenitProverku(t, func(novyy, obrazets string) error {
+		if strings.HasSuffix(obrazets, ".old") {
+			return fmt.Errorf("новая сборка не запускается")
+		}
+		return nil
+	})
+	// Отодвинуть старое (kuda == .old) можно, а вот вернуть что-либо в putExe
+	// переименованием — нельзя никогда. Остаётся копия.
+	podmenitPovtory(t, func(ot, kuda string) error {
+		if kuda == put && strings.HasSuffix(ot, ".old") {
+			return fmt.Errorf("putExe занято навсегда")
+		}
+		return os.Rename(ot, kuda)
+	})
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put)
+	if err == nil {
+		t.Fatal("нерабочая новая сборка обязана вернуть ошибку")
+	}
+	if b, _ := os.ReadFile(put); string(b) != "STARYY-RABOCHIY" {
+		t.Fatalf("копия не вернула рабочее приложение: %q", b)
+	}
+	if _, err := os.Stat(put + ".old"); !os.IsNotExist(err) {
+		t.Fatal("хвост .old не убран после отката копией")
+	}
+}
+
+// TestDvaObnovleniyaPodryadNePlodyatHvosty — «2 kelevra.exe.old висят»
+// дословно. Два удачных обновления подряд обязаны оставить рядом с
+// приложением РОВНО ОДИН хвост, а UbratHvost — снести и его.
+func TestDvaObnovleniyaPodryadNePlodyatHvosty(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("SBORKA-1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, sborka := range []string{"SBORKA-2", "SBORKA-3"} {
+		s := server(t, sborka)
+		if err := Postavit(context.Background(), s.Client(),
+			Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(sborka))}, put); err != nil {
+			t.Fatalf("обновление до %s не встало: %v", sborka, err)
+		}
+		if b, _ := os.ReadFile(put); string(b) != sborka {
+			t.Fatalf("после обновления до %s на месте приложения %q", sborka, b)
+		}
+	}
+
+	hvosty, _ := filepath.Glob(filepath.Join(papka, "*.old"))
+	if len(hvosty) != 1 {
+		t.Fatalf("после двух обновлений подряд хвостов %d (%v), а должен быть ровно один", len(hvosty), hvosty)
+	}
+	// Хвост от ВТОРОГО обновления, а не окаменевший от первого.
+	if b, _ := os.ReadFile(put + ".old"); string(b) != "SBORKA-2" {
+		t.Fatalf("хвост .old держит не предыдущую сборку: %q", b)
+	}
+
+	UbratHvost(put)
+	hvosty, _ = filepath.Glob(filepath.Join(papka, "*.old"))
+	if len(hvosty) != 0 {
+		t.Fatalf("UbratHvost не убрал хвосты: %v", hvosty)
+	}
+	if b, _ := os.ReadFile(put); string(b) != "SBORKA-3" {
+		t.Fatalf("UbratHvost задел само приложение: %q", b)
+	}
+}
