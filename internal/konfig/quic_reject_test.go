@@ -13,6 +13,11 @@ package konfig
 // Требования по заданию: правило появляется ровно один раз, повторный
 // прогон Prigotovit не дублирует его, порядок остальных правил не ломается
 // (правило ставится после ведущих sniff/hijack-dns, до правил с rule_set).
+//
+// ПРАВКА 31.08: правило больше не режет весь udp/443 машины — оно сужено
+// полем rule_set до списков заблокированного (иначе в режиме туннеля у
+// человека отваливались игры и звонки, см. quic_tochno_test.go). Этот файл
+// проверяет форму и место правила; точность сужения — соседний файл.
 
 import (
 	"encoding/json"
@@ -97,7 +102,11 @@ func TestPrigotovitDobavlyaetPraviloRezhaSchayeyeQuicOdinRaz(t *testing.T) {
 	// нового правила, а первое правило с rule_set — ПОСЛЕ него.
 	for i := 0; i < idx; i++ {
 		act, _ := pravila[i]["action"].(string)
-		if act != "sniff" && act != "hijack-dns" {
+		// Правило про локальную сеть — тоже наше и стоит перед срезом QUIC
+		// НАРОЧНО (internal/konfig/lokalnaya_set.go): домашний прибор на
+		// udp/443 не должен попасть под срез. Проверяется тем, что сюда не
+		// затесалось правило ПРОФИЛЯ.
+		if act != "sniff" && act != "hijack-dns" && !praviloProLokalnuyuSet(pravila[i]) {
 			t.Fatalf("перед правилом про udp/443 (индекс %d) стоит не sniff/hijack-dns правило: %#v", i, pravila[i])
 		}
 	}
@@ -215,7 +224,12 @@ func tegiMnozhestvom(t *testing.T, v any) map[string]bool {
 // входы пользователя, взятые ИЗ профиля, а не хардкодиться — и не должно
 // пережить фильтрацию входов машины устаревшей ссылкой.
 func TestPraviloUdp443OgranichenoVhodamiPolzovatelya(t *testing.T) {
-	// С правами: остаются оба входа профиля — tun-in и mixed-in.
+	// С правами: в конфиге остаётся ОДИН вход — tun-in. Локальный прокси
+	// (mixed-in) в туннельном режиме выбрасывается целиком (31.08, см.
+	// Prigotovit): он стоит в профиле ради Android, а на компьютере с
+	// поднятым туннелем это лишний открытый порт, на который может смотреть
+	// системный прокси, — ровно та авария 31.08, когда прокси остался висеть
+	// на мёртвом порту и у человека пропал интернет.
 	sPravami, _, err := Prigotovit(profil(t), Vybor{Prava: true})
 	if err != nil {
 		t.Fatal(err)
@@ -231,9 +245,12 @@ func TestPraviloUdp443OgranichenoVhodamiPolzovatelya(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("правило про udp/443 не нашлось")
 	}
-	hochu := map[string]bool{"tun-in": true, "mixed-in": true}
+	hochu := map[string]bool{"tun-in": true}
 	if got := tegiMnozhestvom(t, pravila[idx]["inbound"]); !mapsRavny(got, hochu) {
-		t.Fatalf("inbound правила про udp/443 = %v, хочу %v (оба входа профиля, взятые динамически)", got, hochu)
+		t.Fatalf("inbound правила про udp/443 = %v, хочу %v (вход, реально оставшийся в конфиге)", got, hochu)
+	}
+	if strings.Contains(string(sPravami), `"mixed-in"`) {
+		t.Fatal("в туннельном режиме выброшенный mixed-in всё ещё упомянут в готовом конфиге")
 	}
 
 	// Без прав: tun-in выбрасывается целиком (Prigotovit, случай !estPrava).

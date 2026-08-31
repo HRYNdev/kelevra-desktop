@@ -7,12 +7,27 @@ package konfig
 // ASSOCIATE), чтобы увидеть, что решает МАРШРУТИЗАТОР ядра, а не то, что
 // думает о своей структуре наш собственный код.
 //
-// Зачем именно так, а не через tun: на этой машине нет /dev/net/tun — tun
-// inbound поднять нельзя. mixed-inbound (socks5) даёт то же самое решение
-// маршрутизатора (network/port у route.rules) и поддерживает UDP через
-// UDP ASSOCIATE — этого достаточно, чтобы пропустить настоящий UDP-пакет с
-// портом назначения 443 и настоящий TCP-пакет с портом назначения 443 через
-// один и тот же route.rules, который правит dobavitPravilomRezhimQuic.
+// Зачем именно так, а не через tun: на этой машине нет прав на tun inbound —
+// поднять его нельзя. mixed-inbound (socks5) даёт то же самое решение
+// маршрутизатора (network/port/rule_set у route.rules) и поддерживает UDP
+// через UDP ASSOCIATE — этого достаточно, чтобы пропустить настоящий
+// UDP-пакет с портом назначения 443 и настоящий TCP-пакет с портом
+// назначения 443 через один и тот же route.rules, который правит
+// dobavitPravilomRezhimQuic.
+//
+// ЧТО ИМЕННО ДОКАЗЫВАЕТСЯ (после правки 31.08, сузившей правило). Раньше щуп
+// проверял «весь udp/443 отбит». Теперь правило точечное — привязано к
+// rule_set заблокированного, — и щуп обязан проверять именно точность, иначе
+// он зеленел бы и на грубом правиле, которое рубит QUIC всей машине:
+//
+//	1. TCP:443 к «заблокированному» адресу — ПРОХОДИТ (правило не про TCP);
+//	2. UDP:443 к «заблокированному» адресу — ОТБИТ (иначе он ушёл бы в
+//	   туннель, где UDP не работает: vless с flow xtls-rprx-vision отвергает
+//	   UDP на стороне сервера, «flow does not support UDP»);
+//	3. UDP:443 к адресу ВНЕ списков — ПРОХОДИТ. Это главный вердикт правки:
+//	   игры, звонки и всё, что умеет только QUIC, к прямым адресам живо;
+//	4. UDP на другой порт к «заблокированному» — ПРОХОДИТ (правило только
+//	   про 443).
 //
 // Контроль порчей встроен в сам тест (не отдельный ручной прогон): второй
 // подпрогон запускает ТО ЖЕ ядро на конфиге, из которого наше правило
@@ -20,6 +35,9 @@ package konfig
 // UDP:443 в этом случае ПРОШЁЛ — если он не проходит, значит блокировку
 // создаёт что-то ещё (например default route.final=block), и щуп сам не
 // зелёный, а FailNow с честной причиной.
+//
+// «Заблокированный» адрес — 127.0.0.2, «прямой» — 127.0.0.1: оба петлевые
+// (наружу щуп не ходит вообще), но список правил ссылается только на первый.
 
 import (
 	"bytes"
@@ -36,14 +54,21 @@ import (
 	"time"
 )
 
-// svobodnyPort — берёт свободный TCP-порт на 127.0.0.1 через bind/close;
-// гонка с чужим процессом теоретически возможна, но это тот же приём, что
-// используют соседние Go-тесты сети в этом репозитории.
+// Адреса щупа: первый лежит в списке «заблокированного» (и потому уводится в
+// туннель), второй — нет.
+const (
+	adresZablokirovannogo = "127.0.0.2"
+	adresPryamoy          = "127.0.0.1"
+)
+
 func writeFile(t *testing.T, put string, dannye []byte) error {
 	t.Helper()
 	return os.WriteFile(put, dannye, 0o600)
 }
 
+// svobodnyPort — берёт свободный TCP-порт на 127.0.0.1 через bind/close;
+// гонка с чужим процессом теоретически возможна, но это тот же приём, что
+// используют соседние Go-тесты сети в этом репозитории.
 func svobodnyPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -54,14 +79,14 @@ func svobodnyPort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-// echoTCP443 — сервер-цель на 127.0.0.1:443: если пакет докатился физически,
-// он вернёт его же, и это отличит "докатилось" от "не докатилось" надёжнее,
-// чем просто отсутствие ошибки на sing-box.
-func echoTCP443(t *testing.T) net.Listener {
+// echoTCP — сервер-цель: если пакет докатился физически, он вернёт его же, и
+// это отличит «докатилось» от «не докатилось» надёжнее, чем просто
+// отсутствие ошибки на sing-box.
+func echoTCP(t *testing.T, ip string, port int) net.Listener {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:443")
+	l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
-		t.Skipf("не смог занять 127.0.0.1:443 (нужен root и свободный порт): %v", err)
+		t.Skipf("не смог занять tcp %s:%d: %v", ip, port, err)
 	}
 	go func() {
 		for {
@@ -82,11 +107,11 @@ func echoTCP443(t *testing.T) net.Listener {
 	return l
 }
 
-func echoUDP(t *testing.T, port int) net.PacketConn {
+func echoUDP(t *testing.T, ip string, port int) net.PacketConn {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+	pc, err := net.ListenPacket("udp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
-		t.Skipf("не смог занять udp 127.0.0.1:%d: %v", port, err)
+		t.Skipf("не смог занять udp %s:%d: %v", ip, port, err)
 	}
 	go func() {
 		buf := make([]byte, 4096)
@@ -101,11 +126,28 @@ func echoUDP(t *testing.T, port int) net.PacketConn {
 	return pc
 }
 
+// spisokZablokirovannogo — файл rule_set в формате source: единственная
+// «заблокированная» подсеть щупа. Это тот же механизм, которым в боевом
+// профиле заданы 22 списка, только локальный и крошечный — в сеть щуп не
+// ходит.
+func spisokZablokirovannogo(t *testing.T, dom string) string {
+	t.Helper()
+	put := filepath.Join(dom, "zablokirovannoe.json")
+	telo := []byte(`{"version":2,"rules":[{"ip_cidr":["` + adresZablokirovannogo + `/32"]}]}`)
+	if err := writeFile(t, put, telo); err != nil {
+		t.Fatal(err)
+	}
+	return put
+}
+
 // profilDlyaZhivogo — минимальный самодостаточный профиль: mixed-inbound
-// (socks5, поддерживает UDP ASSOCIATE) + direct-outbound, БЕЗ remote
-// rule_set (сеть наружу для щупа не нужна и не должна быть нужна — цель это
-// решение маршрутизатора, а не успех похода в интернет).
-func profilDlyaZhivogo(mixedPort int) []byte {
+// (socks5, поддерживает UDP ASSOCIATE), выход direct, выход-«туннель»
+// (селектор поверх direct — тип не direct, значит для нашего кода это
+// туннель, но пакеты он реально доносит, иначе вердикты было бы не отличить)
+// и ОДИН локальный rule_set вместо 22 remote (сеть наружу щупу не нужна и не
+// должна быть нужна — цель это решение маршрутизатора, а не успех похода в
+// интернет).
+func profilDlyaZhivogo(mixedPort int, putSpiska string) []byte {
 	d := map[string]any{
 		"log": map[string]any{"level": "info", "timestamp": true},
 		"inbounds": []any{
@@ -117,10 +159,22 @@ func profilDlyaZhivogo(mixedPort int) []byte {
 		},
 		"outbounds": []any{
 			map[string]any{"type": "direct", "tag": "direct"},
+			map[string]any{
+				"type": "selector", "tag": "Соединение",
+				"outbounds": []any{"direct"}, "default": "direct",
+			},
 		},
 		"route": map[string]any{
 			"final": "direct",
-			"rules": []any{},
+			"rules": []any{
+				map[string]any{"rule_set": []any{"zablokirovannoe"}, "outbound": "Соединение"},
+			},
+			"rule_set": []any{
+				map[string]any{
+					"type": "local", "tag": "zablokirovannoe",
+					"format": "source", "path": putSpiska,
+				},
+			},
 		},
 	}
 	b, _ := json.Marshal(d)
@@ -230,9 +284,20 @@ func readPolnostyu(c net.Conn, buf []byte) (int, error) {
 	return n, nil
 }
 
-// socks5Connect — команда CONNECT, возвращает соединение к 127.0.0.1:port,
-// уже проведённое через route.rules ядра, и код ответа сервера.
-func socks5Connect(proxyAddr string, port int) (net.Conn, byte, error) {
+// adresIPv4 — четыре байта адреса щупа для заголовка SOCKS5.
+func adresIPv4(t *testing.T, ip string) []byte {
+	t.Helper()
+	a := net.ParseIP(ip).To4()
+	if a == nil {
+		t.Fatalf("не IPv4-адрес: %q", ip)
+	}
+	return a
+}
+
+// socks5Connect — команда CONNECT, возвращает соединение к ip:port, уже
+// проведённое через route.rules ядра, и код ответа сервера.
+func socks5Connect(t *testing.T, proxyAddr, ip string, port int) (net.Conn, byte, error) {
+	t.Helper()
 	c, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
 	if err != nil {
 		return nil, 0, err
@@ -242,7 +307,8 @@ func socks5Connect(proxyAddr string, port int) (net.Conn, byte, error) {
 		c.Close()
 		return nil, 0, err
 	}
-	req := []byte{0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0, 0}
+	req := append([]byte{0x05, 0x01, 0x00, 0x01}, adresIPv4(t, ip)...)
+	req = append(req, 0, 0)
 	binary.BigEndian.PutUint16(req[8:], uint16(port))
 	if _, err := c.Write(req); err != nil {
 		c.Close()
@@ -289,17 +355,18 @@ func socks5UdpAssociate(proxyAddr string) (ctrl net.Conn, relay *net.UDPAddr, er
 	return c, &net.UDPAddr{IP: ip, Port: int(relayPort)}, nil
 }
 
-// udpCherezReley — шлёт один датаграм на 127.0.0.1:port через relay и ждёт
-// ответное эхо. nil, значит ответа не дождались (сеть решила отвергнуть
-// пакет раньше, чем он дошёл до эхо-сервера, либо эхо-сервер и правда не
-// увидел пакет).
-func udpCherezReley(relay *net.UDPAddr, port int, payload []byte, zhdat time.Duration) ([]byte, error) {
+// udpCherezReley — шлёт один датаграм на ip:port через relay и ждёт ответное
+// эхо. nil, значит ответа не дождались (сеть решила отвергнуть пакет раньше,
+// чем он дошёл до эхо-сервера, либо эхо-сервер и правда не увидел пакет).
+func udpCherezReley(t *testing.T, relay *net.UDPAddr, ip string, port int, payload []byte, zhdat time.Duration) ([]byte, error) {
+	t.Helper()
 	u, err := net.DialUDP("udp", nil, relay)
 	if err != nil {
 		return nil, err
 	}
 	defer u.Close()
-	hdr := []byte{0, 0, 0, 0x01, 127, 0, 0, 1, 0, 0}
+	hdr := append([]byte{0, 0, 0, 0x01}, adresIPv4(t, ip)...)
+	hdr = append(hdr, 0, 0)
 	binary.BigEndian.PutUint16(hdr[8:], uint16(port))
 	if _, err := u.Write(append(hdr, payload...)); err != nil {
 		return nil, err
@@ -316,45 +383,71 @@ func udpCherezReley(relay *net.UDPAddr, port int, payload []byte, zhdat time.Dur
 	return buf[10:n], nil
 }
 
-// TestMarshrutizatorZhivymYadromRezhetUdp443NeTronuvTcp443 — главный щуп
-// задания: настоящее ядро sing-box (`sing-box run`, не `check`) на
-// конфиге, прошедшем через Prigotovit, обязано (1) отвергнуть UDP:443,
-// (2) пропустить TCP:443, (3) пропустить UDP на другой порт. Контроль
-// порчей — тот же конфиг без нашего правила обязан ПРОПУСТИТЬ UDP:443
-// (иначе блокирует что-то другое, и щуп сам красный по честной причине).
-func TestMarshrutizatorZhivymYadromRezhetUdp443NeTronuvTcp443(t *testing.T) {
+// probaUdp — одна проба UDP через свежую ассоциацию: вернуть эхо или nil.
+func probaUdp(t *testing.T, proxyAddr, ip string, port int, payload string) []byte {
+	t.Helper()
+	ctrl, relay, err := socks5UdpAssociate(proxyAddr)
+	if err != nil {
+		t.Fatalf("socks5 UDP ASSOCIATE (для %s:%d): %v", ip, port, err)
+	}
+	defer ctrl.Close()
+	otvet, err := udpCherezReley(t, relay, ip, port, []byte(payload), 1500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("udp %s:%d через релей: %v", ip, port, err)
+	}
+	return otvet
+}
+
+// TestMarshrutizatorZhivymYadromRezhetQuicTochechno — главный щуп задания:
+// настоящее ядро sing-box (`sing-box run`, не `check`) на конфиге, прошедшем
+// через Prigotovit, обязано отбить UDP:443 ТОЛЬКО к адресу из списка
+// заблокированного и не тронуть ни TCP, ни UDP к прямому адресу, ни UDP на
+// другой порт. Контроль порчей — тот же конфиг без нашего правила обязан
+// ПРОПУСТИТЬ UDP:443 (иначе блокирует что-то другое, и щуп сам красный по
+// честной причине).
+func TestMarshrutizatorZhivymYadromRezhetQuicTochechno(t *testing.T) {
 	bin := putYadra(t)
 	if bin == "" {
 		t.Skipf("настоящего ядра рядом нет — щуп пропущен. Искал: %s", mestaPoiskaYadra())
 	}
 
-	tcp443 := echoTCP443(t)
-	defer tcp443.Close()
-	udp443 := echoUDP(t, 443)
-	defer udp443.Close()
+	tcpZablok := echoTCP(t, adresZablokirovannogo, 443)
+	defer tcpZablok.Close()
+	udpZablok := echoUDP(t, adresZablokirovannogo, 443)
+	defer udpZablok.Close()
+	udpPryamoy := echoUDP(t, adresPryamoy, 443)
+	defer udpPryamoy.Close()
 	inoyPort := 15353
-	udpIno := echoUDP(t, inoyPort)
+	udpIno := echoUDP(t, adresZablokirovannogo, inoyPort)
 	defer udpIno.Close()
 
+	dom := t.TempDir()
 	mixedPort := svobodnyPort(t)
-	syroy := profilDlyaZhivogo(mixedPort)
+	syroy := profilDlyaZhivogo(mixedPort, spisokZablokirovannogo(t, dom))
 	// BezSistemnogoProksi: true — иначе Prigotovit включит set_system_proxy
-	// на mixed-inbound (см. Prigotovit, ветка Proksi), а на этом стенде нет
-	// графического окружения — ядро падает на "unsupported desktop
-	// environment" ещё до того, как успевает открыть порт.
+	// на mixed-inbound (см. Prigotovit, ветка Proksi), а щуп не имеет права
+	// трогать настройки сети машины, на которой он идёт.
 	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: false, BezSistemnogoProksi: true})
 	if err != nil {
 		t.Fatalf("Prigotovit: %v", err)
 	}
 
-	// Живой конфиг обязан содержать ровно наше правило — иначе щуп ниже
-	// проверял бы что-то другое.
-	if n := schyotUdp443Pravil(pravilaRoute(t, gotovyy)); n != 1 {
+	// Живой конфиг обязан содержать ровно наше правило, и обязан содержать
+	// его СУЖЕННЫМ — иначе щуп ниже проверял бы что-то другое.
+	pravila := pravilaRoute(t, gotovyy)
+	if n := schyotUdp443Pravil(pravila); n != 1 {
 		t.Fatalf("в живом конфиге правил network:udp+port:443: %d, хочу 1 — щуп бы проверял не то", n)
 	}
+	for _, p := range pravila {
+		if !praviloUdp443(p) {
+			continue
+		}
+		if _, est := p["rule_set"]; !est {
+			t.Fatalf("правило про udp/443 не сужено списками: %#v — щуп проверял бы грубое правило", p)
+		}
+	}
 
-	dom := t.TempDir()
-	putKonfig := dom + "/config.json"
+	putKonfig := filepath.Join(dom, "config.json")
 	if err := writeFile(t, putKonfig, gotovyy); err != nil {
 		t.Fatal(err)
 	}
@@ -363,10 +456,10 @@ func TestMarshrutizatorZhivymYadromRezhetUdp443NeTronuvTcp443(t *testing.T) {
 	cmd, log := zapustitYadro(t, bin, putKonfig, mixedPort)
 	defer ostanovitYadro(cmd)
 
-	// --- вердикт 1: TCP:443 обязан пройти ---
-	tc, kod, err := socks5Connect(proxyAddr, 443)
+	// --- вердикт 1: TCP:443 к заблокированному обязан пройти ---
+	tc, kod, err := socks5Connect(t, proxyAddr, adresZablokirovannogo, 443)
 	if err != nil {
-		t.Fatalf("socks5 CONNECT :443: %v\nлог ядра:\n%s", err, log.String())
+		t.Fatalf("socks5 CONNECT %s:443: %v\nлог ядра:\n%s", adresZablokirovannogo, err, log.String())
 	}
 	if kod != 0x00 {
 		t.Fatalf("TCP:443 отвергнут сокс-кодом %d, а обязан пройти\nлог ядра:\n%s", kod, log.String())
@@ -379,37 +472,29 @@ func TestMarshrutizatorZhivymYadromRezhetUdp443NeTronuvTcp443(t *testing.T) {
 	if err != nil || string(buf[:n]) != "proba-tcp-443" {
 		t.Fatalf("TCP:443 не докатился до эхо-сервера (n=%d err=%v) — вердикт 1 (пройти) НЕ подтверждён\nлог ядра:\n%s", n, err, log.String())
 	}
-	t.Logf("вердикт 1 [TCP:443]: сокс-код=%d, эхо получено дословно %q — ПРОШЁЛ", kod, string(buf[:n]))
+	t.Logf("вердикт 1 [TCP:443 к заблокированному]: сокс-код=%d, эхо %q — ПРОШЁЛ", kod, string(buf[:n]))
 
-	// --- вердикт 2: UDP:443 обязан быть отвергнут ---
-	ctrl443, relay443, err := socks5UdpAssociate(proxyAddr)
-	if err != nil {
-		t.Fatalf("socks5 UDP ASSOCIATE (для :443): %v\nлог ядра:\n%s", err, log.String())
+	// --- вердикт 2: UDP:443 к заблокированному обязан быть отвергнут ---
+	if otvet := probaUdp(t, proxyAddr, adresZablokirovannogo, 443, "proba-udp-443"); otvet != nil {
+		t.Fatalf("вердикт 2 [UDP:443 к заблокированному] ПРОВАЛЕН: ядро пропустило пакет (эхо %q)\nлог ядра:\n%s", string(otvet), log.String())
 	}
-	otvet443, err := udpCherezReley(relay443, 443, []byte("proba-udp-443"), 1500*time.Millisecond)
-	ctrl443.Close()
-	if err != nil {
-		t.Fatalf("udp:443 через релей: %v", err)
-	}
-	if otvet443 != nil {
-		t.Fatalf("вердикт 2 [UDP:443] ПРОВАЛЕН: ядро пропустило пакет (эхо %q), а правило обязано было его отвергнуть\nлог ядра:\n%s", string(otvet443), log.String())
-	}
-	t.Logf("вердикт 2 [UDP:443]: ответа от эхо-сервера НЕТ (таймаут 1.5с) — ОТВЕРГНУТ")
+	t.Logf("вердикт 2 [UDP:443 к заблокированному]: ответа нет (таймаут 1.5с) — ОТВЕРГНУТ")
 
-	// --- вердикт 3: UDP на другой порт обязан пройти ---
-	ctrlIno, relayIno, err := socks5UdpAssociate(proxyAddr)
-	if err != nil {
-		t.Fatalf("socks5 UDP ASSOCIATE (для :%d): %v\nлог ядра:\n%s", inoyPort, err, log.String())
+	// --- вердикт 3 (главный после правки 31.08): UDP:443 к адресу ВНЕ
+	// списков обязан пройти. Раньше правило резало весь udp/443 машины, и
+	// этот вердикт был бы красным — вместе с играми и звонками человека. ---
+	otvetPryamoy := probaUdp(t, proxyAddr, adresPryamoy, 443, "proba-udp-pryamoy")
+	if otvetPryamoy == nil || string(otvetPryamoy) != "proba-udp-pryamoy" {
+		t.Fatalf("вердикт 3 [UDP:443 мимо списков] ПРОВАЛЕН: ядро отбило QUIC к адресу, которому туннель не нужен (ответ=%v) — это и есть срезанные игры и звонки\nлог ядра:\n%s", otvetPryamoy, log.String())
 	}
-	otvetIno, err := udpCherezReley(relayIno, inoyPort, []byte("proba-udp-inoy"), 1500*time.Millisecond)
-	ctrlIno.Close()
-	if err != nil {
-		t.Fatalf("udp:%d через релей: %v", inoyPort, err)
-	}
+	t.Logf("вердикт 3 [UDP:443 мимо списков]: эхо %q — ПРОШЁЛ", string(otvetPryamoy))
+
+	// --- вердикт 4: UDP на другой порт обязан пройти ---
+	otvetIno := probaUdp(t, proxyAddr, adresZablokirovannogo, inoyPort, "proba-udp-inoy")
 	if otvetIno == nil || string(otvetIno) != "proba-udp-inoy" {
-		t.Fatalf("вердикт 3 [UDP:%d] ПРОВАЛЕН: ядро НЕ пропустило пакет, хотя порт не 443 (ответ=%v)\nлог ядра:\n%s", inoyPort, otvetIno, log.String())
+		t.Fatalf("вердикт 4 [UDP:%d] ПРОВАЛЕН: ядро НЕ пропустило пакет, хотя порт не 443 (ответ=%v)\nлог ядра:\n%s", inoyPort, otvetIno, log.String())
 	}
-	t.Logf("вердикт 3 [UDP:%d]: эхо получено дословно %q — ПРОШЁЛ", inoyPort, string(otvetIno))
+	t.Logf("вердикт 4 [UDP:%d к заблокированному]: эхо %q — ПРОШЁЛ", inoyPort, string(otvetIno))
 
 	ostanovitYadro(cmd)
 
@@ -427,7 +512,7 @@ func TestMarshrutizatorZhivymYadromRezhetUdp443NeTronuvTcp443(t *testing.T) {
 		d["inbounds"].([]any)[0].(map[string]any)["listen_port"] = portPorchi
 		isporchennyy, _ = json.Marshal(d)
 
-		putPorchi := t.TempDir() + "/config.json"
+		putPorchi := filepath.Join(t.TempDir(), "config.json")
 		if err := writeFile(t, putPorchi, isporchennyy); err != nil {
 			t.Fatal(err)
 		}
@@ -435,15 +520,7 @@ func TestMarshrutizatorZhivymYadromRezhetUdp443NeTronuvTcp443(t *testing.T) {
 		defer ostanovitYadro(cmdP)
 
 		proxyP := "127.0.0.1:" + strconv.Itoa(portPorchi)
-		ctrlP, relayP, err := socks5UdpAssociate(proxyP)
-		if err != nil {
-			t.Fatalf("socks5 UDP ASSOCIATE (порча): %v\nлог ядра:\n%s", err, logP.String())
-		}
-		otvetP, err := udpCherezReley(relayP, 443, []byte("proba-porcha-443"), 1500*time.Millisecond)
-		ctrlP.Close()
-		if err != nil {
-			t.Fatalf("udp:443 через релей (порча): %v", err)
-		}
+		otvetP := probaUdp(t, proxyP, adresZablokirovannogo, 443, "proba-porcha-443")
 		if otvetP == nil {
 			t.Fatalf("КОНТРОЛЬ ПОРЧЕЙ НЕ СРАБОТАЛ: без правила udp:443 всё равно отвергнут — щуп проверяет не наше правило, а что-то ещё\nлог ядра:\n%s", logP.String())
 		}
