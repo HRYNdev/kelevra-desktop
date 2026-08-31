@@ -1,0 +1,137 @@
+name: kelevra-vypusk
+
+# Выпуск версии приложения: тег app-vX.Y.Z -> проверки -> сборка под Windows ->
+# релиз с Kelevra.exe.
+#
+# Зачем в CI, а не только vypusk.sh локально. Kelevra обновляется у человека
+# САМА, из последнего релиза этого репозитория (internal/obnovlenie). Значит
+# «сделать релиз» — это правка прямо на его машине, и она не должна зависеть от
+# того, жив ли сейчас чей-то ноутбук с wine и go. Тег ставится из git, дальше
+# всё делает GitHub, и каждый шаг проверяем.
+#
+# vypusk.sh остаётся: он умеет то, чего тут нет (приёмка стендом под wine).
+# Этот воркфлоу — путь «через GitHub», когда стенд недоступен.
+
+on:
+  push:
+    tags: ["app-v*"]
+
+jobs:
+  vypusk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # Гейт: красное к человеку не уезжает. Те же проверки, что и в kelevra.yml,
+      # но здесь они блокируют именно выпуск, а не merge.
+      - name: Тесты
+        run: go test ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Версия из тега
+        id: versiya
+        run: |
+          TEG="${GITHUB_REF_NAME}"
+          VERSIYA="${TEG#app-v}"
+          if [ -z "$VERSIYA" ] || [ "$VERSIYA" = "$TEG" ]; then
+            echo "✗ тег $TEG не похож на app-vX.Y.Z"; exit 1
+          fi
+          echo "teg=$TEG" >> "$GITHUB_OUTPUT"
+          echo "versiya=$VERSIYA" >> "$GITHUB_OUTPUT"
+          echo "выпускаю $VERSIYA по тегу $TEG"
+
+      - name: Сборка под Windows
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+          VERSIYA: ${{ steps.versiya.outputs.versiya }}
+        run: |
+          mkdir -p build
+          go build \
+            -ldflags "-H=windowsgui -s -w -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$VERSIYA" \
+            -o build/Kelevra.exe ./cmd/kelevra
+          ls -l build/Kelevra.exe
+
+      # Версия обязана быть ВНУТРИ файла: пустой -X молча оставляет
+      # «0.1.0-rabota», и тогда обновление у человека не сработает — он
+      # останется на старой версии навсегда, сколько бы релизов ни вышло.
+      - name: Версия внутри exe
+        env:
+          VERSIYA: ${{ steps.versiya.outputs.versiya }}
+        run: |
+          if ! grep -qa "$VERSIYA" build/Kelevra.exe; then
+            echo "✗ в собранном exe нет строки $VERSIYA: ldflags не сработали"; exit 1
+          fi
+          echo "   $(stat -c%s build/Kelevra.exe) байт, версия $VERSIYA внутри найдена"
+          sha256sum build/Kelevra.exe | tee build/Kelevra.exe.sha256
+
+      # Описание берём из аннотации тега: она пишется человеком в момент
+      # выпуска и живёт в git, а не только на странице релиза.
+      - name: Описание из аннотации тега
+        env:
+          TEG: ${{ steps.versiya.outputs.teg }}
+        run: |
+          git tag -l --format='%(contents)' "$TEG" > build/opisanie.md
+          if [ ! -s build/opisanie.md ]; then
+            echo "Сборка $TEG." > build/opisanie.md
+          fi
+          cat build/opisanie.md
+
+      # ЧЕРНОВИК, а не сразу публикация. Обновление у человека берёт ПОСЛЕДНИЙ
+      # релиз и качает из него Kelevra.exe. Опубликованный релиз без файла — это
+      # не «полвыпуска», а поломка прямо у него: 28.08 выгрузка отдала пустой
+      # ответ, и на GitHub полминуты висела версия вообще без .exe.
+      - name: Черновик релиза с файлом
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.versiya.outputs.teg }}
+          name: Kelevra ${{ steps.versiya.outputs.versiya }}
+          body_path: build/opisanie.md
+          files: build/Kelevra.exe
+          draft: true
+          prerelease: false
+
+      # Публикуем только после того, как файл лёг и виден снаружи, и только
+      # если скачанное посторонним совпало со сборкой по sha256.
+      - name: Проверить файл и опубликовать
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEG: ${{ steps.versiya.outputs.teg }}
+        run: |
+          set -eu
+          RAZMER=$(gh release view "$TEG" --json assets \
+            --jq '.assets[] | select(.name=="Kelevra.exe") | .size')
+          if [ -z "${RAZMER:-}" ] || [ "$RAZMER" -lt 1000000 ]; then
+            echo "✗ Kelevra.exe в черновике нет или он огрызок ($RAZMER) — релиз остаётся ЧЕРНОВИКОМ"
+            exit 1
+          fi
+          echo "   в черновике Kelevra.exe: $RAZMER байт"
+          gh release edit "$TEG" --draft=false --latest
+          echo "── скачиваю как посторонний"
+          for popytka in 1 2 3 4 5; do
+            rm -f /tmp/skachano.exe
+            if curl -sSLf -o /tmp/skachano.exe \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TEG/Kelevra.exe"; then
+              break
+            fi
+            echo "   попытка $popytka не удалась, жду"; sleep 5
+          done
+          SHA_MOY=$(cut -d' ' -f1 build/Kelevra.exe.sha256)
+          SHA_TAM=$(sha256sum /tmp/skachano.exe | cut -d' ' -f1)
+          if [ "$SHA_MOY" != "$SHA_TAM" ]; then
+            echo "✗ скачанное снаружи не совпало со сборкой ($SHA_MOY против $SHA_TAM)"; exit 1
+          fi
+          echo "✓ sha256 совпал: $SHA_MOY"
+          echo "✓ https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TEG"
