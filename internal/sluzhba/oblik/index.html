@@ -69,7 +69,6 @@
     font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
     font-size:16px; font-weight:650; letter-spacing:.3px;
   }
-  .znachok { display:block; }
   .chip {
     margin-left:auto; display:flex; align-items:center; gap:7px;
     font-size:12px; color:var(--tihiy); padding:5px 10px 5px 8px;
@@ -712,6 +711,72 @@
     font-weight:650; font-size:21px; letter-spacing:-.4px; color:var(--tekst);
     margin:18px 13px 6px;
   }
+  /* ВКЛАДКА «ПОДПИСКА». Эталон — шторка подписки на телефоне (HomeScreen.kt
+     464-514): заголовок «Подписка», карточка «Состояние» с подписью-строкой
+     «до 12 сентября · 12 из 50 ГБ», ниже карточка «Кто пользуется» +
+     «Устройство», под ней серая подсказка. Состав и порядок оттуда, не мои.
+     На телефоне это шторка, здесь — вкладка: у окна на компьютере внизу и
+     так стоит панель вкладок (KTabBar), и третья вкладка там дешевле, чем
+     шторка, которую нечем открыть — хозяин 01.09: «плюс нет вкладки подписки».
+     Карточки те же .karta .karta-nastroyki, что у настроек, поэтому правила
+     карточки и разделителя строк ниже — копия правил #tab-nastroyki с той же
+     специфичностью (1 id + 2 класса), а не новая форма. */
+  #tab-podpiska .karta-nastroyki { padding-top:14px; padding-bottom:14px; overflow:hidden; }
+  #tab-podpiska .karta-nastroyki > .nastroyki-ryad:not([hidden]) ~ .nastroyki-ryad:not([hidden]) {
+    border-top:1px solid var(--gran); margin-top:14px; padding-top:14px;
+  }
+  /* Строка со СВОЕЙ МЕТКОЙ — KRowItem с полем label (Components.kt 244-299):
+     метка капсом моно 10sp с разрядкой 1.2 цветом Dim2, под ней через 6dp
+     значение Montserrat Medium 15sp, под ним через 3dp подпись 13sp Dim.
+     В настройках метки нет (там строка-кнопка), поэтому это отдельный класс,
+     а не правка .tihaya-tekst. Цвет метки — tihiy, не slabyy: у slabyy
+     контраст 3.46:1, а текст 10px мельче того, для которого WCAG разрешает
+     3:1 (то же решение и по той же причине, что у .zagolovok-bloka выше). */
+  .ryad-svedeniya { display:flex; flex-direction:column; min-width:0; }
+  .ryad-svedeniya[hidden] { display:none; }
+  .ryad-metka {
+    font-family:ui-monospace, Consolas, monospace;
+    font-size:10px; letter-spacing:1.2px; text-transform:uppercase; color:var(--tihiy);
+  }
+  /* ПЕРЕНОС, а не многоточие. Первый заход поставил тут
+     white-space:nowrap + text-overflow:ellipsis, и это была бы ровно та
+     беда, ради которой в приёмке живёт щуп обрезки (oblik_snimok.py,
+     proverit_obrezku): «Текст, срезанный многоточием, — это порча, а не
+     компактно». Имя устройства сервер отдаёт как есть («ASUS TUF Gaming
+     B550-PLUS WIFI II»), и в 420px окна оно не помещается — обрезанное оно
+     не отвечает на вопрос, ради которого строка тут стоит («эта машина —
+     какая из моих?»). На телефоне KRowItem.title тоже переносится, а не
+     режется. break-word — на случай одного длинного слова без пробелов. */
+  .ryad-znachenie {
+    margin-top:6px; font-size:15px; font-weight:500; color:var(--tekst);
+    line-height:1.3; word-break:break-word;
+  }
+  /* Значение подписки красится цветом состояния: «Активна» акцентом (тот же
+     выбор, что у круга и чипа — Components.kt:73-79), «Приостановлена»
+     жёлтым тревоги. Серым остаётся только «Пока неизвестно»: это не
+     состояние подписки, а состояние НАШЕГО знания о ней. */
+  .ryad-znachenie.horosho { color:var(--akcent); }
+  .ryad-znachenie.trevoga { color:var(--zhdem); }
+  .ryad-znachenie.molchit { color:var(--tihiy); }
+  .ryad-podpis {
+    margin-top:3px; font-size:11.5px; line-height:1.35; color:var(--tihiy);
+    white-space:normal;
+  }
+  /* Подсказка под карточкой «кто пользуется» — дословно с телефона
+     (HomeScreen.kt:509): Montserrat 12sp, Dim, отступ слева 4dp. Отвечает на
+     вопрос, который иначе задаст каждый: «а откуда вы знаете имя моей
+     машины». */
+  .podskazka-pod-kartoy { margin:8px 17px 0; font-size:12px; line-height:1.4; color:var(--tihiy); }
+  .podskazka-pod-kartoy[hidden] { display:none; }
+  /* Зазор между карточками держит общее правило `.karta + .karta` (12px), но
+     между второй и третьей стоит ПОДСКАЗКА — соседство разрывается, и без
+     этого правила карточка «Код доступа» прилипала бы к строке подсказки
+     вплотную. Селектор берёт подсказку и в скрытом виде тоже (старый сервер:
+     карточка «кто пользуется» и подсказка исчезают вместе), поэтому зазор
+     перед «Кодом доступа» одинаков в обоих случаях — 12px, тот же, что между
+     любыми двумя карточками окна. */
+  #tab-podpiska .podskazka-pod-kartoy + .karta { margin-top:12px; }
+
   /* Подвал «KELEVRA <версия>» — тот же текст, что и на телефоне
      (BuildConfig.VERSION_NAME), тем же моно-шрифтом и цветом Dim2
      (0x5F6B7D — ровно var(--slabyy)). Значок версии переехал сюда из
@@ -789,18 +854,6 @@
   }
   .podpiska.istekaet .srok { color:var(--zhdem); }
 
-  /* «хозяин · ASUS TUF Gaming B550» — кто владелец ключа и какая это машина.
-     Отдельной строкой ПОД строкой ключа, а не внутри неё: .podpiska — flex-
-     ряд, третий кусок в нём уехал бы в ту же строку и на узком окне выдавил
-     бы срок. Своей рамки и фона нет — это подпись, как и строка выше.
-     Строки нет вовсе, пока сервер не прислал ни одного из двух имён (старый
-     сервер таких полей не шлёт) — пустоты на её месте не остаётся. */
-  .podpiska-kto {
-    margin:-2px 0 6px; padding:0 13px;
-    font-size:11.5px; line-height:1.35; color:var(--tihiy);
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;
-  }
-
   #zhurnal {
     max-height:190px; overflow:auto; margin-top:10px; padding:10px 12px;
     background:var(--fon2); border:1px solid var(--gran); border-radius:var(--r-s);
@@ -823,31 +876,20 @@
 <body>
 
 <div class="shapka">
-  <!-- Значок приложения. До 29.08 тут был рукописный щит с галочкой — он
-       НИКОГДА не был логотипом Kelevra, я его когда-то нарисовал сам, и хозяин
-       на скриншоте справедливо спросил, почему иконка старая. Теперь здесь
-       ровно тот же вектор, что и у иконки приложения: кольцо из
-       kelevra-box/app/src/main/res/drawable/ic_launcher_foreground.xml
-       (те же числа читает cmd/kelevra/znachok_iz_kanona.py, который рисует
-       znachok.ico): viewport 108, центр (54,54), радиус 27, обводка 4,
-       градиент (27,27)->(81,81) #A8CC6B -> #7F9E4A, внутреннее свечение
-       радиусом 19 при fillAlpha 0.16. Здесь взят тот же центральный кадр
-       72x72, что и в .ico, поэтому viewBox сдвинут на 18 по обеим осям.
-       Фон не рисуем: он и так тёмный из шапки. -->
-  <svg class="znachok" width="22" height="22" viewBox="0 0 72 72" fill="none" aria-hidden="true">
-    <defs>
-      <linearGradient id="kolco-obvodka" gradientUnits="userSpaceOnUse" x1="9" y1="9" x2="63" y2="63">
-        <stop offset="0" stop-color="#A8CC6B"/>
-        <stop offset="1" stop-color="#7F9E4A"/>
-      </linearGradient>
-      <radialGradient id="kolco-svechenie" gradientUnits="userSpaceOnUse" cx="36" cy="36" r="19">
-        <stop offset="0" stop-color="#A8CC6B" stop-opacity="0.5"/>
-        <stop offset="1" stop-color="#A8CC6B" stop-opacity="0"/>
-      </radialGradient>
-    </defs>
-    <circle cx="36" cy="36" r="19" fill="url(#kolco-svechenie)" opacity="0.16"/>
-    <circle cx="36" cy="36" r="27" stroke="url(#kolco-obvodka)" stroke-width="4"/>
-  </svg>
+  <!-- ЗНАЧКА ЗДЕСЬ НЕТ, И ЭТО НАРОЧНО. 29.08-31.08 тут стояло кольцо из
+       того же вектора, что и znachok.ico, размером 22px. Оно оказалось
+       ТРЕТЬИМ кольцом на одном экране: системный заголовок окна уже рисует
+       значок приложения (WM_SETICON, cmd/kelevra/okno_windows.go) и уже
+       пишет рядом слово «Kelevra» — то есть наша шапка повторяла ровно ту
+       же пару значок+имя строкой ниже, да ещё и другой толщины линии (у
+       заголовка кадр 16px из .ico, здесь — свежий SVG обводкой 4/72).
+       хозяин 01.09: «сверху у приложения да и ваще он чет на экране как
+       минимум дублируется еще и теперь разные». Кольцо убрано, слово
+       «Kelevra» оставлено: без него шапка теряет опору слева, а слово в
+       системном заголовке видно не всегда (окно можно развернуть так, что
+       заголовок перекрыт) — но ДВУХ ЗНАЧКОВ на экране больше нет ни при
+       каком положении окна. Единственный значок приложения — тот, что в
+       .ico, и он один и тот же в трее, на панели задач и в заголовке. -->
   <span class="imya">Kelevra</span>
   <!-- Раньше тут ещё стояло слово статуса («защищено»/«отключено») — то же
        слово, что и в круге ниже (хозяин, 24.08: «слово "защита" второй раз
@@ -904,12 +946,14 @@
       <div class="podpiska" id="podpiska" hidden>
         <span id="podpiska-imya"></span><span class="srok" id="podpiska-srok"></span>
       </div>
-      <!-- Человек и устройство, как их называет сам сервер (/info: person.name
-           и device.name). Устройство он узнаёт по заголовкам, которыми копия
-           представляется на каждом запросе (internal/ustroystvo) — то есть
-           строка отвечает на «а эта машина в списке моих устройств — какая?».
-           Строка появляется только когда сервер прислал хоть одно из имён. -->
-      <div class="podpiska-kto" id="podpiska-kto" hidden></div>
+      <!-- Строки «человек · устройство» здесь БОЛЬШЕ НЕТ: 01.09 она переехала
+           на свою вкладку «Подписка» отдельными строками «Кто пользуется» и
+           «Устройство» — так же, как на телефоне, где главный экран эти два
+           имени показывает НАМЕРЕННО не (HomeScreen.kt:374-382: «имя аккаунта
+           из панели человеку ничего не говорит», person/device живут в шторке
+           подписки). Держать их в двух местах сразу значит ровно ту жалобу,
+           с которой начался этот заход: «он чет на экране как минимум
+           дублируется». -->
 
       <!-- Карточка «Выход» — эталон телефона: HomeScreen.kt 293-325 (KCard,
            chevron, клик открывает шторку выбора). Полоса режима и весь
@@ -1003,24 +1047,6 @@
           </button>
         </div>
         <div class="beda" id="beda-avtozapusk"></div>
-        <!-- Отправка журналов разработчику. По умолчанию ВКЛЮЧЕНА
-             (hranenie.Nastroyki.ZhurnalyOtpravlyat) — без журналов разбор
-             любой аварии начинается с похода человека в %LOCALAPPDATA%,
-             которого он не сделает. Тумблер тут, а не спрятан: человек обязан
-             видеть, что его логи уезжают, и мочь это выключить одним нажатием.
-             Подпись под строкой говорит, когда посылка ушла в последний раз —
-             иначе тумблер «включено» ничем не отличается от тумблера, который
-             включён и молча не работает. -->
-        <div class="perekl-ryad nastroyki-ryad" id="ryad-zhurnaly">
-          <span class="perekl-tekst">Отправлять логи разработчику
-            <span class="podpis">Раз в сутки, вечером — чтобы отказ можно было разобрать без вас.</span>
-            <span class="podpis" id="podpis-otpravka-zhurnalov"></span>
-          </span>
-          <button class="perekl" id="perekl-zhurnaly" type="button" role="switch" aria-checked="true">
-            <span class="knob"></span>
-          </button>
-        </div>
-        <div class="beda" id="beda-zhurnaly"></div>
         <!-- Автоустановка на холодном старте убрана сознательно
              (cmd/kelevra/main.go) — единственная дверь к установке была тычок
              в пузырь трея (trey_windows.go: tychokVPuzyr). 28.08: у этой кнопки
@@ -1036,10 +1062,20 @@
             <span class="tihaya-podpis" id="podpis-obnovlenie">Версия —</span>
           </span>
         </button>
+        <!-- «Журнал работы» несёт ещё и справку об отправке логов разработчику.
+             До 01.09 рядом стоял отдельный ряд с ТУМБЛЕРОМ «Отправлять логи
+             разработчику»; хозяин: «есть зачем то кнопка не отправлять данные
+             разработчику, я вроде говорил об этом». Тем же днём выбор убрали и
+             на телефоне, причём именно так — сложив справку в подпись этой же
+             строки (SimpleSettingsScreen.kt: KRowItem «Журнал работы», subtitle
+             = отправкаЛоговПодпись; там в комментарии его слова дословно: «в
+             настройках недолжно быть пункта отключения зачем это»).
+             Строка-справка осталась, потому что человек обязан ЗНАТЬ, что логи
+             уезжают, а дата отличает «работает» от «молчит неделю». -->
         <button class="tihaya nastroyki-ryad" id="knopka-zhurnal">
           <span class="tihaya-tekst">
             <span class="tihaya-zagolovok" id="zagolovok-zhurnal">Журнал работы</span>
-            <span class="tihaya-podpis">Записи о запусках и ошибках</span>
+            <span class="tihaya-podpis" id="podpis-otpravka-zhurnalov">Отправляется раз в сутки</span>
           </span>
         </button>
         <pre id="zhurnal" hidden></pre>
@@ -1061,6 +1097,51 @@
            obnovit ниже) — на телефоне его там нет, живёт он теперь тут. -->
       <div class="podval-versiya mono" id="podval-versiya">KELEVRA —</div>
     </div>
+
+    <!-- ВКЛАДКА «ПОДПИСКА». Порядок строк повторяет шторку подписки на
+         телефоне (HomeScreen.kt 464-514), а не придуман здесь:
+           1) карточка «Состояние» — Активна/Приостановлена, подписью срок и
+              трафик одной строкой через « · » (Subscription.kt: note);
+           2) карточка «Кто пользуется» + «Устройство» — целиком исчезает,
+              если сервер не прислал ни одного имени;
+           3) серая подсказка под ней — дословная строка с телефона.
+         Своё, чего на телефоне нет, ровно одно: строка «Код доступа» — и она
+         намеренно ПОСЛЕДНЯЯ и в отдельной карточке. На телефоне код не
+         показан нигде, но там он и не нужен: приложение одно на устройстве, а
+         на компьютере человек ставит Kelevra рядом с телефоном и спрашивает
+         «тот ли ключ я сюда ввёл». Отвечают последние два знака
+         (podpiska.Maska) — узнать свой ключ ими можно, собрать чужой нельзя. -->
+    <div id="tab-podpiska" hidden>
+      <div class="zagolovok-ekrana">Подписка</div>
+
+      <div class="karta karta-nastroyki">
+        <div class="ryad-svedeniya nastroyki-ryad">
+          <span class="ryad-metka">Состояние</span>
+          <span class="ryad-znachenie molchit" id="podp-sostoyanie">Пока неизвестно</span>
+          <span class="ryad-podpis" id="podp-zametka" hidden></span>
+        </div>
+      </div>
+
+      <div class="karta karta-nastroyki" id="podp-karta-kto" hidden>
+        <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-chelovek" hidden>
+          <span class="ryad-metka">Кто пользуется</span>
+          <span class="ryad-znachenie" id="podp-chelovek"></span>
+        </div>
+        <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-ustroystvo" hidden>
+          <span class="ryad-metka">Устройство</span>
+          <span class="ryad-znachenie" id="podp-ustroystvo"></span>
+        </div>
+      </div>
+      <div class="podskazka-pod-kartoy" id="podp-podskazka" hidden>так это устройство подписано на сервере</div>
+
+      <div class="karta karta-nastroyki" id="podp-karta-kod" hidden>
+        <div class="ryad-svedeniya nastroyki-ryad">
+          <span class="ryad-metka">Код доступа</span>
+          <span class="ryad-znachenie mono" id="podp-kod"></span>
+          <span class="ryad-podpis">Показаны последние два знака. Сменить код — в настройках.</span>
+        </div>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -1076,6 +1157,17 @@
       <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/>
       <circle cx="12" cy="12" r="5"/>
     </svg>Сеть
+  </button>
+  <button class="tab" id="vkladka-podpiska" type="button">
+    <!-- Icons.Outlined.CardMembership — карточка с ленточкой. На телефоне
+         вкладки подписки нет вовсе (там она шторка с главного экрана), поэтому
+         иконку не с чего скопировать дословно; взята та, что Material даёт
+         именно подписке, и нарисована в том же наборе Outlined 24x24, что и
+         две соседние — чтобы панель не выглядела собранной из двух разных
+         иконок и одной чужой. -->
+    <svg class="ikonka-tab" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M20 2H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h5v5l3-2 3 2v-5h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm0 13H4v-2h16v2zm0-5H4V4h16v6z"/>
+    </svg>Подписка
   </button>
   <button class="tab" id="vkladka-nastroyki" type="button">
     <!-- Icons.Outlined.Settings — шестерёнка, как на телефоне
@@ -1321,22 +1413,95 @@ function podpisObnovleniya(s) {
 }
 
 let poslednee = null;
-// Две вкладки — «Сеть» и «Настройки» (спека 04.08), нижней панелью, как на
-// телефоне (KTabBar). Панель — сама навигация, а не действие одной из
-// вкладок, поэтому видна на обеих; прячется только на экране ввода кода —
-// там переключать нечего (см. obnovit ниже).
+// Вкладки нижней панелью, как на телефоне (KTabBar). До 01.09 их было две —
+// «Сеть» и «Настройки»; третья, «Подписка», добавлена по прямой жалобе хозяина
+// («плюс нет вкладки подписки»). Панель — сама навигация, а не действие одной
+// из вкладок, поэтому видна на всех трёх; прячется только на экране ввода
+// кода — там переключать нечего (см. obnovit ниже).
+//
+// Список, а не три ручных сравнения: добавление четвёртой вкладки не должно
+// требовать правки в трёх местах — ровно так и заводятся вкладки, которые
+// подсвечены, но не показаны (или наоборот).
+const VKLADKI = [
+  {imya: "set", knopka: "vkladka-set", ekran: "tab-set"},
+  {imya: "podpiska", knopka: "vkladka-podpiska", ekran: "tab-podpiska"},
+  {imya: "nastroyki", knopka: "vkladka-nastroyki", ekran: "tab-nastroyki"},
+];
 let vkladkaTek = "set";
 
 function primenitVkladku() {
-  const naSeti = vkladkaTek === "set";
-  $("vkladka-set").classList.toggle("aktivna", naSeti);
-  $("vkladka-nastroyki").classList.toggle("aktivna", !naSeti);
-  $("tab-set").hidden = !naSeti;
-  $("tab-nastroyki").hidden = naSeti;
+  for (const v of VKLADKI) {
+    const nasha = v.imya === vkladkaTek;
+    $(v.knopka).classList.toggle("aktivna", nasha);
+    $(v.ekran).hidden = !nasha;
+  }
 }
 
-$("vkladka-set").onclick = () => { vkladkaTek = "set"; primenitVkladku(); };
-$("vkladka-nastroyki").onclick = () => { vkladkaTek = "nastroyki"; primenitVkladku(); };
+for (const v of VKLADKI) {
+  $(v.knopka).onclick = () => { vkladkaTek = v.imya; primenitVkladku(); };
+}
+
+// Срок и трафик ОДНОЙ строкой — дословно правило телефона (Subscription.kt
+// 41-52: note). Три вещи в нём легко переврать, поэтому по пунктам:
+//   • куски склеиваются « · » (пробел, средняя точка, пробел);
+//   • дата — «12 сентября», день и месяц в родительном, БЕЗ года;
+//   • трафик — ЦЕЛЫЕ гигабайты и слово «ГБ» ОДИН раз в конце: «12 из 50 ГБ»,
+//     а не «12 ГБ из 50 ГБ». Нет лимита — «без ограничений», а не «0 из 0».
+// Ни одного «—» и ни одной пустой скобки: чего сервер не прислал, того в
+// строке просто нет (то же правило, что на телефоне: «пустые там хуже
+// отсутствия»).
+function zametkaPodpiski(s) {
+  const kuski = [];
+  if (s.do_unix) {
+    kuski.push("до " + new Date(s.do_unix * 1000)
+        .toLocaleDateString("ru-RU", {day:"numeric", month:"long"}));
+  }
+  const gb = (b) => Math.round((b || 0) / 1073741824);
+  kuski.push(s.podpiska_limit_bayt > 0
+      ? gb(s.podpiska_syedeno_bayt) + " из " + gb(s.podpiska_limit_bayt) + " ГБ"
+      : "без ограничений");
+  return kuski.join(" · ");
+}
+
+// Вкладка «Подписка» целиком. Состояние рисуется ТОЛЬКО когда сервер про неё
+// хоть раз ответил (s.podpiska_est): без этой развилки свежий запуск, где
+// /info ещё в полёте, показывал бы «Приостановлена» по нулевому полю — то
+// есть пугал бы человека выдуманной бедой.
+function narisovatPodpisku(s) {
+  const sost = $("podp-sostoyanie"), zametka = $("podp-zametka");
+  if (s.podpiska_est) {
+    sost.textContent = s.podpiska_aktivna ? "Активна" : "Приостановлена";
+    sost.className = "ryad-znachenie " + (s.podpiska_aktivna ? "horosho" : "trevoga");
+    const tekst = zametkaPodpiski(s);
+    zametka.textContent = tekst;
+    zametka.hidden = !tekst;
+  } else {
+    // Та же формулировка, что на телефоне в таком же случае (AdvancedScreen:
+    // summary?.words ?: «Пока неизвестно») — не «ошибка» и не прочерк.
+    sost.textContent = "Пока неизвестно";
+    sost.className = "ryad-znachenie molchit";
+    zametka.textContent = "";
+    zametka.hidden = true;
+  }
+
+  // Карточка «кто пользуется» исчезает ЦЕЛИКОМ вместе со своей подсказкой,
+  // если сервер не прислал ни одного из двух имён (старый сервер их не шлёт
+  // вовсе) — пустая карточка с двумя прочерками хуже её отсутствия.
+  const chelovek = (s.chelovek_imya || "").trim();
+  const ustroystvo = (s.ustroystvo_imya || "").trim();
+  $("podp-chelovek").textContent = chelovek;
+  $("podp-ryad-chelovek").hidden = !chelovek;
+  $("podp-ustroystvo").textContent = ustroystvo;
+  $("podp-ryad-ustroystvo").hidden = !ustroystvo;
+  $("podp-karta-kto").hidden = !(chelovek || ustroystvo);
+  $("podp-podskazka").hidden = !(chelovek || ustroystvo);
+
+  // Код доступа приходит УЖЕ замаскированным (internal/podpiska.Maska) —
+  // окно не маскирует его само и целого кода не получает вовсе.
+  const maska = s.kod_maska || "";
+  $("podp-kod").textContent = maska;
+  $("podp-karta-kod").hidden = !maska;
+}
 
 async function obnovit() {
   let s;
@@ -1448,13 +1613,7 @@ async function obnovit() {
     // на самом заметном месте, никуда переезжать не надо.
     podpiska.className = "podpiska" + (istekaet ? " istekaet" : "");
   }
-  // «хозяин · ASUS TUF Gaming B550». Оба поля необязательны: старый сервер их не
-  // шлёт вовсе, новый может знать только одно из двух — строка тогда несёт то,
-  // что есть, а если нет ничего, её нет совсем (не пустая строка-дыра).
-  const kto = $("podpiska-kto");
-  const ktoTekst = [s.chelovek_imya, s.ustroystvo_imya].filter(Boolean).join(" · ");
-  kto.textContent = ktoTekst;
-  kto.hidden = !ktoTekst;
+  narisovatPodpisku(s);
   const knopkaPolnaya = $("knopka-polnaya");
   knopkaPolnaya.hidden = !s.mozhno_tun;
   // Причина половинчатости (konfig.PrichinaBezPrav) — подсказкой при наведении,
@@ -1496,17 +1655,14 @@ async function obnovit() {
     }
   }
 
-  // Отправка журналов разработчику: тумблер плюс строка «последняя отправка».
-  // Приложение висит в трее неделями — без даты человек не отличит «включено и
-  // работает» от «включено, но ни разу не ушло».
-  const pereklZh = $("perekl-zhurnaly"), vklZh = !!s.zhurnaly_otpravka_vklyuchena;
-  pereklZh.className = "perekl" + (vklZh ? " vklyuchen" : "");
-  pereklZh.setAttribute("aria-checked", vklZh ? "true" : "false");
-  $("podpis-otpravka-zhurnalov").textContent = !vklZh ? ""
-      : s.zhurnaly_otpravka_kogda
-        ? "последняя отправка: " + new Date(s.zhurnaly_otpravka_kogda * 1000)
-            .toLocaleString("ru-RU", {day:"numeric", month:"long", hour:"2-digit", minute:"2-digit"})
-        : "последняя отправка: ещё не было";
+  // Подпись под «Журналом работы» — та же справка и теми же словами, что на
+  // телефоне (SFANavigation.kt: отправкаЛоговПодпись). Тумблера рядом больше
+  // нет (убран 01.09), поэтому и ветки «если включено» нет: отправка
+  // безусловна, дата показывается всегда.
+  $("podpis-otpravka-zhurnalov").textContent = s.zhurnaly_otpravka_kogda
+      ? "Отправлен " + new Date(s.zhurnaly_otpravka_kogda * 1000)
+          .toLocaleString("ru-RU", {day:"numeric", month:"long", hour:"2-digit", minute:"2-digit"})
+      : "Отправляется раз в сутки · ещё не отправлялся";
 
   // Полоса режима — единственное место, где режим включается/выключается
   // (хозяин 27.08: «выбор авто режим который сам все определяет, или ручной и
@@ -1802,20 +1958,6 @@ $("perekl-avtozapusk").onclick = async () => {
   catch (e) {
     $("beda-avtozapusk").textContent = "Автозапуск с Windows: " + e.message;
     $("beda-avtozapusk").className = "beda vidno";
-  }
-  perekl.disabled = false; obnovit();
-};
-
-// Тумблер отправки журналов — по образцу автозапуска выше: спрашиваем ручку,
-// а не рисуем новое состояние сами, и обновляемся с общего /api/sostoyanie.
-$("perekl-zhurnaly").onclick = async () => {
-  const perekl = $("perekl-zhurnaly");
-  const vklyuchit = !(poslednee && poslednee.zhurnaly_otpravka_vklyuchena);
-  perekl.disabled = true;
-  try { await api("zhurnaly_otpravka", {vklyuchit}); $("beda-zhurnaly").className = "beda"; }
-  catch (e) {
-    $("beda-zhurnaly").textContent = "Отправка логов: " + e.message;
-    $("beda-zhurnaly").className = "beda vidno";
   }
   perekl.disabled = false; obnovit();
 };

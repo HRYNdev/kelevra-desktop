@@ -116,7 +116,15 @@ BAZA = {"versiya": "0.5.3", "kod_est": True, "sost": "stoit",
         "vniz_bayt": 0, "vverh_bayt": 0, "pid": 0,
         "imya": "хозяин", "do_unix": 1789430400, "rezhim": "", "zametka": "",
         "mozhno_tun": False, "ruchnoy_proksi": False,
-        "beda": "", "kachaem_yadro": False, "yadro_est": True}
+        "beda": "", "kachaem_yadro": False, "yadro_est": True,
+        # Подписка (вкладка «Подписка», 01.09). Значения — правдоподобный
+        # живой ответ /info: ключ на 50 ГБ, съедено 12, оба имени сервер знает.
+        # kod_maska приходит УЖЕ замаскированной (internal/podpiska.Maska) —
+        # стенд специально не знает целого кода, как не знает его и окно.
+        "podpiska_est": True, "podpiska_aktivna": True,
+        "podpiska_limit_bayt": 53_687_091_200, "podpiska_syedeno_bayt": 12_884_901_888,
+        "kod_maska": "***Et",
+        "chelovek_imya": "хозяин", "ustroystvo_imya": "ASUS TUF Gaming B550-PLUS"}
 
 SCENY = {
     "1_kod": dict(BAZA, kod_est=False),
@@ -247,6 +255,24 @@ SCENY = {
                             zametka=ZAMETKI["ZametkaVes"]),
 }
 
+SCENY.update({
+    "27_podpiska": dict(BAZA),
+    "28_podpiska_pauza": dict(BAZA, podpiska_aktivna=False,
+                              podpiska_limit_bayt=0, podpiska_syedeno_bayt=0),
+    # Старый сервер полей person/device не шлёт вовсе — окно обязано убрать
+    # карточку «кто пользуется» ВМЕСТЕ с её подсказкой, а не оставить рамку с
+    # двумя пустыми строками («пустые там хуже отсутствия» — правило телефона).
+    "29_podpiska_staryy_server": dict(BAZA, chelovek_imya="", ustroystvo_imya=""),
+    # /info ещё ни разу не ответил (свежий запуск, сеть не поднялась). Без
+    # развилки podpiska_est окно нарисовало бы «Приостановлена» по нулевому
+    # полю — то есть напугало бы человека выдуманной бедой.
+    "30_podpiska_molchit": dict(BAZA, podpiska_est=False, podpiska_aktivna=False,
+                                do_unix=0, podpiska_limit_bayt=0, podpiska_syedeno_bayt=0),
+    "31_podpiska_dlinnye_imena": dict(
+        BAZA, chelovek_imya="Константин Афанасьевич Синицын",
+        ustroystvo_imya="ASUS TUF Gaming B550-PLUS WIFI II (домашний компьютер)"),
+})
+
 # 27.08: сцена 24 несла rezhim="proksi" и при этом заметку ПОЛНОГО режима —
 # на снимке круг говорил «трафик браузеров», а блок под ним «Любая программа
 # идёт через Kelevra». Продукт так не умеет (konfig.Prigotovit пишет режим и
@@ -267,6 +293,21 @@ for _imya, _s in SCENY.items():
 # «Сеть», где автозапуска попросту нет — то же немое исчезновение, что уже
 # было 20.08 с этим самым переключателем.
 NASTROYKI_SCENY = {"8_avtozapusk_vykl", "9_avtozapusk_vkl", "10_avtozapusk_ustarela"}
+
+# Вкладка «Подписка» (01.09, по жалобе хозяина «плюс нет вкладки подписки»). Тот
+# же приём, что у NASTROYKI_SCENY выше: без клика по вкладке сцена сняла бы
+# «Сеть», и целый экран остался бы вне приёмки — ровно так 20.08 немо исчез
+# переключатель автозапуска. Четыре сцены закрывают все развилки отрисовки:
+# активна с лимитом и обоими именами; приостановлена и без лимита; старый
+# сервер (имён нет вовсе — карточка «кто пользуется» обязана исчезнуть
+# целиком); /info ещё не отвечал (состояние «Пока неизвестно»). Пятая — на
+# длинных именах: сервер отдаёт имя машины как есть («ASUS TUF Gaming B550-PLUS
+# WIFI II»), в 420px окна оно не помещается, и строка обязана ПЕРЕНЕСТИ его, а
+# не срезать многоточием — щуп обрезки на этой сцене и стережёт разницу.
+# Первый заход правки поставил там nowrap+ellipsis: щуп покраснел бы сразу,
+# и правильно — обрезанное имя не отвечает на вопрос «эта машина какая?».
+PODPISKA_SCENY = {"27_podpiska", "28_podpiska_pauza", "29_podpiska_staryy_server",
+                  "30_podpiska_molchit", "31_podpiska_dlinnye_imena"}
 
 # Шторка выбора выхода (29.08, см. комментарий у сцен 25/26 выше) закрыта по
 # умолчанию — снимок без клика по карточке «Выход» показал бы главный экран,
@@ -948,6 +989,120 @@ def proverit_obnovlenie(str_, imya_sceny):
     return []
 
 
+def proverit_podpisku(str_, imya_sceny, sost):
+    """Вкладка «Подписка» говорит то, что прислал сервер, и НЕ говорит лишнего.
+
+    Ловит четыре класса беды разом, и все четыре тут уже случались в соседних
+    экранах, поэтому проверяются, а не подразумеваются:
+      1. состояние выдумано — «Приостановлена» показана там, где сервер ещё
+         вообще не отвечал (свежий запуск: podpiska_est=false);
+      2. пустая видимая строка — рамка есть, значения нет («пустые там хуже
+         отсутствия», правило телефона: Subscription.kt 30-37);
+      3. карточка «кто пользуется» осталась с пустыми строками на старом
+         сервере, который person/device не шлёт вовсе;
+      4. КОД ДОСТУПА УТЁК ОТКРЫТЫМ ТЕКСТОМ. Это не косметика: снимок окна
+         человек шлёт в поддержку не задумываясь, и вместе со снимком уехал бы
+         рабочий доступ к подписке. Гейт держит форму маски (звёздочки и не
+         больше двух знаков), а не конкретную строку.
+    """
+    d = str_.evaluate("""() => {
+      const t = (id) => (document.getElementById(id).textContent || "").trim();
+      const vidno = (id) => {
+        const el = document.getElementById(id);
+        return !!(el && el.offsetParent);
+      };
+      const pustye = [...document.querySelectorAll('#tab-podpiska .ryad-znachenie')]
+          .filter((el) => el.offsetParent && !(el.textContent || "").trim())
+          .map((el) => el.id || "без id");
+      return {
+        vkladkaVidna: vidno("tab-podpiska"),
+        sostoyanie: t("podp-sostoyanie"),
+        zametka: vidno("podp-zametka") ? t("podp-zametka") : "",
+        kartaKto: vidno("podp-karta-kto"),
+        podskazka: vidno("podp-podskazka"),
+        chelovek: vidno("podp-ryad-chelovek") ? t("podp-chelovek") : "",
+        ustroystvo: vidno("podp-ryad-ustroystvo") ? t("podp-ustroystvo") : "",
+        kod: vidno("podp-karta-kod") ? t("podp-kod") : "",
+        pustye,
+      };
+    }""")
+    bedy = []
+    p = lambda b: bedy.append(f"{imya_sceny}: {b}")
+
+    if not d["vkladkaVidna"]:
+        p("вкладка «Подписка» не показалась после клика по её кнопке")
+        return bedy
+
+    zhdem_sost = ("Пока неизвестно" if not sost.get("podpiska_est")
+                  else "Активна" if sost.get("podpiska_aktivna") else "Приостановлена")
+    if d["sostoyanie"] != zhdem_sost:
+        p(f"состояние подписки «{d['sostoyanie']}», а сервер прислал "
+          f"est={sost.get('podpiska_est')} aktivna={sost.get('podpiska_aktivna')} "
+          f"— ждали «{zhdem_sost}»")
+
+    if sost.get("podpiska_est"):
+        # Срок и трафик одной строкой — правило телефона (Subscription.kt: note).
+        if sost.get("do_unix") and "до " not in d["zametka"]:
+            p(f"срок подписки пропал из строки «{d['zametka']}»")
+        if sost.get("podpiska_limit_bayt"):
+            if " из " not in d["zametka"] or "ГБ" not in d["zametka"]:
+                p(f"трафик пропал из строки «{d['zametka']}» "
+                  f"(ждали «<съедено> из <лимит> ГБ»)")
+            if "ГБ из" in d["zametka"]:
+                p(f"«ГБ» написано дважды: «{d['zametka']}» — на телефоне слово "
+                  f"стоит ОДИН раз, в конце")
+        elif "без ограничений" not in d["zametka"]:
+            p(f"лимита нет, а строка не говорит «без ограничений»: «{d['zametka']}»")
+    elif d["zametka"]:
+        p(f"сервер про подписку не отвечал, а строка срока и трафика всё равно "
+          f"нарисована: «{d['zametka']}»")
+
+    est_imena = bool((sost.get("chelovek_imya") or "").strip()
+                     or (sost.get("ustroystvo_imya") or "").strip())
+    if d["kartaKto"] != est_imena:
+        p(f"карточка «кто пользуется» {'видна' if d['kartaKto'] else 'скрыта'}, "
+          f"а имён от сервера {'есть' if est_imena else 'нет'}")
+    if d["podskazka"] != est_imena:
+        p("подсказка «так это устройство подписано на сервере» живёт отдельно от "
+          "своей карточки — они обязаны появляться и исчезать вместе")
+
+    for pusto in d["pustye"]:
+        p(f"строка «{pusto}» видна, а значения в ней нет — пустая строка хуже её отсутствия")
+
+    # Гейт на утёкший код. Маска приходит с сервера (internal/podpiska.Maska),
+    # но окно могло бы показать вместо неё что угодно — проверяем ФОРМУ.
+    kod = d["kod"]
+    if kod:
+        if not kod.startswith("***"):
+            p(f"код доступа показан без маски: «{kod}»")
+        elif len(kod) > 5:
+            p(f"маска кода открывает слишком много: «{kod}» ({len(kod)} знаков, "
+              f"больше «***» плюс два)")
+    elif sost.get("kod_maska"):
+        p("маска кода пришла с сервера, а строки «Код доступа» на вкладке нет")
+    return bedy
+
+
+def kontrol_podpiski(br, port):
+    """Щуп подписки обязан покраснеть, если код показать открытым текстом.
+
+    Порча — ровно та, которой боимся: в строку кода кладём правдоподобный
+    целый ключ вместо маски. Без этого контроля зелень гейта ничего не значит.
+    """
+    sostoyanie["tek"] = SCENY["27_podpiska"]
+    str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
+    str_.goto(f"http://127.0.0.1:{port}/index.html")
+    str_.wait_for_timeout(700)
+    str_.click("#vkladka-podpiska")
+    str_.wait_for_timeout(200)
+    str_.evaluate("""() => {
+      document.getElementById('podp-kod').textContent = 'Hgh-QXAH8_8HQ_Et';
+    }""")
+    bedy = proverit_podpisku(str_, "контроль-подписка", SCENY["27_podpiska"])
+    str_.close()
+    return bedy
+
+
 def kontrol_podpisi_nastroyek(br, port):
     """Щуп подписей обязан покраснеть, если подпись у пункта стереть."""
     sostoyanie["tek"] = SCENY["8_avtozapusk_vykl"]
@@ -1162,6 +1317,9 @@ def snyat():
                 if imya in NASTROYKI_SCENY:
                     str_.click("#vkladka-nastroyki")
                     str_.wait_for_timeout(200)
+                if imya in PODPISKA_SCENY:
+                    str_.click("#vkladka-podpiska")
+                    str_.wait_for_timeout(200)
                 if imya in SHTORKA_SCENY:
                     str_.click("#karta-vyhod")
                     str_.wait_for_timeout(200)
@@ -1188,6 +1346,8 @@ def snyat():
                     bedy += proverit_avtorezhim(str_, imya, ZHDEM_AVTOREZHIM[imya])
                 if sost.get("sost") != "rabotaet":
                     bedy += proverit_net_zametki_obema(str_, imya)
+                if imya in PODPISKA_SCENY:
+                    bedy += proverit_podpisku(str_, imya, sost)
                 if imya in NASTROYKI_SCENY:
                     bedy += proverit_podpisi_nastroyek(str_, imya)
                     bedy += proverit_zagolovki_blokov(str_, imya)
@@ -1249,6 +1409,8 @@ def snyat():
                                           "серая точка на «защищено» его не разбудила"),
                 "обновления": (kontrol_obnovleniya(br, port),
                                "подпись, зависшая на «Проверяем…», его не разбудила"),
+                "подписки": (kontrol_podpiski(br, port),
+                             "код доступа, показанный открытым текстом, его не разбудил"),
             }
             br.close()
         srv.shutdown()
