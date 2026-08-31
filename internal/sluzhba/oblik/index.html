@@ -17,7 +17,22 @@
     --tekst:#f0f1ec; --tihiy:#a5aba3; --slabyy:#71766f;
     --akcent:#a8cc6b; --akcent-tem:#111310;
     --zhdem:#e0a34a; --beda:#f08379; --norma:#4fbfa4;
-    --shapka:56px; --nizhnyaya:84px; --taby-vysota:66px;
+    --shapka:56px; --taby-vysota:66px; --zazor-niz:18px;
+    /* --zazor-niz пришёл на место --nizhnyaya:84px. 84px были высотой НИЖНЕЙ
+       КНОПКИ, которая жила внизу окна до 21.08; с тех пор кнопкой стал сам
+       круг («отдельная кнопка внизу не нужна», спека 0.6.8), а внизу окна
+       осталась только панель вкладок — и у неё своя мера, --taby-vysota:66px,
+       которую .lenta и так обходит своим bottom. Число 84 пережило ту кнопку
+       и превратилось в резерв под панель, которой нет: .lenta держала его
+       своим padding-bottom, а #tab-set внутри неё — ЕЩЁ РАЗ своим, итого
+       168px пустоты под содержимым (замер headless Chromium 31.08, окна
+       404x655 / 420x660 / 420x560: расстояние от низа последней карточки до
+       верха панели вкладок = 168px во ВСЕХ состояниях, при том что само
+       содержимое обрезалось краем #tab-set выше по экрану). Ровно это хозяин
+       и видел: «Любая программа идёт через Kelevra.» срезана пополам, а под
+       ней — полоса пустоты до самого низа. Теперь внизу живёт только зазор
+       для дыхания, тот же, что по бокам ленты (18px), и держит его ОДИН
+       хозяин — .lenta. */
     /* KDim: RadiusL 26dp, RadiusM 18dp, RadiusS 12dp, DialSize 210dp, DialStroke 2dp. */
     --r-m:18px; --r-s:12px; --krug:210px;
   }
@@ -89,7 +104,7 @@
      (последний узел упирается в реальный, а не невидимый, край). */
   .lenta {
     position:absolute; top:var(--shapka); bottom:var(--taby-vysota); left:0; right:0;
-    overflow-y:auto; overflow-x:hidden; padding:0 18px var(--nizhnyaya);
+    overflow-y:auto; overflow-x:hidden; padding:0 18px var(--zazor-niz);
   }
   /* Экран кода — единственный без нижней панели: вкладки скрыты, поэтому
      .lenta тут возвращает себе полную высоту (bottom:0), а не режется по
@@ -99,7 +114,7 @@
      1_kod). Карточка кода ~270px при окне 604px — переполнения, при котором
      flex обрезал бы верх, тут быть не может. */
   .lenta.bez-nizhney {
-    bottom:0; padding-bottom:18px;
+    bottom:0; padding-bottom:var(--zazor-niz);
     display:flex; flex-direction:column; justify-content:center;
   }
   /* Полоса прокрутки — один общий блок на все четыре скролл-контейнера
@@ -145,10 +160,11 @@
      Обычный padding на нескроллящемся предке — просто часть потока. */
   /* height:100%, не calc(100% + var(--nizhnyaya)): та инфляция задваивала
      нижний зазор (беда 30.08, хозяин: «2 полосочки типо перемешатся вниз» —
-     на скрине два скроллбара рядом). .lenta уже резервирует 84px своим
-     собственным padding-bottom (см. .lenta выше), а #tab-set резервирует те
-     же 84px ЕЩЁ РАЗ своим padding-bottom (см. ниже) — этого одного набора
-     достаточно. +nizhnyaya здесь делало #karta-svyazi ВСЕГДА на 84px выше
+     на скрине два скроллбара рядом). Зазор внизу держит ОДИН хозяин —
+     .lenta своим padding-bottom:var(--zazor-niz) (см. .lenta выше); ни
+     #karta-svyazi, ни #tab-set его больше не повторяют (31.08: повторяли, и
+     это давало 168px пустоты — см. --zazor-niz в :root).
+     +nizhnyaya здесь делало #karta-svyazi ВСЕГДА на 84px выше
      собственного box .lenta, из-за чего .lenta вечно скроллилась на эти
      84px пустоты — вторая, лишняя полоса рядом с полосой #tab-set, даже
      когда содержимое целиком помещалось в окно. Довод про scrollIntoView
@@ -159,7 +175,7 @@
      фиксированной высоты, #tab-nastroyki (настройки) ниже её не трогает —
      остаётся обычным потоком и скроллится через .lenta, как раньше (список
      настроек может быть длиннее окна, ему это можно). */
-  /* overflow-y:auto и padding-bottom:var(--nizhnyaya) — эталон телефона,
+  /* overflow-y:auto — эталон телефона,
      HomeScreen.kt:236-240 (Column.verticalScroll на весь главный экран), а
      не подгонка кусков под высоту. До 29.08 у .tab-set своего скролла не
      было — переполнение молча утекало в .lenta, и на первом кадре её жёсткая
@@ -168,14 +184,40 @@
      5_slomalos, «Windows не дал создать сетевой адаптер» — карточка беды на
      несколько строк): резало не саму беду (обычный текст, забору
      безразличен), а кнопку #karta-vyhod — она тогда стояла ПОСЛЕДНЕЙ, ниже
-     беды, и любой рост текста двигал её к границе. padding-bottom тут же
-     84px, что и у .lenta/.shtorka — тот же зазор перед нижней панелью,
-     просто внутри своего скролла. Но один только скролл беду не лечит:
-     кнопка стояла последней, поэтому чинит ещё и порядок разметки ниже. */
+     беды, и любой рост текста двигал её к границе. Но один только скролл
+     беду не лечит: кнопка стояла последней, поэтому чинит ещё и порядок
+     разметки ниже.
+     СВОЕГО padding-bottom тут НЕТ, и это правка 31.08: он повторял зазор,
+     который .lenta уже держит снаружи (--zazor-niz), — а до 31.08 повторял
+     фантомные 84px, и вместе с такими же 84px у .lenta это давало 168px
+     пустоты под содержимым, из-за которых край #tab-set резал последнюю
+     карточку пополам гораздо выше нижней панели. Низ содержимого теперь
+     совпадает с низом собственного box #tab-set, а дыхание перед панелью
+     вкладок даёт .lenta. */
   #tab-set {
     height:100%; display:flex; flex-direction:column;
-    overflow-y:auto; overflow-x:hidden; padding-bottom:var(--nizhnyaya);
+    overflow-y:auto; overflow-x:hidden;
+    /* Место под полосу прокрутки резервируется С ОБЕИХ сторон и ВСЕГДА.
+       Без этого круг стоял по центру ПОЛЯ ПРОКРУТКИ, а поле уже, чем окно,
+       ровно на ширину полосы — и только справа. Замер headless Edge при
+       окне 420x660: центр круга 205 при центре окна 210, а при окне 700x900
+       (содержимое влезло, полосы нет) — 350 против 350. То есть круг
+       СДВИГАЛСЯ на полполосы туда-сюда в зависимости от того, длинный ли
+       сейчас текст беды под ним. Это и есть «круг *** основной находится
+       не ровно… стоит не по центру а слева» и «ездит» (хозяин, 27.08):
+       чинили тогда вертикаль (круг уезжал при прокрутке), а горизонталь
+       осталась. both-edges, а не stable: одна зарезервированная полоса
+       справа сместила бы круг ровно так же, только на другую сторону. */
+    scrollbar-gutter:stable both-edges;
   }
+  /* Пока открыта шторка выбора выхода, фон под ней прокручиваться не должен:
+     иначе на экране ДВЕ полосы разом — своя у шторки и оставшаяся у фона
+     (замер headless Edge, окна 420x460 и 1100x500: полос 2). Ровно та жалоба
+     30.08: «*** *** в приложении теперь вообще 2 полосочки». На телефоне
+     ModalBottomSheet тоже держит фон неподвижным, пока открыт. Класс вешает
+     JS (otkrytShtorku/zakrytShtorku ниже). Специфичность (1 id + 1 класс)
+     перебивает #tab-set выше. */
+  #tab-set.pod-shtorkoy { overflow-y:hidden; }
   /* Тот же капкан, что у .taby/.perekl-ryad/.zagolovok-bloka выше (см. их
      комментарии): ID-селектор #tab-set с явным display:flex ПЕРЕБИВАЕТ
      встроенное [hidden]{display:none} по специфичности, а не по порядку —
@@ -329,6 +371,17 @@
      вращение в этом файле означает «идёт работа», а тут её нет вовсе. */
   .krug-blok.ozhidanie .krug-koltso { stroke:var(--zhdem); color:var(--zhdem); }
   .krug-blok.ozhidanie .krug-slovo { color:var(--zhdem); }
+  /* Частичная защита (chastichnaya, sluzhba.go): ядро РАБОТАЕТ, но через него
+     идут только программы, уважающие системный прокси, и только TCP — весь
+     UDP, а с ним QUIC и YouTube, уходит к провайдеру мимо. До 31.08 круг в
+     этом состоянии был ровно тем же зелёным «подключено», что и у полного
+     туннеля (диагноз хозяина: «впн не выполняет свою основную функцию»).
+     Цвет «ждём», как у ozhidanie: это не беда (защита есть) и не полная
+     работа. Дыхание кольца оставляем — трафик правда идёт. Правило стоит
+     ПОСЛЕ .rabotaet, поэтому побеждает его цветом при том же s.sost. */
+  .krug-blok.chastichno .krug-koltso { stroke:var(--zhdem); color:var(--zhdem);
+    animation:krug-dyshit 3.6s ease-in-out infinite; }
+  .krug-blok.chastichno .krug-slovo { color:var(--zhdem); }
 
   /* margin 13px, не 2px: слева от текста должен быть тот же отступ, что и у
      карточек/узлов ниже (их padding 13-16px от края .lenta) — раньше «ВЫБОР
@@ -440,7 +493,16 @@
     width:100%; max-width:480px; max-height:82vh; overflow-y:auto;
     background:var(--fon2); border:1px solid var(--gran); border-bottom:0;
     border-top-left-radius:var(--r-m); border-top-right-radius:var(--r-m);
-    padding:16px 16px calc(16px + var(--nizhnyaya));
+    /* Снизу — только зазор для дыхания, тот же, что у ленты. Резервировать
+       под шторкой высоту панели вкладок НЕ НАДО, и это не очевидно: панель
+       действительно стоит там, но шторка кладётся ПОВЕРХ неё (z-index 5
+       против 3) непрозрачным фоном var(--fon2) и закрывает её целиком —
+       резерв под невидимую панель был бы такой же мёртвой полосой, как
+       бывшие 84px у ленты (см. --zazor-niz в :root). До 31.08 тут стояло
+       calc(16px + 84px) = 100px пустоты под последним узлом списка; щуп
+       мёртвой высоты (stend/oblik_snimok.py) поймал остаток сразу, как
+       появился. */
+    padding:16px 16px var(--zazor-niz);
   }
   .shtorka-shapka { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
   .shtorka-zagolovok {
@@ -520,6 +582,14 @@
     -webkit-tap-highlight-color:transparent;
   }
   button:focus-visible, input:focus-visible { outline:2px solid var(--akcent); outline-offset:2px; }
+  /* Кнопки нижней панели вкладок прижаты к самым краям окна: левая начинается
+     на x=0, правая кончается на x=W, обе стоят на y=H. Рамка НАРУЖУ (offset
+     2px + толщина 2px) вылезала за окно на 4px с трёх сторон разом и обрезалась
+     краем — замер headless Chromium 31.08, окна 404x655…700x900: «vkladka-set
+     [слева 4, снизу 4]», «vkladka-nastroyki [справа 4, снизу 4]» во ВСЕХ
+     сценах. Внутрь (offset −3px) рамка целиком помещается в саму кнопку и
+     остаётся видна на любом размере окна: панель 66px высотой, ей не тесно. */
+  .taby .tab:focus-visible { outline-offset:-3px; }
   .glavnaya {
     width:100%; padding:14px; font-size:15.5px; font-weight:650;
     background:var(--akcent); color:var(--akcent-tem); transition:.15s;
@@ -719,6 +789,18 @@
   }
   .podpiska.istekaet .srok { color:var(--zhdem); }
 
+  /* «хозяин · ASUS TUF Gaming B550» — кто владелец ключа и какая это машина.
+     Отдельной строкой ПОД строкой ключа, а не внутри неё: .podpiska — flex-
+     ряд, третий кусок в нём уехал бы в ту же строку и на узком окне выдавил
+     бы срок. Своей рамки и фона нет — это подпись, как и строка выше.
+     Строки нет вовсе, пока сервер не прислал ни одного из двух имён (старый
+     сервер таких полей не шлёт) — пустоты на её месте не остаётся. */
+  .podpiska-kto {
+    margin:-2px 0 6px; padding:0 13px;
+    font-size:11.5px; line-height:1.35; color:var(--tihiy);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;
+  }
+
   #zhurnal {
     max-height:190px; overflow:auto; margin-top:10px; padding:10px 12px;
     background:var(--fon2); border:1px solid var(--gran); border-radius:var(--r-s);
@@ -822,6 +904,12 @@
       <div class="podpiska" id="podpiska" hidden>
         <span id="podpiska-imya"></span><span class="srok" id="podpiska-srok"></span>
       </div>
+      <!-- Человек и устройство, как их называет сам сервер (/info: person.name
+           и device.name). Устройство он узнаёт по заголовкам, которыми копия
+           представляется на каждом запросе (internal/ustroystvo) — то есть
+           строка отвечает на «а эта машина в списке моих устройств — какая?».
+           Строка появляется только когда сервер прислал хоть одно из имён. -->
+      <div class="podpiska-kto" id="podpiska-kto" hidden></div>
 
       <!-- Карточка «Выход» — эталон телефона: HomeScreen.kt 293-325 (KCard,
            chevron, клик открывает шторку выбора). Полоса режима и весь
@@ -915,6 +1003,24 @@
           </button>
         </div>
         <div class="beda" id="beda-avtozapusk"></div>
+        <!-- Отправка журналов разработчику. По умолчанию ВКЛЮЧЕНА
+             (hranenie.Nastroyki.ZhurnalyOtpravlyat) — без журналов разбор
+             любой аварии начинается с похода человека в %LOCALAPPDATA%,
+             которого он не сделает. Тумблер тут, а не спрятан: человек обязан
+             видеть, что его логи уезжают, и мочь это выключить одним нажатием.
+             Подпись под строкой говорит, когда посылка ушла в последний раз —
+             иначе тумблер «включено» ничем не отличается от тумблера, который
+             включён и молча не работает. -->
+        <div class="perekl-ryad nastroyki-ryad" id="ryad-zhurnaly">
+          <span class="perekl-tekst">Отправлять логи разработчику
+            <span class="podpis">Раз в сутки, вечером — чтобы отказ можно было разобрать без вас.</span>
+            <span class="podpis" id="podpis-otpravka-zhurnalov"></span>
+          </span>
+          <button class="perekl" id="perekl-zhurnaly" type="button" role="switch" aria-checked="true">
+            <span class="knob"></span>
+          </button>
+        </div>
+        <div class="beda" id="beda-zhurnaly"></div>
         <!-- Автоустановка на холодном старте убрана сознательно
              (cmd/kelevra/main.go) — единственная дверь к установке была тычок
              в пузырь трея (trey_windows.go: tychokVPuzyr). 28.08: у этой кнопки
@@ -1014,6 +1120,11 @@ function podzagolovok(s) {
   // роутер, VPN и не нужен (хозяин, 27.08).
   if (s.ozhidanie_doma) return "дома VPN не нужен";
   if (s.sost === "rabotaet") {
+    // «мимо идут игры» вместо прежнего «трафик браузеров»: старая строка
+    // называла то, что защищено, и молчала о том, что НЕ защищено, — а
+    // человек жаловался ровно на второе (31.08, YouTube по QUIC). Что
+    // защищено, уже сказано словом «частично» в самом круге над этой строкой.
+    if (s.chastichnaya) return "мимо идут игры";
     return s.rezhim === "tunnel" ? "весь трафик" : "трафик браузеров";
   }
   if (s.sost === "podnimaem") return "пара секунд";
@@ -1090,7 +1201,7 @@ function zametkaAvtorezhima(s) {
   // подряд молчания выглядели бы как секундная заминка.
   if (s.avtorezhim_slep_prichina) {
     return "Не пойму, дома вы или нет: " + s.avtorezhim_slep_prichina +
-           ". Автоматический режим сам защиту не переключает.";
+           ". Автоматический режим сам ничего не переключает.";
   }
   if (s.avtorezhim_obstanovka === "неизвестно") {
     return "Авторежим ещё смотрит, что это за сеть.";
@@ -1241,8 +1352,16 @@ async function obnovit() {
   // Ожидание дома — класс ДОПОЛНИТЕЛЬНЫЙ к s.sost (обычно "stoit"), а не
   // замена: .krug-blok.ozhidanie CSS-правило (см. выше .stoit) стоит позже в
   // таблице стилей и побеждает цветом --zhdem.
-  $("krug-blok").className = "krug-blok " + s.sost + (s.ozhidanie_doma ? " ozhidanie" : "");
-  const zvanie = s.ozhidanie_doma ? "ожидание" : (podpisi[s.sost] || s.sost);
+  // «частично» — ДОПОЛНИТЕЛЬНЫЙ класс к s.sost ("rabotaet"), как и ozhidanie
+  // рядом: ядро правда работает, спор идёт только про объём защиты. Признак
+  // берём готовым полем s.chastichnaya (konfig.Kartina.Chastichnaya через
+  // sluzhba.go), а не выводим из s.rezhim: решение о полноте защиты принимает
+  // тот же код, что собирает конфиг, иначе окно и конфиг разъедутся в день
+  // появления третьего режима.
+  const chastichno = !!s.chastichnaya && s.sost === "rabotaet" && !s.ozhidanie_doma;
+  $("krug-blok").className = "krug-blok " + s.sost +
+      (s.ozhidanie_doma ? " ozhidanie" : "") + (chastichno ? " chastichno" : "");
+  const zvanie = s.ozhidanie_doma ? "ожидание" : chastichno ? "частично" : (podpisi[s.sost] || s.sost);
   $("zvanie").textContent = zvanie;
   $("zvanie").classList.toggle("dlinnoe", zvanie.length > 9);
   $("podzagolovok").textContent = podzagolovok(s);
@@ -1295,22 +1414,21 @@ async function obnovit() {
   let zametkaTekst = !avtoZametka ? (s.zametka || "")
       : s.avtorezhim_obstanovka === "вне дома" ? (s.zametka ? s.zametka + " " : "") + avtoZametka
       : avtoZametka;
-  // «Чтобы пустить через VPN все программы, нажмите ниже.» (konfig.go:
-  // ZametkaBezPrav) стоит ровно тогда же, когда s.mozhno_tun показывает
-  // кнопку «Включить для всех программ» сразу под ней (sluzhba.go:
-  // MozhnoTun = EstTunnel && !Prava) — плашка и кнопка говорят одно и то же
-  // (диагноз по снимку 4_rabotaet.png, 24.08). Кнопка справляется сама, текст
-  // над ней убираем; другие причины заметки (ручной прокси, правила из
-  // комплекта), даже случившись вместе с mozhno_tun, трогать нельзя — они не
-  // про то же самое, что кнопка.
-  if (s.mozhno_tun && zametkaTekst === "Чтобы пустить через VPN все программы, нажмите ниже.") {
-    zametkaTekst = "";
-  }
+  // Здесь до 31.08 стояло гашение заметки: когда s.mozhno_tun показывал
+  // кнопку «Включить для всех программ», текст над ней («Чтобы пустить через
+  // VPN все программы, нажмите ниже.») считался повтором кнопки и убирался
+  // (диагноз по снимку 4_rabotaet.png, 24.08). Тогда это было верно: заметка
+  // говорила РОВНО то же, что кнопка. Теперь она говорит другое — что человек
+  // прямо сейчас НЕ получает (konfig.ZametkaBezPrav: «Через Kelevra идут
+  // только браузеры — игры и видео Windows пускает мимо»), и это единственное
+  // место в окне, где половинчатость названа словами. Гасить её больше нельзя:
+  // ровно из-за этого гашения человек не узнавал о ней ниоткуда.
   zametka.textContent = zametkaTekst;
-  // Ручной прокси означает, что без вписанного адреса трафик вообще не пойдёт
-  // через Kelevra: такое нельзя показывать серой сноской под цифрами.
+  // Жёлтым — не только ручной прокси. Частичная защита того же порядка: без
+  // нажатия на кнопку ниже игры и видео идут мимо Kelevra, и показывать это
+  // серой сноской под цифрами значит спрятать главное.
   zametka.className = "beda" + (zametkaTekst ? " vidno" : "") +
-      (s.ruchnoy_proksi ? " vnimanie" : " spokoyno");
+      (s.ruchnoy_proksi || chastichno ? " vnimanie" : " spokoyno");
 
   const est = !!(s.imya || s.do_unix);
   const podpiska = $("podpiska");
@@ -1330,7 +1448,23 @@ async function obnovit() {
     // на самом заметном месте, никуда переезжать не надо.
     podpiska.className = "podpiska" + (istekaet ? " istekaet" : "");
   }
-  $("knopka-polnaya").hidden = !s.mozhno_tun;
+  // «хозяин · ASUS TUF Gaming B550». Оба поля необязательны: старый сервер их не
+  // шлёт вовсе, новый может знать только одно из двух — строка тогда несёт то,
+  // что есть, а если нет ничего, её нет совсем (не пустая строка-дыра).
+  const kto = $("podpiska-kto");
+  const ktoTekst = [s.chelovek_imya, s.ustroystvo_imya].filter(Boolean).join(" · ");
+  kto.textContent = ktoTekst;
+  kto.hidden = !ktoTekst;
+  const knopkaPolnaya = $("knopka-polnaya");
+  knopkaPolnaya.hidden = !s.mozhno_tun;
+  // Причина половинчатости (konfig.PrichinaBezPrav) — подсказкой при наведении,
+  // а не ещё одной строкой на экране: словами о том, что идёт мимо, уже
+  // сказала заметка над кнопкой, и повторять её третий раз незачем. Но сама
+  // причина («Windows не дал прав администратора») в заметке не названа — а
+  // человеку, который жмёт кнопку и видит окно UAC, полезно знать заранее,
+  // почему его спрашивают.
+  if (s.pochemu_chastichnaya) knopkaPolnaya.title = s.pochemu_chastichnaya;
+  else knopkaPolnaya.removeAttribute("title");
 
   // Автозапуск: на не-Windows сборке (стенд, будущий Linux-порт) тумблер
   // прячем целиком — показывать переключатель, который ничего не делает,
@@ -1361,6 +1495,18 @@ async function obnovit() {
       bedaAvt.textContent = "";
     }
   }
+
+  // Отправка журналов разработчику: тумблер плюс строка «последняя отправка».
+  // Приложение висит в трее неделями — без даты человек не отличит «включено и
+  // работает» от «включено, но ни разу не ушло».
+  const pereklZh = $("perekl-zhurnaly"), vklZh = !!s.zhurnaly_otpravka_vklyuchena;
+  pereklZh.className = "perekl" + (vklZh ? " vklyuchen" : "");
+  pereklZh.setAttribute("aria-checked", vklZh ? "true" : "false");
+  $("podpis-otpravka-zhurnalov").textContent = !vklZh ? ""
+      : s.zhurnaly_otpravka_kogda
+        ? "последняя отправка: " + new Date(s.zhurnaly_otpravka_kogda * 1000)
+            .toLocaleString("ru-RU", {day:"numeric", month:"long", hour:"2-digit", minute:"2-digit"})
+        : "последняя отправка: ещё не было";
 
   // Полоса режима — единственное место, где режим включается/выключается
   // (хозяин 27.08: «выбор авто режим который сам все определяет, или ручной и
@@ -1573,10 +1719,14 @@ function obnovitKartuVyhoda() {
 // (см. risovatUzly выше — тот же приём, что и на телефоне, 436).
 function otkrytShtorku() {
   $("shtorka-fon").hidden = false;
+  // Фон замирает, пока шторка открыта, — иначе полос прокрутки на экране
+  // становится две сразу (см. #tab-set.pod-shtorkoy в стилях выше).
+  $("tab-set").classList.add("pod-shtorkoy");
   usadit(); // выбранный узел мог остаться вне видимой части с прошлого раза
 }
 function zakrytShtorku() {
   $("shtorka-fon").hidden = true;
+  $("tab-set").classList.remove("pod-shtorkoy");
 }
 $("karta-vyhod").onclick = otkrytShtorku;
 $("shtorka-zakryt").onclick = zakrytShtorku;
@@ -1652,6 +1802,20 @@ $("perekl-avtozapusk").onclick = async () => {
   catch (e) {
     $("beda-avtozapusk").textContent = "Автозапуск с Windows: " + e.message;
     $("beda-avtozapusk").className = "beda vidno";
+  }
+  perekl.disabled = false; obnovit();
+};
+
+// Тумблер отправки журналов — по образцу автозапуска выше: спрашиваем ручку,
+// а не рисуем новое состояние сами, и обновляемся с общего /api/sostoyanie.
+$("perekl-zhurnaly").onclick = async () => {
+  const perekl = $("perekl-zhurnaly");
+  const vklyuchit = !(poslednee && poslednee.zhurnaly_otpravka_vklyuchena);
+  perekl.disabled = true;
+  try { await api("zhurnaly_otpravka", {vklyuchit}); $("beda-zhurnaly").className = "beda"; }
+  catch (e) {
+    $("beda-zhurnaly").textContent = "Отправка логов: " + e.message;
+    $("beda-zhurnaly").className = "beda vidno";
   }
   perekl.disabled = false; obnovit();
 };
