@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
 )
 
 // Host — сервер подписок Kelevra.
@@ -63,10 +65,18 @@ func (k *Klient) zapros(ctx context.Context, url string) (*http.Request, error) 
 		return nil, err
 	}
 	r.Header.Set("User-Agent", "Kelevra-Desktop/"+Versiya+" (windows)")
+	// x-hwid/x-device-os остаются: сервер понимает их как запасной путь, а
+	// снести их отсюда значит на день-другой (пока обновление доедет до всех
+	// копий) оставить старые клиенты вовсе безымянными.
 	if k.DeviceID != "" {
 		r.Header.Set("x-hwid", k.DeviceID)
 		r.Header.Set("x-device-os", "windows")
 	}
+	// Четыре заголовка, которыми устройство называет себя — ровно те же, что
+	// уже шлёт android-клиент (X-Device-Id / X-Device-Model / X-Device-Platform /
+	// X-App-Version). Через zapros идут ОБА запроса к серверу (Konfig и
+	// Svedeniya), поэтому точка правки тут одна.
+	ustroystvo.Zagolovki(r.Header, k.DeviceID, Versiya)
 	return r, nil
 }
 
@@ -116,6 +126,35 @@ type Svedeniya struct {
 	LimitBayt int64  `json:"limit_bytes"`
 	SyedenoB  int64  `json:"used_bytes"`
 	Otvet     string `json:"reply"`
+	// Chelovek и Ustroystvo сервер добавил в /info после того, как клиент
+	// научился называть себя (см. zapros выше): по X-Device-Id он знает, чей
+	// это ключ и какая именно машина сейчас спрашивает, и отдаёт оба имени
+	// готовыми. Указатели, а не значения: СТАРЫЙ сервер этих полей не шлёт
+	// вовсе, и nil — законный ответ, окно тогда просто не рисует строку.
+	Chelovek   *Imenovannyy `json:"person,omitempty"`
+	Ustroystvo *Imenovannyy `json:"device,omitempty"`
+}
+
+// Imenovannyy — общая форма для person и device: у обоих сервер отдаёт
+// единственное поле name.
+type Imenovannyy struct {
+	Imya string `json:"name"`
+}
+
+// ImyaCheloveka и ImyaUstroystva читают имена, не разыменовывая nil: полей
+// может не быть (старый сервер), и вызывающему коду это знать незачем.
+func (s *Svedeniya) ImyaCheloveka() string {
+	if s == nil || s.Chelovek == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Chelovek.Imya)
+}
+
+func (s *Svedeniya) ImyaUstroystva() string {
+	if s == nil || s.Ustroystvo == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Ustroystvo.Imya)
 }
 
 // Svedeniya спрашивает состояние подписки. Ошибка здесь не мешает подключению.
