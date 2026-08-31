@@ -101,8 +101,31 @@ type Nablyudeniye struct {
 	// довериться зонду нельзя.
 	ZondSlep bool
 
-	// DnsPriznakDoma — DNS-зонд насчитал подмену на ≥2 из 3 контрольных доменов.
+	// DnsPriznakDoma — DNS-зонд насчитал подмену на ≥2 из 3 контрольных
+	// доменов. Значение осмысленно, ТОЛЬКО пока DnsMolchit == false: при
+	// молчащем резолвере здесь false просто потому, что считать было нечего,
+	// а не потому, что посчитали и вышло «не дома».
 	DnsPriznakDoma bool
+
+	// DnsMolchit — резолвер не ответил НИ НА ОДИН контрольный домен, то есть
+	// измерения не было вовсе (DnsZond.DomaPoDns вернул ошибку — единственный
+	// её случай, см. dns_zond.go: otvetili == 0).
+	//
+	// Это отдельный факт, а не оттенок DnsPriznakDoma, и вот почему. Разбор
+	// аварии на телефоне хозяина 28.08 (приборный, не по памяти): телефон
+	// роумит между репитером и роутером, старая точка держит его ассоциацию
+	// до 480 секунд, и всё это время резолвер молчит 4-7 минут ПРИ ЖИВОМ
+	// интернете. Раньше это молчание превращалось в DnsPriznakDoma=false,
+	// Reshit по !DnsPriznakDoma отдавал VneDoma — и авторежим поднимал
+	// туннель посреди домашней сети, откуда потом сам же и выбирался.
+	// Молчание резолвера — это «не знаю», а не «не дома»: см. Reshit, где
+	// оно даёт Neizvestno, и Zadvizhka.Predlozhit, где Neizvestno нарочно не
+	// пускают вперёд по доверию.
+	//
+	// Тот же приём, что HostAnswer.Silent в телефонном AutoMode.kt: молчание
+	// не считается ни за, ни против. Здесь оно доведено до решения, а не
+	// теряется по дороге.
+	DnsMolchit bool
 
 	// TrafikPryamoy — прямая проверка трафика.
 	// nil — не проверяли (в том числе: DNS уже сказал «не дома», проверять незачем)
@@ -123,7 +146,18 @@ func Reshit(n Nablyudeniye) Sostoyanie {
 		// Мерили собственный туннель. Неизвестность здесь честнее любой
 		// догадки: молчим и не трогаем защиту, которая уже поднята.
 		return Neizvestno
+	case n.DnsMolchit:
+		// Резолвер не ответил ни на один домен (см. Nablyudeniye.DnsMolchit):
+		// измерения не было. Неизвестность здесь — не осторожность, а
+		// единственный честный вывод: домашний роумингом онемевший резолвер
+		// (авария 28.08) выглядит ровно так же, как чужая сеть без DNS, и
+		// решать по такому наблюдению нельзя НИ В ОДНУ сторону. Обстановку
+		// оставляем ту, что была: колбэк службы (avtorezhimKolbek) на
+		// Neizvestno не делает ничего.
+		return Neizvestno
 	case !n.DnsPriznakDoma:
+		// Резолвер ОТВЕТИЛ, и в ответе нет домашней подмены — честное «не
+		// дома». Этот случай правкой 31.08 не тронут ни на йоту.
 		return VneDoma
 	case n.TrafikPryamoy != nil && *n.TrafikPryamoy:
 		return Doma
@@ -386,8 +420,18 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	dnsStart := time.Now()
 	dnsDoma, err := dns.DomaPoDns(ctx)
 	dnsZanyalo := time.Since(dnsStart)
+	dnsMolchit := false
 	if err != nil {
-		dnsDoma = false // резолвер не ответил вовсе — не дома, безопасный дефолт
+		// Ошибка зонда — это ОТСУТСТВИЕ измерения, а не измерение «не дома»
+		// (DnsZond.DomaPoDns возвращает её ровно тогда, когда не ответил ни
+		// один контрольный домен). Раньше здесь стоял dnsDoma = false с
+		// пометкой «безопасный дефолт», и различие, которое зонд честно
+		// проводил, выбрасывалось прямо на этой строке: Reshit по
+		// !DnsPriznakDoma отдавал VneDoma, задвижка при доверенном заходе
+		// пропускала его с одного раза — и один немой заход поднимал туннель
+		// посреди дома (авария 28.08, см. Nablyudeniye.DnsMolchit).
+		dnsDoma = false
+		dnsMolchit = true
 	}
 	// Строка нужна на живой машине хозяина: без неё «трафик не прошёл»
 	// неотличимо от «мы сами обрезали ему бюджет DNS-подэтапом» — замер
@@ -415,7 +459,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 		}
 	}
 
-	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: dnsDoma, TrafikPryamoy: trafik}
+	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: dnsDoma, DnsMolchit: dnsMolchit, TrafikPryamoy: trafik}
 	izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 	return n, izm, a.Zadvizhka.Tekushcheye()
 }

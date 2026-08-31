@@ -119,9 +119,12 @@ func TestAvtorezhimZahodNeSprashivaetTrafikBezDns(t *testing.T) {
 	}
 }
 
-// TestAvtorezhimZahodOshibkaDnsEtoNeDoma: резолвер отказал целиком — не
-// дома, безопасный дефолт, а не паника или Neizvestno.
-func TestAvtorezhimZahodOshibkaDnsEtoNeDoma(t *testing.T) {
+// TestAvtorezhimZahodOshibkaDnsEtoNeZnayu: резолвер отказал целиком —
+// признака дома нет И измерения не было. Раньше здесь стоял «безопасный
+// дефолт: не дома», и ровно из него вырастала авария 28.08 (роуминг между
+// репитером и роутером, немой резолвер при живом интернете) — теперь ошибка
+// зонда даёт «не знаю», см. molchaniye_rezolvera_test.go.
+func TestAvtorezhimZahodOshibkaDnsEtoNeZnayu(t *testing.T) {
 	a := &Avtorezhim{
 		Dns:       fakeDns{doma: false, err: context.DeadlineExceeded},
 		Trafik:    &fakeTrafik{},
@@ -130,6 +133,12 @@ func TestAvtorezhimZahodOshibkaDnsEtoNeDoma(t *testing.T) {
 	n, _, _ := a.Zahod(context.Background(), true, false)
 	if n.DnsPriznakDoma {
 		t.Fatalf("наблюдение при ошибке DNS: %+v, ждал DnsPriznakDoma=false", n)
+	}
+	if !n.DnsMolchit {
+		t.Fatalf("наблюдение при ошибке DNS: %+v, ждал DnsMolchit=true — измерения не было", n)
+	}
+	if got := Reshit(n); got != Neizvestno {
+		t.Fatalf("Reshit при ошибке DNS = %v, хочу Neizvestno", got)
 	}
 }
 
