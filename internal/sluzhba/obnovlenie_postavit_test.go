@@ -53,12 +53,34 @@ func vosstanovitSebya(t *testing.T) string {
 	return put
 }
 
+// sborkaPohozhayaNaSebya собирает содержимое поддельной «новой сборки» так,
+// чтобы она была того же РОДА, что и подменяемый файл: первые байты берутся
+// у него самого (на Windows это "MZ" настоящего .exe, на линуксе "ELF").
+//
+// Зачем. obnovlenie.Postavit с 31.08 отказывается ставить на место
+// приложения файл, не похожий на исполняемый, — ровно так ловится
+// скачанная вместо .exe страница-заглушка прокси или обрезок закачки
+// (беда 28.08: «2 kelevra.exe.old и нихуя»). Голая строка "PODMENA..."
+// под это правило попадает по делу, поэтому тест обязан подделывать сборку
+// правдоподобно, а не отменять проверку.
+func sborkaPohozhayaNaSebya(t *testing.T, put, hvost string) string {
+	t.Helper()
+	telo, err := os.ReadFile(put)
+	if err != nil {
+		t.Fatalf("не прочитал себя (%s): %v", put, err)
+	}
+	if len(telo) < 4 {
+		t.Fatalf("файл %s подозрительно пуст: %d байт", put, len(telo))
+	}
+	return string(telo[:4]) + hvost
+}
+
 func TestObnovleniePostavitRuchkaStavitNaydennuyuVersiyu(t *testing.T) {
 	s := stend(t)
 	m := s.Obsluzhit()
 	put := vosstanovitSebya(t)
 
-	soderzhimoe := "PODMENA-SBORKI-DLYA-TESTA"
+	soderzhimoe := sborkaPohozhayaNaSebya(t, put, "PODMENA-SBORKI-DLYA-TESTA")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, soderzhimoe)
 	}))
@@ -118,11 +140,11 @@ func TestObnovleniePostavitRuchkaStavitNaydennuyuVersiyu(t *testing.T) {
 func TestObnovleniePostavitRuchkaVtoroyTychokPokaIdetUstanovka(t *testing.T) {
 	s := stend(t)
 	m := s.Obsluzhit()
-	vosstanovitSebya(t)
+	put := vosstanovitSebya(t)
 
 	nachalos := make(chan struct{})
 	mozhnoProdolzhat := make(chan struct{})
-	soderzhimoe := "PODMENA-SBORKI-DLYA-GONKI"
+	soderzhimoe := sborkaPohozhayaNaSebya(t, put, "PODMENA-SBORKI-DLYA-GONKI")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(nachalos)
 		<-mozhnoProdolzhat
