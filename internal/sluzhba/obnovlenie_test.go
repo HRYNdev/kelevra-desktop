@@ -209,3 +209,94 @@ func TestObnovlenieRuchkaBedaMusor(t *testing.T) {
 		t.Fatalf("беда = %q, ждал %q", o.Beda, zhdu)
 	}
 }
+
+// Дальше — сцены починки жалобы 02.09 «уведомлялка некрасивая»: про одну и ту
+// же находку человека дёргали ДВАЖДЫ — модальным диалогом в самом окне и
+// пузырём в трее Windows поверх него. Правка сводит это к одному пути, и
+// решает всё один замер: смотрит ли человек прямо сейчас в окно (см.
+// povestitEsliNovaya и поле oknoSprosilo в sluzhba.go).
+
+// sprositSostoyanie — один опрос /api/sostoyanie. Метка okno=1 — ровно то,
+// что ставит открытое окно приложения (index.html) и не ставит никто больше:
+// ни сторож окна, ни проверка живой копии, ни стенды.
+func sprositSostoyanie(t *testing.T, s *Sluzhba, kakOkno bool) {
+	t.Helper()
+	adres := "/" + s.klyuch + "/api/sostoyanie"
+	if kakOkno {
+		adres += "?okno=1"
+	}
+	w := httptest.NewRecorder()
+	s.Obsluzhit().ServeHTTP(w, httptest.NewRequest("GET", adres, nil))
+	if w.Code != 200 {
+		t.Fatalf("состояние ответило %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestPuzyrMolchitPriOtkrytomOkne — окно открыто, значит про находку скажет
+// диалог в нём: он подробнее, с кнопкой и с процентами скачивания. Пузырь при
+// этом обязан молчать — второе сообщение об одном и том же и есть жалоба.
+func TestPuzyrMolchitPriOtkrytomOkne(t *testing.T) {
+	s := stend(t)
+	skazano := ""
+	s.OblachkoObnovleniya = func(versiya string) { skazano = versiya }
+
+	sprositSostoyanie(t, s, true) // окно только что спросило состояние
+	s.povestitEsliNovaya("0.9.0")
+
+	if skazano != "" {
+		t.Fatalf("пузырь сказал про %q поверх открытого окна — человека дёрнули дважды об одном", skazano)
+	}
+	if s.Nastroyki.ObyavlennoeObnovlenie != "0.9.0" {
+		t.Fatalf("версия не помечена объявленной (%q): закрыв окно кнопкой «ПОЗЖЕ», человек получил бы про неё ещё и пузырь",
+			s.Nastroyki.ObyavlennoeObnovlenie)
+	}
+}
+
+// TestPuzyrGovoritPriZakrytomOkne — обратная половина того же решения. Копия
+// висит в трее без окна (обычный режим работы: свернул и забыл), и пузырь —
+// единственный способ вообще сказать человеку про находку. Убери его совсем —
+// и находка останется немой до следующего открытия окна.
+func TestPuzyrGovoritPriZakrytomOkne(t *testing.T) {
+	s := stend(t)
+	skazano := ""
+	s.OblachkoObnovleniya = func(versiya string) { skazano = versiya }
+
+	s.povestitEsliNovaya("0.9.0") // окно состояние не спрашивало ни разу
+
+	if skazano != "0.9.0" {
+		t.Fatalf("пузырь промолчал при закрытом окне (сказано %q) — про находку человек не узнает вовсе", skazano)
+	}
+}
+
+// TestOtmetkaOknaStareet — окно умирает молча (крестик, Диспетчер задач,
+// авария), прощального слова от него не будет никогда. Поэтому «окно есть» —
+// не тумблер, а свежесть отметки: замолчало дольше срока — значит закрыто, и
+// пузырь снова получает право говорить. Не старей отметка — человек, закрывший
+// окно однажды, не услышал бы про обновления больше никогда.
+func TestOtmetkaOknaStareet(t *testing.T) {
+	s := stend(t)
+
+	sprositSostoyanie(t, s, true)
+	if !s.oknoOtkryto() {
+		t.Fatal("окно только что спросило состояние, а служба считает его закрытым")
+	}
+
+	s.zamok.Lock()
+	s.oknoSprosilo = time.Now().Add(-srokZhivogoOkna - time.Second)
+	s.zamok.Unlock()
+	if s.oknoOtkryto() {
+		t.Fatalf("окно молчит дольше %s, а служба всё ещё считает его открытым — пузырь замолчал бы навсегда", srokZhivogoOkna)
+	}
+}
+
+// TestChuzhoyOprosNeSchitaetsyaOknom — по тому же адресу ходят не только окна:
+// сторож окна и проверка второй копии (kopiya.Otvechaet) дёргают корень, а
+// стенды и мои проверки — сам /api/sostoyanie обычным curl. Считай мы их за
+// открытое окно — пузырь у человека с закрытым окном заглох бы навсегда.
+func TestChuzhoyOprosNeSchitaetsyaOknom(t *testing.T) {
+	s := stend(t)
+	sprositSostoyanie(t, s, false)
+	if s.oknoOtkryto() {
+		t.Fatal("обычный опрос состояния без метки okno=1 сочли открытым окном")
+	}
+}

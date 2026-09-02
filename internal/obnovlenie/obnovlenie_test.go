@@ -3,6 +3,7 @@ package obnovlenie
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -788,5 +789,166 @@ func TestHodPriObryveNeDohoditDoEdinicy(t *testing.T) {
 	if posledniy[0] >= posledniy[1] {
 		t.Fatalf("оборванная закачка доложила %d из %d — окно показало бы 100%% там, "+
 			"где ничего не встало", posledniy[0], posledniy[1])
+	}
+}
+
+// podmenitSkrytie подменяет пряталку хвоста на время теста — тем же приёмом,
+// каким podmenitProverku подменяет проверку годности нового файла.
+func podmenitSkrytie(t *testing.T, svoya func(put string) error) {
+	t.Helper()
+	prezhnyaya := spryatat
+	spryatat = svoya
+	t.Cleanup(func() { spryatat = prezhnyaya })
+}
+
+// TestPostavitPryachetHvost — жалоба 02.09 начинается с того, что рядом с
+// приложением «появляется .old, и всё»: отодвинутая старая сборка ложилась на
+// видное место в ту самую папку, куда человек скачал приложение и куда он
+// смотрит. Насовсем убрать её в этот момент нельзя (это ЗАПУЩЕННЫЙ файл и
+// заодно то, чем bedaSOtkatom возвращает работоспособность), поэтому её
+// прячут — и прячут ИМЕННО её, а не что-нибудь ещё.
+func TestPostavitPryachetHvost(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var spryatali []string
+	podmenitSkrytie(t, func(p string) error {
+		spryatali = append(spryatali, p)
+		return nil
+	})
+
+	novoe := "NOVYY-KELEVRA"
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, novoe)
+	}))
+	defer s.Close()
+
+	if err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put); err != nil {
+		t.Fatalf("не поставилось: %v", err)
+	}
+	if len(spryatali) != 1 || spryatali[0] != put+".old" {
+		t.Fatalf("спрятали %v, а ждали ровно один %q — хвост остался бы на виду у человека", spryatali, put+".old")
+	}
+}
+
+// TestPostavitNeSryvaetsyaEsliNeSpryatal — атрибут файла не имеет права
+// решать судьбу удавшейся установки: не спрятали хвост (диск примонтирован
+// чужой файловой системой, антивирус не дал, платформа не умеет) — человек
+// увидит лишний файл на несколько секунд, до подъёма новой копии, и только.
+// Сорвать из-за этого уже вставшее обновление было бы прямым вредом.
+func TestPostavitNeSryvaetsyaEsliNeSpryatal(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	podmenitSkrytie(t, func(string) error { return errors.New("атрибут не выставился") })
+
+	novoe := "NOVYY-KELEVRA"
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, novoe)
+	}))
+	defer s.Close()
+
+	if err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put); err != nil {
+		t.Fatalf("установка сорвалась из-за атрибута хвоста: %v", err)
+	}
+	if b, _ := os.ReadFile(put); string(b) != novoe {
+		t.Fatalf("на месте приложения %q — новая сборка не встала", b)
+	}
+}
+
+// podmenitUdalenie подменяет удаление на время теста — тем же приёмом, каким
+// podmenitPovtory подменяет переименование, и ради того же: занятый файл на
+// линуксе не разыграть никак (os.Remove сносит даже работающий бинарь), а
+// именно занятый файл и есть вся беда этого места на Windows.
+func podmenitUdalenie(t *testing.T, svoyo func(put string) error) {
+	t.Helper()
+	prezhnee := udalit
+	udalit = svoyo
+	t.Cleanup(func() { udalit = prezhnee })
+}
+
+// TestUbratHvostSPovtoramiZanyatyyFayl — жалоба 02.09 держится на одном
+// свойстве Windows: смерть процесса и освобождение его .exe — не одно и то же
+// мгновение. Первая попытка удаления штатно проваливается, и одна попытка
+// означала бы «хвост остался на виду» ровно там, где человек на него и
+// смотрит.
+func TestUbratHvostSPovtoramiZanyatyyFayl(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	hvost := put + ".old"
+	if err := os.WriteFile(hvost, []byte("STARYY"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	podmenitPovtory(t, os.Rename) // паузы не ждём по-настоящему, переименование не трогаем
+
+	popytok := 0
+	podmenitUdalenie(t, func(p string) error {
+		popytok++
+		if popytok < 3 {
+			return errors.New("файл занят другим процессом")
+		}
+		return os.Remove(p)
+	})
+
+	if !UbratHvostSPovtorami(put) {
+		t.Fatal("уборка сдалась на занятом файле — хвост остался бы лежать рядом с приложением")
+	}
+	if HvostEst(put) {
+		t.Fatal("уборка отчиталась об успехе, а хвост на месте")
+	}
+}
+
+// TestUbratHvostSPovtoramiSdayotsyaChestno — обратная половина: файл занят
+// намертво (антивирус вцепился, права не те). Врать об успехе нельзя —
+// вызывающий по этому ответу говорит человеку правду в журнал
+// (cmd/kelevra/main.go: ubratHvostPosleSmeny).
+func TestUbratHvostSPovtoramiSdayotsyaChestno(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put+".old", []byte("STARYY"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	podmenitPovtory(t, os.Rename)
+	podmenitUdalenie(t, func(string) error { return errors.New("файл занят навсегда") })
+
+	if UbratHvostSPovtorami(put) {
+		t.Fatal("уборка отчиталась об успехе, не убрав ничего — журнал соврал бы про чистую папку")
+	}
+}
+
+// TestHvostEstVidyatVseTriVida — уборка и вопрос «убралось ли» обязаны
+// смотреть на ОДИН и тот же список путей: разойдись они хоть на один, уборка
+// отчитывалась бы об успехе, оставив файл на виду у человека.
+func TestHvostEstVidyatVseTriVida(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vidy := []string{
+		put + ".old",                             // Kelevra.exe.old — штатный хвост
+		strings.TrimSuffix(put, ".exe") + ".old", // Kelevra.old — след старого бага
+		filepath.Join(papka, ".kelevra-abc.new"), // забытая недокачка
+	}
+	for _, v := range vidy {
+		if HvostEst(put) {
+			t.Fatalf("хвост увиден до того, как его положили (%s)", v)
+		}
+		if err := os.WriteFile(v, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !HvostEst(put) {
+			t.Fatalf("хвост %s не увиден — уборка отчиталась бы об успехе, оставив его на виду", v)
+		}
+		UbratHvost(put)
+	}
+	if _, err := os.Stat(put); err != nil {
+		t.Fatalf("уборка тронула само приложение: %v", err)
 	}
 }

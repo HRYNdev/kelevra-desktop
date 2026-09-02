@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -202,6 +203,12 @@ const pauzaPereimenovaniya = 200 * time.Millisecond
 var (
 	pereimenovat = os.Rename
 	spat         = time.Sleep
+	// spryatat — по той же причине переменная, что и две выше: настоящая
+	// реализация (skrytie_windows.go) вне Windows ничего не делает по
+	// устройству платформы, и без подмены нельзя проверить даже того, что
+	// хвост вообще ПРОБУЮТ спрятать, — а на боевой машине это единственное,
+	// что отделяет человека от вида .old рядом с приложением.
+	spryatat = spryatatFayl
 )
 
 // pereimenovatSPovtorami пробует переименовать файл несколько раз подряд —
@@ -390,6 +397,13 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	if err := pereimenovatSPovtorami(putExe, staryy); err != nil {
 		return fmt.Errorf("не могу отодвинуть текущее приложение: %w", err)
 	}
+	// Хвост нужен (на него откатывается bedaSOtkatom ниже), но человеку его
+	// видеть незачем — прячем сразу, как только он появился. Отказ глотаем
+	// нарочно: спрятать не вышло — установка от этого не стала неудачной, а
+	// сорвать её из-за атрибута файла было бы прямым вредом. См. spryatatFayl.
+	if err := spryatat(staryy); err != nil {
+		log.Printf("хвост обновления %s не удалось спрятать (%v) — он полежит на виду до подъёма новой копии", staryy, err)
+	}
 	if err := pereimenovatSPovtorami(vremennyy, putExe); err != nil {
 		// Второе переименование не встало (обычно антивирус ещё держит
 		// свежий .exe) — обязаны вернуть putExe в рабочее состояние.
@@ -512,14 +526,73 @@ func rodFayla(put string) string {
 //   - .kelevra-*.new — забытые временные файлы недокачанных или не вставших
 //     на место попыток обновления.
 func UbratHvost(putExe string) {
-	os.Remove(putExe + ".old")
-	bezRasshireniya := strings.TrimSuffix(putExe, filepath.Ext(putExe))
-	os.Remove(bezRasshireniya + ".old")
+	for _, h := range hvosty(putExe) {
+		udalit(h)
+	}
+}
+
+// udalit — переменная уровня пакета по той же причине, что pereimenovat и
+// spat выше: занятый файл иначе не разыграть вовсе. На Windows он занят
+// по-настоящему (запущенный .exe, антивирус), а на линуксе os.Remove сносит
+// даже работающий бинарь — то есть без подмены проверка «уборка повторяет
+// попытку» невозможна там, где её гоняют.
+var udalit = os.Remove
+
+// hvosty — всё, что считается мусором прошлых обновлений рядом с putExe.
+// Одним списком, а не тремя вызовами по месту: убирает его UbratHvost, а
+// СПРАШИВАЕТ, остался ли он, HvostEst — и расходись эти два взгляда хоть на
+// один путь, уборка отчитывалась бы об успехе, оставив файл на виду.
+func hvosty(putExe string) []string {
+	spisok := []string{
+		putExe + ".old",
+		strings.TrimSuffix(putExe, filepath.Ext(putExe)) + ".old",
+	}
 	if musor, err := filepath.Glob(filepath.Join(filepath.Dir(putExe), ".kelevra-*.new")); err == nil {
-		for _, m := range musor {
-			os.Remove(m)
+		spisok = append(spisok, musor...)
+	}
+	return spisok
+}
+
+// HvostEst — лежит ли рядом с приложением хоть что-то из мусора прошлых
+// обновлений. Отличает «убрал» от «позвал уборку»: os.Remove на занятом файле
+// возвращает ошибку молча, а UbratHvost её не смотрит нарочно (на холодном
+// старте занятого хвоста быть не может, а ошибка «нечего убирать» — норма).
+func HvostEst(putExe string) bool {
+	for _, h := range hvosty(putExe) {
+		if _, err := os.Stat(h); err == nil {
+			return true
 		}
 	}
+	return false
+}
+
+// popytokUborki — сколько раз пробуем убрать хвост там, где он УЖЕ обязан
+// быть свободен. Столько же, сколько попыток у переименования выше, и по той
+// же причине: смерть процесса и освобождение его файла — на Windows не одно и
+// то же мгновение. Ядро отпускает образ не мгновенно, а следом за ним в файл
+// ещё может заглянуть антивирус; одна попытка тут — это «хвост остался лежать»
+// на пустом месте.
+const popytokUborki = popytokPereimenovaniya
+
+// UbratHvostSPovtorami — уборка для того единственного места, где хвост уже
+// обязан быть свободен: новая копия, дождавшаяся подтверждённой смерти старой
+// (cmd/kelevra/main.go). Возвращает true, если рядом с приложением хвоста
+// больше нет.
+//
+// Отдельная дверь, а не повторы внутри UbratHvost: у обычной уборки на
+// холодном старте повторять нечего — там либо есть что убрать и оно свободно,
+// либо убирать нечего вовсе, и лишние паузы задержали бы запуск.
+func UbratHvostSPovtorami(putExe string) bool {
+	for i := 0; i < popytokUborki; i++ {
+		if i > 0 {
+			spat(time.Duration(i) * pauzaPereimenovaniya)
+		}
+		UbratHvost(putExe)
+		if !HvostEst(putExe) {
+			return true
+		}
+	}
+	return false
 }
 
 // PutSebya — путь к самому себе, разрешённый до настоящего файла.

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/jchv/go-webview2"
@@ -185,6 +186,7 @@ var (
 func podnyatChuzheeOkno() bool {
 	hwnd, est := naytiOkno()
 	if !est {
+		soobshchitOPromahePoiska("поднятие чужого окна")
 		return false
 	}
 	procShowWindow.Call(uintptr(hwnd), swRestore)
@@ -204,9 +206,14 @@ const wmClose = 0x0010
 
 // naytiOkno ищет HWND окна Kelevra по классу и заголовку — общий поиск для
 // podnyatChuzheeOkno (поднять чужое окно на передний план) и
-// zakrytStaroeOkno (закрыть его). Оба ищут один и тот же (и единственный по
-// конструкции приложения — см. kopiya.Vzyat) экземпляр окна, отличается
-// только то, что с ним делают дальше.
+// zakrytStaroeOkno (закрыть его и дождаться, пока оно уйдёт). Оба ищут один и
+// тот же (и единственный по конструкции приложения — см. kopiya.Vzyat)
+// экземпляр окна, отличается только то, что с ним делают дальше.
+//
+// Про промах МОЛЧИТ нарочно: zakrytStaroeOkno зовёт её в цикле ожидания
+// десятки раз подряд, и промах там — не беда, а ровно тот ответ, которого
+// ждут. Сказать о промахе словами — дело вызывающего, у которого промах
+// действительно что-то значит (soobshchitOPromahePoiska).
 func naytiOkno() (syscall.Handle, bool) {
 	classPtr, err := syscall.UTF16PtrFromString(classWebview)
 	if err != nil {
@@ -220,28 +227,73 @@ func naytiOkno() (syscall.Handle, bool) {
 	}
 	hwndR, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(classPtr)), uintptr(unsafe.Pointer(titlePtr)))
 	if hwndR == 0 {
-		log.Printf("поиск окна: FindWindowW не нашёл окно (класс %q, заголовок %q)", classWebview, titleOkna)
 		return 0, false
 	}
 	return syscall.Handle(hwndR), true
 }
 
+// soobshchitOPromahePoiska — та самая строка журнала, по которой 02.09 и
+// нашлась потеря окна. Класс с заголовком в ней не для красоты: они называют
+// ровно то, что искали, и позволяют отличить «искали не то» от «искать было
+// нечего» — оказалось второе (см. шапку smena_okna.go).
+func soobshchitOPromahePoiska(kto string) {
+	log.Printf("%s: FindWindowW не нашёл окно (класс %q, заголовок %q)", kto, classWebview, titleOkna)
+}
+
+// srokUhodaStarogoOkna — сколько ждём, что окно прошлой копии и правда
+// исчезнет с экрана после WM_CLOSE. Срок щедрый с запасом на второй,
+// независимый путь его смерти: собственный сторож окна терпит 3 промаха по 2 с
+// (storozh_okna.go) и уходит сам не позже ~6 с после смерти своей службы, а та
+// к этому моменту уже подтверждённо мертва (zhdatSmenu). В этот срок обязаны
+// уложиться оба пути разом.
+const srokUhodaStarogoOkna = 8 * time.Second
+
+// shagOzhidaniyaUhoda — как часто переспрашиваем FindWindowW. Разрушение окна
+// идёт миллисекунды, дробить мельче незачем.
+const shagOzhidaniyaUhoda = 100 * time.Millisecond
+
 // zakrytStaroeOkno закрывает окно ПРЕДЫДУЩЕЙ копии сразу после смены режима
-// (--smena, см. main.go: adresKopii), не дожидаясь, пока это заметит его
-// собственный сторож (storozh_okna.go: 3 промаха по 2с, ≈6с — нарочно
-// небыстро, чтобы не закрыть окно на разовую заминку ЖИВОЙ службы). К
-// моменту вызова этой функции старая служба уже подтверждённо мертва
-// (zhdatSmenu), поэтому ждать чужой таймаут незачем — не закрой мы его сами,
-// человек увидел бы старое (уже неживое) окно рядом с новым ещё несколько
-// секунд, ровно ту беду 25.08 с двумя окнами, которую эта смена и обязана
-// не повторить.
-func zakrytStaroeOkno() bool {
+// (--smena, см. main.go: adresKopii) и НЕ ВОЗВРАЩАЕТСЯ, пока это окно не
+// исчезнет с экрана либо не выйдет срок. Своим сторожем оно закрылось бы и
+// само, но не раньше чем через ~6 с (storozh_okna.go: 3 промаха по 2 с —
+// нарочно небыстро, чтобы не закрыть окно на разовую заминку ЖИВОЙ службы);
+// к моменту вызова старая служба уже подтверждённо мертва (zhdatSmenu), и
+// ждать чужой таймаут незачем.
+//
+// ОЖИДАНИЕ УХОДА, а не одно только PostMessage, — правка 02.09, и в ней весь
+// смысл возврата. По этому ответу вызывающий решает, открывать ли своё окно
+// (main.go: pokazatLiOkno), а открыть его, пока старое ещё на экране, значит
+// показать человеку два окна разом — беду 25.08 в новом обличье. WM_CLOSE
+// только ПРОСИТ окно закрыться; исполнена ли просьба, знает один FindWindowW,
+// поэтому его и переспрашиваем, а не спим наугад фиксированной паузой.
+//
+// Не ушло за срок — говорим об этом в журнал отдельной строкой и возвращаем
+// Ushlo=false, но человека без окна не оставляем: вызывающий откроет своё,
+// потому что пустой экран после нажатия хуже двух окон. Журнал уезжает
+// разработчику суточной отправкой (internal/zhurnaly) — это единственный
+// способ узнать с машины человека, что такое вообще случилось.
+func zakrytStaroeOkno() itogSmenyOkna {
 	hwnd, est := naytiOkno()
 	if !est {
-		// Окна не было (автозапуск, значок в трее без окна) — закрывать нечего.
-		return false
+		// Окна не было (автозапуск, значок в трее без окна, тычок в пузырь при
+		// закрытом окне) — закрывать нечего, и открывать взамен тоже нечего.
+		soobshchitOPromahePoiska("смена режима")
+		return itogSmenyOkna{}
 	}
 	procPostMessageW.Call(uintptr(hwnd), wmClose, 0, 0)
-	log.Printf("смена режима: отправил WM_CLOSE окну прошлой копии (hwnd=%#x)", hwnd)
-	return true
+	log.Printf("смена режима: отправил WM_CLOSE окну прошлой копии (hwnd=%#x), жду его ухода", hwnd)
+
+	predel := time.Now().Add(srokUhodaStarogoOkna)
+	for {
+		if _, esheEst := naytiOkno(); !esheEst {
+			log.Printf("смена режима: окно прошлой копии (hwnd=%#x) ушло с экрана, место свободно", hwnd)
+			return itogSmenyOkna{BylOkno: true, Ushlo: true}
+		}
+		if !time.Now().Before(predel) {
+			log.Printf("ВНИМАНИЕ: окно прошлой копии (hwnd=%#x) не закрылось за %s ни по WM_CLOSE, ни своим сторожем — "+
+				"открываю своё поверх него, на экране будут два окна", hwnd, srokUhodaStarogoOkna)
+			return itogSmenyOkna{BylOkno: true}
+		}
+		time.Sleep(shagOzhidaniyaUhoda)
+	}
 }
