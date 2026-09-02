@@ -7,8 +7,8 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
-// TestOzhidanieDoma — хозяин, 27.08: «если я дома то он тупо переходит в режим
-// ожидания». Круг (index.html) знает только rabotaet/podnimaem/slomalos из
+// TestOzhidanieDoma — требование 27.08: дома программа переходит в режим
+// ожидания. Круг (index.html) знает только rabotaet/podnimaem/slomalos из
 // ядра, поэтому источник истины для «ожидания» обязан жить в Go
 // (ozhidanieDoma, sluzhba.go) и быть покрыт таблицей случаев, а не только
 // сборкой окна.

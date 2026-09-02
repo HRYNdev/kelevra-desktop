@@ -90,6 +90,6 @@ func TestSluzhitelVozvratDomoyVyklyuchayetTunnelPoslePodnyatiya(t *testing.T) {
 		t.Fatalf("колбэк(и): %+v, хочу ровно один вызов с Doma", kolbekZvali)
 	}
 	if tunnelUp {
-		t.Fatal("вернулись домой одним событием смены сети, а туннель всё ещё поднят — воспроизведена жалоба хозяина 29.08")
+		t.Fatal("вернулись домой одним событием смены сети, а туннель всё ещё поднят — воспроизведена жалоба 29.08")
 	}
 }

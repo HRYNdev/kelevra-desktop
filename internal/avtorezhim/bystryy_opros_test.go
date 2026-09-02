@@ -127,7 +127,7 @@ func TestSluzhitelBystrayaPachkaDobivayetSlepoyZahodPosleSobytiya(t *testing.T) 
 }
 
 // TestSluzhitelBystrayaPachkaDobivayetZryachiyNoUstarevshiyZahodPosleSobytiya
-// — боевая жалоба хозяина 30.08, пережившая первый фикс (см. пакетный
+// — боевая жалоба 30.08, пережившая первый фикс (см. пакетный
 // комментарий Krutit): ВПН включается корректно при уходе из дома, но не
 // выключается при быстром возврате. В отличие от
 // TestSluzhitelBystrayaPachkaDobivayetSlepoyZahodPosleSobytiya (там первые

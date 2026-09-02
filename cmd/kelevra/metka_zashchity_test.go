@@ -55,7 +55,7 @@ func TestPodskazkaRazlichaetObyomZashchity(t *testing.T) {
 		t.Fatalf("подсказка половинной защиты = %q — в ней не сказано, что защита частичная", polovinnaya)
 	}
 	// Слова «защита» в подсказке быть не должно ни в одном состоянии — ровно
-	// то, про что хозяин спрашивал 22.08 и 23.08.
+	// то, про что спрашивали 22.08 и 23.08.
 	for _, p := range []string{podskazkaBezObnovleniya, podskazkaPolnayaZashchita, podskazkaChastichnayaZashchita} {
 		if strings.Contains(strings.ToLower(p), "защит") {
 			t.Errorf("подсказка значка снова говорит про «защиту»: %q", p)
