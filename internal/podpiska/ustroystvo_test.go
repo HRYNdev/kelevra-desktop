@@ -17,7 +17,7 @@ func TestUstroystvoNazyvaetSebyaNaOboihZaprosah(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		zagolovki[r.URL.Path] = r.Header.Clone()
 		if strings.HasSuffix(r.URL.Path, "/info") {
-			_, _ = w.Write([]byte(`{"name":"хозяин","active":true}`))
+			_, _ = w.Write([]byte(`{"name":"Егор","active":true}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"outbounds":[{"type":"direct"}]}`))
@@ -59,11 +59,11 @@ func TestImenaChelovekaIUstroystvaNeobyazatelny(t *testing.T) {
 		chelovek, ustroystvo string
 	}{
 		{"новый сервер",
-			`{"name":"ключ","person":{"name":"хозяин"},"device":{"name":"ASUS TUF Gaming B550"}}`,
-			"хозяин", "ASUS TUF Gaming B550"},
+			`{"name":"ключ","person":{"name":"Егор"},"device":{"name":"ASUS TUF Gaming B550"}}`,
+			"Егор", "ASUS TUF Gaming B550"},
 		{"старый сервер — полей нет вовсе", `{"name":"ключ","active":true}`, "", ""},
 		{"поля есть, но пустые", `{"person":{"name":"  "},"device":{}}`, "", ""},
-		{"знает человека, но не устройство", `{"person":{"name":"хозяин"}}`, "хозяин", ""},
+		{"знает человека, но не устройство", `{"person":{"name":"Егор"}}`, "Егор", ""},
 	}
 	for _, s := range sluchai {
 		sv := &Svedeniya{}

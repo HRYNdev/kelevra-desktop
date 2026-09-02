@@ -127,7 +127,7 @@ const konfigOutbounds = `{"outbounds":[
 
 // GruppyStatik — единственный способ показать список узлов, пока ядро стоит:
 // спросить Clash API некого. Раньше в этом состоянии окно отдавало пустой
-// список (хозяин, снимок 21.08 — 300px пустоты вместо списка).
+// список (снимок 21.08 — 300px пустоты вместо списка).
 func TestGruppyStatikBeretIzKonfigaBezZadershki(t *testing.T) {
 	g, err := GruppyStatik([]byte(konfigOutbounds), nil)
 	if err != nil {

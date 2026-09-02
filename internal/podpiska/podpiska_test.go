@@ -93,13 +93,13 @@ func TestSvedeniya(t *testing.T) {
 		if !strings.HasPrefix(r.Header.Get("User-Agent"), "Kelevra-Desktop/") {
 			t.Errorf("чужой User-Agent: %s", r.Header.Get("User-Agent"))
 		}
-		w.Write([]byte(`{"name":"хозяин","active":true,"expires":1790000000,"used_bytes":123}`))
+		w.Write([]byte(`{"name":"Егор","active":true,"expires":1790000000,"used_bytes":123}`))
 	}))
 	s, err := k.Svedeniya(context.Background(), "ABC")
 	if err != nil {
 		t.Fatalf("ошибка: %v", err)
 	}
-	if !s.Aktivna || s.Imya != "хозяин" || s.SyedenoB != 123 {
+	if !s.Aktivna || s.Imya != "Егор" || s.SyedenoB != 123 {
 		t.Fatalf("сведения разобраны неверно: %+v", s)
 	}
 }

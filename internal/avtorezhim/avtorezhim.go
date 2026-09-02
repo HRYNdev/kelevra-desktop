@@ -414,8 +414,8 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	// (Dns.Taimaut + Trafik.Taimaut, в бою 3с+4с). Тогда как бы честно
 	// медленно ни ответил DNS в пределах своего номинала, прямому зонду
 	// остаётся не меньше его собственного номинала, и вердикт не
-	// переворачивается от одной лишь задержки DNS (хозяин, 28.08: «нажимаю
-	// подключиться, он не определяет дома»). Сторож этого условия —
+	// переворачивается от одной лишь задержки DNS (жалоба 28.08: при нажатии
+	// «Подключиться» дом не определялся). Сторож этого условия —
 	// TestKnopkaVmeshchaetSummuNominalovZondov в internal/sluzhba.
 	dnsStart := time.Now()
 	dnsDoma, err := dns.DomaPoDns(ctx)

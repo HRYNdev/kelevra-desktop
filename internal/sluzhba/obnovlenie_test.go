@@ -88,15 +88,15 @@ func TestObnovlenieRuchkaSvezhayaVersiyaBezNovoy(t *testing.T) {
 
 // Сеть на стенде окна (stend/oblik_snimok.py) намеренно недоступна — ручка
 // обязана ответить понятной бедой, а не повесить запрос: окно не должно
-// зависнуть на «Проверяем…» навсегда (хозяин 22.08, эталон — телефон).
+// зависнуть на «Проверяем…» навсегда (жалоба 22.08, эталон — телефон).
 //
-// До 28.08 текст был один на все беды — «не удалось проверить»: хозяин не
-// понимал, у него нет сети, GitHub лежит или просто долго. Ниже — четыре
-// теста на четыре РАЗНЫЕ причины (net-сеть, статус, таймаут, мусор), и
+// До 28.08 текст был один на все беды — «не удалось проверить»: человек не
+// понимал, нет ли у него сети, лежит ли GitHub или тот просто думает долго.
+// Ниже — четыре теста на четыре РАЗНЫЕ причины (net-сеть, статус, таймаут, мусор), и
 // каждый ждёт СВОЙ текст.
 
 // TestObnovlenieRuchkaBedaNetSeti — порт закрыт (127.0.0.1:1 никто не
-// слушает): connection refused, самая частая беда — «нет сети у хозяина дома».
+// слушает): connection refused, самая частая беда — нет сети дома.
 func TestObnovlenieRuchkaBedaNetSeti(t *testing.T) {
 	s := stend(t)
 	m := s.Obsluzhit()
@@ -122,7 +122,7 @@ func TestObnovlenieRuchkaBedaNetSeti(t *testing.T) {
 }
 
 // TestObnovlenieRuchkaBedaStatus — GitHub жив, но отвечает 503: сервер
-// работает, значит дело не в сети хозяина, а в самом GitHub.
+// работает, значит дело не в сети человека, а в самом GitHub.
 func TestObnovlenieRuchkaBedaStatus(t *testing.T) {
 	s := stend(t)
 	m := s.Obsluzhit()
@@ -147,7 +147,7 @@ func TestObnovlenieRuchkaBedaStatus(t *testing.T) {
 }
 
 // TestObnovlenieRuchkaBedaTaymaut — сервер молчит дольше отведённого срока:
-// хозяин видит подпись «GitHub не ответил за N секунд», а не зависшую
+// человек видит подпись «GitHub не ответил за N секунд», а не зависшую
 // «Проверяем…» и не ту же надпись, что при отсутствии сети.
 //
 // Срок на время теста сокращён (иначе 6 настоящих секунд на каждый прогон);
@@ -184,7 +184,7 @@ func TestObnovlenieRuchkaBedaTaymaut(t *testing.T) {
 	}
 }
 
-// TestObnovlenieRuchkaBedaMusor — GitHub (или проксёр между хозяином и им)
+// TestObnovlenieRuchkaBedaMusor — GitHub (или проксёр между ним и человеком)
 // ответил 200, но телом, которое не JSON: страница-заглушка, HTML capitve
 // portal и подобное.
 func TestObnovlenieRuchkaBedaMusor(t *testing.T) {
