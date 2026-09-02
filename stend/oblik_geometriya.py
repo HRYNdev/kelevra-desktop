@@ -9,10 +9,19 @@
 
 Пороги (заданы человеком, не подкручены под результат):
   (а) низ круга → верх подсказки-подсказки под ним          ≤ 24px
-  (б) круг→подсказка СТРОГО МЕНЬШЕ подсказка→строка ключа   (подпись обязана
-      принадлежать кругу визуально, а не строке ключа доступа под ней)
-  (в) горизонтальный зазор между соседними кусками строки
-      «Ключ доступа: ИМЯ … действует до ДАТЫ»                ≤ 16px
+  (б) круг→подсказка СТРОГО МЕНЬШЕ подсказка→карточка подписки (подпись
+      обязана принадлежать кругу визуально, а не тому, что под ней). 02.09
+      строку «Ключ доступа: ИМЯ · действует до ДАТЫ» сменила карточка
+      #karta-podpiska (эталон телефона: подписка — карточка, открывающая
+      шторку) — мерим расстояние до неё, предмет проверки тот же.
+  (в) КАРТОЧКА ПОДПИСКИ ЧИТАЕТСЯ: заголовок и подпись непусты и целиком
+      помещаются в свою карточку (допуск 1px). Раньше тут мерился
+      горизонтальный зазор между кусками той самой строки ключа (≤16px) —
+      куски разъезжались по ширине окна. У карточки куски стоят друг под
+      другом, и разъехаться им некуда, зато появилась своя беда того же
+      класса: значение, вылезшее за рамку карточки. Заголовок обязан быть
+      непустым всегда («пустые там хуже отсутствия» — правило телефона);
+      подпись законно молчит, пока сервер про подписку не ответил.
   (г) низ скроллящейся ленты не заходит НИЖЕ верха панели вкладок:
       lenta.bottom <= vkladki.top (допуск 1px на округление). Раньше эта
       проверка сравнивала «верх панели» с «низом узла, обрезанным по низу
@@ -61,9 +70,10 @@
       дословно: «ручной режим если тыкаешь то там выбор сделан криво» —
       выбранный узел получил явную галочку ✓ (ExitRow, 528-529) взамен еле
       заметной рамки.
-      (з0) на главном экране (вкладка «Сеть») РОВНО одна карточка
-      `.karta-vyhod`, с непустым состоянием (title/subtitle) и шевроном
-      «›»; шторка ДО клика по карточке закрыта.
+      (з0) на главном экране (вкладка «Сеть») РОВНО одна карточка выхода
+      `#karta-vyhod` (по id, а не по классу: с 02.09 ту же форму
+      `.karta-vyhod` носит и карточка подписки), с непустым состоянием
+      (title/subtitle) и шевроном «›»; шторка ДО клика по карточке закрыта.
       (з1) клик по карточке открывает шторку: внутри ровно одна полоса
       `.rezhim-perekl` с дословным текстом «Автоматически» / «Вручную» —
       не перевод смысла, а те же слова, что на телефоне (HomeScreen.kt:
@@ -101,12 +111,18 @@ GEOMETRIYA_JS = """() => {
   };
   const krug = r(document.querySelector('.krug-fon'));
   const podskazka = r(document.getElementById('podskazka'));
-  const podpiska = r(document.getElementById('podpiska'));
-  const imya = r(document.getElementById('podpiska-imya'));
-  const srok = r(document.getElementById('podpiska-srok'));
+  // Подписка с 02.09 — карточка (#karta-podpiska), а не строка
+  // «Ключ доступа: ИМЯ · действует до ДАТЫ» из двух кусков: та жила по
+  // id podpiska/podpiska-imya/podpiska-srok, которых в разметке больше нет.
+  // Мерить исчезнувшие узлы — это молчащий щуп, а не зелёный.
+  const podpiska = r(document.getElementById('karta-podpiska'));
+  const title = document.getElementById('podpiska-title');
+  const subtitle = document.getElementById('podpiska-subtitle');
+  const kusok = (el) => el ? {rect: r(el), tekst: (el.textContent || '').trim()} : null;
   const vkladki = r(document.getElementById('vkladki'));
   const lenta = r(document.getElementById('lenta'));
-  return {krug, podskazka, podpiska, imya, srok, vkladki, lenta};
+  return {krug, podskazka, podpiska, title: kusok(title), subtitle: kusok(subtitle),
+          vkladki, lenta};
 }"""
 
 
@@ -126,12 +142,44 @@ def proverit_glavnyy_ekran(str_, imya_sceny):
                 bedy.append(f"{imya_sceny}: (б) круг→подсказка {d1:.0f}px НЕ меньше "
                             f"подсказка→ключ {d2:.0f}px — подсказка визуально не принадлежит кругу")
 
-    imya_r, srok_r = d["imya"], d["srok"]
-    if imya_r and srok_r and (imya_r["width"] or srok_r["width"]):
-        zazor = srok_r["left"] - imya_r["right"]
-        if zazor > 16:
-            bedy.append(f"{imya_sceny}: (в) зазор в строке «Ключ доступа» {zazor:.0f}px, "
-                        f"а порог ≤16px (имя.right={imya_r['right']:.0f}, срок.left={srok_r['left']:.0f})")
+    # (в) Карточка подписки читается: заголовок на месте, оба этажа текста
+    # лежат внутри своей рамки. Меряем только когда карточка нарисована (на
+    # сцене «1_kod» главного экрана нет вовсе — r() вернёт null, и проверка
+    # молчит).
+    #
+    # ЗАГОЛОВОК обязан быть всегда: окно называет состояние тремя словами и
+    # третье — «Пока неизвестно» (index.html, narisovatPodpisku), молчать ему
+    # не в чем. ПОДПИСЬ, наоборот, законно пуста, пока сервер про подписку не
+    # ответил: «без ограничений» на пустом месте было бы обещанием, которого
+    # никто не давал (сцена 30_podpiska_molchit). Требовать текст и от неё
+    # значило бы краснеть на честном молчании.
+    if podpiska:
+        etazhi = (("заголовок", d["title"], True), ("подпись", d["subtitle"], False))
+        for imya_kuska, kusok, obyazatelen in etazhi:
+            if not kusok:
+                bedy.append(f"{imya_sceny}: (в) в карточке подписки нет узла «{imya_kuska}» — "
+                            f"её содержимое переехало, а щуп остался мерить пустоту")
+                continue
+            if not kusok["tekst"]:
+                if obyazatelen:
+                    bedy.append(f"{imya_sceny}: (в) {imya_kuska} карточки подписки пуст — "
+                                f"видимая строка без значения хуже её отсутствия")
+                continue
+            k = kusok["rect"]
+            if not k:
+                bedy.append(f"{imya_sceny}: (в) {imya_kuska} карточки подписки «{kusok['tekst'][:30]}» "
+                            f"не нарисован вовсе (нулевой прямоугольник)")
+                continue
+            vylez = (k["left"] < podpiska["left"] - 1
+                     or k["right"] > podpiska["right"] + 1
+                     or k["top"] < podpiska["top"] - 1
+                     or k["bottom"] > podpiska["bottom"] + 1)
+            if vylez:
+                bedy.append(f"{imya_sceny}: (в) {imya_kuska} карточки подписки "
+                            f"«{kusok['tekst'][:30]}» вылез за её рамку "
+                            f"({k['left']:.0f}…{k['right']:.0f} по X, {k['top']:.0f}…{k['bottom']:.0f} по Y; "
+                            f"карточка {podpiska['left']:.0f}…{podpiska['right']:.0f} / "
+                            f"{podpiska['top']:.0f}…{podpiska['bottom']:.0f})")
 
     lenta, vkladki = d["lenta"], d["vkladki"]
     if lenta and vkladki:
@@ -233,7 +281,11 @@ KARTA_GLAVNAYA_JS = """() => {
   // читалось бы прибором как «сцена без главного экрана» и молчало бы —
   // ровно та ловушка «проверка с пустым входом зеленеет» (25.08).
   const glavnyyEkranViden = !!r(document.querySelector('.krug-fon'));
-  const karty = document.querySelectorAll('.karta-vyhod');
+  // Ищем карточку «Выход» ПО ЕЁ id, а не по классу: с 02.09 тот же класс
+  // .karta-vyhod (одна форма карточки на все) носит и карточка подписки —
+  // querySelectorAll('.karta-vyhod')[0] отдавал бы подписку, и щуп мерил бы
+  // чужую карточку, крича «карточек 2, а нужна одна».
+  const karty = document.querySelectorAll('#karta-vyhod');
   const karta = karty[0] || null;
   const title = document.getElementById('vyhod-title');
   const subtitle = document.getElementById('vyhod-subtitle');
@@ -313,8 +365,8 @@ def proverit_kartu_i_shtorku(str_, imya_sceny, avtorezhim_vklyuchen_ozhidaem):
     ручной и там сам выбираешь», и 29.08: «ручной режим если тыкаешь то там
     выбор сделан криво» (подсветка выбранного узла).
 
-    (з0) карточка `.karta-vyhod` — ровно одна, с непустыми title/subtitle
-        и шевроном; шторка ДО клика закрыта.
+    (з0) карточка выхода `#karta-vyhod` — ровно одна, с непустыми
+        title/subtitle и шевроном; шторка ДО клика закрыта.
     (з1) клик по карточке открывает шторку: внутри неё ровно одна полоса
         `.rezhim-perekl` с дословными подписями «Автоматически»/«Вручную»,
         без перекрытий, и виден список `#uzly` — эталон телефона,
@@ -333,7 +385,7 @@ def proverit_kartu_i_shtorku(str_, imya_sceny, avtorezhim_vklyuchen_ozhidaem):
         # приём, что и в proverit_glavnyy_ekran).
         return bedy
     if d["kolichestvoKart"] != 1 or not d["kartaVidna"]:
-        bedy.append(f"{imya_sceny}: (з0) карточка «Выход» `.karta-vyhod` не видна на вкладке "
+        bedy.append(f"{imya_sceny}: (з0) карточка «Выход» `#karta-vyhod` не видна на вкладке "
                     f"«Сеть» (найдено {d['kolichestvoKart']})")
     else:
         if not d["titleText"]:

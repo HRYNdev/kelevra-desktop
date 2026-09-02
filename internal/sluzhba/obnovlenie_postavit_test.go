@@ -187,3 +187,136 @@ func TestObnovleniePostavitRuchkaVtoroyTychokPokaIdetUstanovka(t *testing.T) {
 		t.Fatalf("второй тычок ответил не по делу: %+v", beda)
 	}
 }
+
+// ДОЛЯ СКАЧАННОГО (02.09). Ручка установки отвечает ОДИН раз и уже в конце, а
+// окно тем временем опрашивает /api/sostoyanie раз в 2 секунды — до этой
+// правки там не было ни одного поля про ход, и диалог обновления мог сказать
+// только «Скачиваю…» под неопределённой полосой. Теперь доля едет полем
+// obnovlenie_dolya, и оба теста ниже смотрят на неё ровно оттуда, откуда её
+// берёт окно.
+
+// dolyaVSostoyanii — то же самое, что делает окно каждые 2 секунды.
+func dolyaVSostoyanii(t *testing.T, s *Sluzhba, m http.Handler) float64 {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/"+s.klyuch+"/api/sostoyanie", nil)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	var o otvetSostoyaniya
+	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+		t.Fatalf("не разобрал /api/sostoyanie: %v", err)
+	}
+	return o.ObnovlenieDolya
+}
+
+func TestSostoyanieNesetDolyuPokaIdetUstanovka(t *testing.T) {
+	s := stend(t)
+	m := s.Obsluzhit()
+	put := vosstanovitSebya(t)
+
+	// Сборка нарочно крупная: на коротком теле вся загрузка проходит одним
+	// чтением, и «половина скачана» подсмотреть негде — тест зеленел бы по
+	// конструкции, а не по факту.
+	soderzhimoe := sborkaPohozhayaNaSebya(t, put, strings.Repeat("K", 200_000))
+	otdali := make(chan struct{})
+	dokachat := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(len(soderzhimoe)))
+		polovina := len(soderzhimoe) / 2
+		fmt.Fprint(w, soderzhimoe[:polovina])
+		w.(http.Flusher).Flush()
+		close(otdali)
+		<-dokachat
+		fmt.Fprint(w, soderzhimoe[polovina:])
+	}))
+	t.Cleanup(srv.Close)
+
+	s.zamok.Lock()
+	s.naydennoeObnovlenie = &obnovlenie.Novaya{Versiya: "7.7.7", Ssylka: srv.URL, Razmer: int64(len(soderzhimoe))}
+	s.zamok.Unlock()
+
+	kod := make(chan int, 1)
+	go func() {
+		r := httptest.NewRequest("POST", "/"+s.klyuch+"/api/obnovlenie_postavit", nil)
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, r)
+		kod <- w.Code
+	}()
+
+	select {
+	case <-otdali:
+	case <-time.After(5 * time.Second):
+		t.Fatal("сервер не дошёл до отдачи первой половины за 5с")
+	}
+
+	// Опрашиваем ровно так же, как окно, — пока доля не появится. Ждём, а не
+	// смотрим один раз: между отдачей байт сервером и их чтением клиентом
+	// проходит неизвестное нам время, и разовая проверка ловила бы гонку.
+	var dolya float64
+	srok := time.Now().Add(5 * time.Second)
+	for time.Now().Before(srok) {
+		dolya = dolyaVSostoyanii(t, s, m)
+		if dolya > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if dolya <= 0 {
+		close(dokachat)
+		<-kod
+		t.Fatal("половина сборки уже скачана, а /api/sostoyanie доли не несёт — окну нечего показать")
+	}
+	if dolya >= 1 {
+		close(dokachat)
+		<-kod
+		t.Fatalf("доля %.3f при скачанной половине — окно показало бы 100%% посреди загрузки", dolya)
+	}
+
+	close(dokachat)
+	if c := <-kod; c != 200 {
+		t.Fatalf("установка не удалась, код %d", c)
+	}
+	// Установка кончилась — доли больше нет вовсе: застывшие «47%» в окне
+	// после конца загрузки такое же враньё, как выдуманные проценты.
+	if d := dolyaVSostoyanii(t, s, m); d != 0 {
+		t.Fatalf("установка кончилась, а доля осталась %.3f", d)
+	}
+}
+
+// Обрыв связи посреди скачивания: установка проваливается, и доля обязана
+// исчезнуть вместе с ней. Иначе окно на следующем же опросе показало бы
+// «Скачиваю… 50%» на загрузке, которой давно нет.
+func TestOborvannayaZakachkaNeOstavlyaetDolyuVSostoyanii(t *testing.T) {
+	s := stend(t)
+	m := s.Obsluzhit()
+	// vosstanovitSebya тут не нужна: обрыв случается ДО того, как Postavit
+	// трогает файл приложения (её же железное обещание), — подменять на
+	// диске нечего.
+	put, err := obnovlenie.PutSebya()
+	if err != nil {
+		t.Fatalf("не знаю, где лежу: %v", err)
+	}
+	polovina := sborkaPohozhayaNaSebya(t, put, strings.Repeat("K", 100_000))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Обещаем вдвое больше, чем отдаём, и обрываем ответ.
+		w.Header().Set("Content-Length", fmt.Sprint(2*len(polovina)))
+		fmt.Fprint(w, polovina)
+	}))
+	t.Cleanup(srv.Close)
+
+	s.zamok.Lock()
+	s.naydennoeObnovlenie = &obnovlenie.Novaya{Versiya: "6.6.6", Ssylka: srv.URL, Razmer: int64(2 * len(polovina))}
+	s.zamok.Unlock()
+
+	r := httptest.NewRequest("POST", "/"+s.klyuch+"/api/obnovlenie_postavit", nil)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	if w.Code == 200 {
+		t.Fatalf("обрыв закачки прошёл как успех: %s", w.Body.String())
+	}
+	if d := dolyaVSostoyanii(t, s, m); d != 0 {
+		t.Fatalf("закачка оборвалась, а доля в состоянии осталась %.3f", d)
+	}
+	if _, err := os.Stat(put + ".old"); err == nil {
+		t.Fatal("приложение отодвинуто в .old, хотя скачивание оборвалось")
+	}
+}

@@ -14,6 +14,7 @@ package ustroystvo
 import (
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -72,13 +73,38 @@ func Model() string { opredelit(); return model }
 // Platforma — система с версией, например «Windows 10 Pro 22H2 (19045)».
 func Platforma() string { opredelit(); return platforma }
 
-// Zagolovki ставит четыре заголовка устройства на готовый запрос.
+// Zagolovki ставит четыре заголовка устройства на готовый запрос — без
+// расхода трафика. Остаётся ради тех, кому расход не нужен и кто подключает
+// эту дверь функцией-полем прежней формы (internal/zhurnaly): менять там
+// сигнатуру ради заголовка, который отправке журналов ничего не даёт, значит
+// тащить цифру через пакет, который про неё знать не должен.
 //
 // deviceID — ГОТОВЫЙ постоянный идентификатор (hranenie.Nastroyki.DeviceID),
 // свой новый тут не заводится: идентификатор рождается один раз при первом
 // старте и живёт на диске, иначе сервер видел бы новое устройство после
 // каждого запуска. Пустой deviceID — не ошибка (заголовок просто не ставится).
 func Zagolovki(h http.Header, deviceID, versiyaPrilozheniya string) {
+	ZagolovkiSTrafikom(h, deviceID, versiyaPrilozheniya, 0)
+}
+
+// ZagolovkiSTrafikom — то же самое плюс X-Device-Traffic: сколько байт ЭТА
+// машина прогнала через ядро за всё время.
+//
+// Зачем отдельный заголовок. Сервер считает расход по ключу доступа целиком, а
+// под одним ключом ходят и телефон, и компьютер — разделить их он не может в
+// принципе, считать обязано само устройство. Число накопительное (не «с
+// прошлой отправки»): сервер кладёт присланное в свой реестр как есть, без
+// сложения, — так потеря одного запроса не теряет расход, а сдвигает отчёт.
+//
+// Цифра приходит АРГУМЕНТОМ, а не читается тут из настроек: пакет hranenie
+// зовёт в себя половину приложения, а этот пакет обязан оставаться листом
+// (его же по этой причине подключают функцией-полем в internal/zhurnaly).
+//
+// trafikBayt <= 0 — заголовка нет вовсе, и это не то же самое, что «0».
+// Ноль означал бы «устройство измерило и намерило ничего»; отсутствие
+// заголовка — «сказать пока нечего» (счётчик ещё ни разу не сработал, ядро не
+// поднималось). Сервер к отсутствию готов: старые копии клиента его не шлют.
+func ZagolovkiSTrafikom(h http.Header, deviceID, versiyaPrilozheniya string, trafikBayt int64) {
 	if id := vASCII(deviceID); id != "" {
 		h.Set("X-Device-Id", id)
 	}
@@ -86,6 +112,9 @@ func Zagolovki(h http.Header, deviceID, versiyaPrilozheniya string) {
 	h.Set("X-Device-Platform", Platforma())
 	if v := vASCII(versiyaPrilozheniya); v != "" {
 		h.Set("X-App-Version", v)
+	}
+	if trafikBayt > 0 {
+		h.Set("X-Device-Traffic", strconv.FormatInt(trafikBayt, 10))
 	}
 }
 

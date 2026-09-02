@@ -185,6 +185,15 @@ type Sluzhba struct {
 	// выше: второй тычок в пузырь, пока первый ещё качает найденную сборку, не
 	// должен звать obnovlenie.Postavit второй раз (см. PostavitNaydennoe).
 	idetUstanovkaObnovleniya bool
+	// skachanoObnovleniya и vsegoObnovleniya — ход ИДУЩЕЙ прямо сейчас
+	// загрузки (obnovlenie.PostavitSHodom докладывает сюда). Живут под тем же
+	// zamok и ровно столько же, сколько idetUstanovkaObnovleniya: и удача, и
+	// обрыв обнуляют их вместе с замком — иначе окно показывало бы застывшие
+	// «47%» уже после того, как всё кончилось, а это враньё хуже молчания.
+	// vsegoObnovleniya == 0 — длины ответа сервер не назвал, доли нет вовсе
+	// (см. obnovlenie.Hod).
+	skachanoObnovleniya int64
+	vsegoObnovleniya    int64
 
 	// Авторежим (переключение защиты по смене сети) живёт под своим замком,
 	// отдельным от zamok выше: запуск/остановка служителя не должны ждать
@@ -287,7 +296,7 @@ func Novaya() (*Sluzhba, error) {
 	s := &Sluzhba{
 		Nastroyki:          n,
 		Yadro:              &yadro.Yadro{Bin: hranenie.PutYadra(), Papka: hranenie.PapkaYadra()},
-		Podpiska:           &podpiska.Klient{DeviceID: n.DeviceID, Host: os.Getenv("KELEVRA_PODPISKA"), Shema: os.Getenv("KELEVRA_SHEMA")},
+		Podpiska:           &podpiska.Klient{DeviceID: n.DeviceID, Host: os.Getenv("KELEVRA_PODPISKA"), Shema: os.Getenv("KELEVRA_SHEMA"), Trafik: n.TrafikUstroystva},
 		klyuch:             sluchaynyy(),
 		avtorezhimDnsAdres: os.Getenv("KELEVRA_AVTOREZHIM_DNS"),
 	}
@@ -586,10 +595,14 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 	}
 	n := *s.naydennoeObnovlenie
 	s.idetUstanovkaObnovleniya = true
+	s.skachanoObnovleniya, s.vsegoObnovleniya = 0, 0
 	s.zamok.Unlock()
 	defer func() {
 		s.zamok.Lock()
 		s.idetUstanovkaObnovleniya = false
+		// Ход гасим вместе с замком — на ЛЮБОМ исходе, включая обрыв
+		// посреди скачивания: доля пережившей себя загрузки — враньё.
+		s.skachanoObnovleniya, s.vsegoObnovleniya = 0, 0
 		s.zamok.Unlock()
 	}()
 
@@ -600,7 +613,17 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 	}
 	ctx, otmena := context.WithTimeout(context.Background(), srokUstanovkiObnovleniya)
 	defer otmena()
-	if err := obnovlenie.Postavit(ctx, &http.Client{Timeout: srokUstanovkiObnovleniya}, n, put); err != nil {
+	// Доля скачанного — единственное, что окно может показать человеку, пока
+	// идёт установка: сама ручка отвечает ОДИН раз и уже в конце, а окно
+	// тем временем опрашивает /api/sostoyanie раз в 2 секунды. До 02.09 там
+	// не было ничего, кроме неопределённой полосы, — на телефоне же в этом
+	// месте стоят настоящие проценты.
+	hod := func(skachano, vsego int64) {
+		s.zamok.Lock()
+		s.skachanoObnovleniya, s.vsegoObnovleniya = skachano, vsego
+		s.zamok.Unlock()
+	}
+	if err := obnovlenie.PostavitSHodom(ctx, &http.Client{Timeout: srokUstanovkiObnovleniya}, n, put, hod); err != nil {
 		log.Printf("установка обновления по тычку: не вышло (%v), работаю старой версией", err)
 		return "", fmt.Errorf("не поставилось: %w", err)
 	}
@@ -1045,6 +1068,13 @@ type otvetSostoyaniya struct {
 	// обновление» — та отвечает своим отдельным otvetObnovleniya.Novaya.
 	// Пусто — фон ничего не нашёл или ещё не спрашивал.
 	NovayaVersiyaDostupna string `json:"novaya_versiya_dostupna,omitempty"`
+	// ObnovlenieDolya — сколько уже скачано от всей новой сборки, 0..1. Поля
+	// НЕТ вовсе (omitempty), когда установка не идёт или сервер не назвал
+	// длины ответа: окно тогда оставляет неопределённую полосу и пишет
+	// «Скачиваю…» без процента. Выдуманный процент хуже честного «идёт» —
+	// поэтому доля и считается от ContentLength живого соединения
+	// (obnovlenie.Hod), а не от размера релиза из списка GitHub.
+	ObnovlenieDolya float64 `json:"obnovlenie_dolya,omitempty"`
 	// PravaUzheSprosheny — приложение уже (само или кнопкой) спрашивало права
 	// администратора хоть раз, отдельно от Prava (есть ли они СЕЙЧАС): вместе
 	// эти два поля различают «ещё не спрашивали» и «спрашивали и отказали».
@@ -1081,6 +1111,23 @@ type otvetSostoyaniya struct {
 	// «включена» тут больше нет: выбор убран 01.09, отправка безусловна, и
 	// окно показывает эту дату справкой, а не подписью под тумблером.
 	ZhurnalyOtpravkaKogda int64 `json:"zhurnaly_otpravka_kogda,omitempty"`
+	// Ustroystva — весь список машин под этим кодом доступа, для шторки
+	// подписки. Пусто у старого сервера и до первого удачного ответа.
+	Ustroystva []ustroystvoOkna `json:"ustroystva,omitempty"`
+}
+
+// ustroystvoOkna — одно устройство глазами окна. Отдельный тип от
+// podpiska.Ustroystvo по одной причине: там даты строками в формате сервера,
+// здесь unix, потому что считать «был два часа назад» умеет облик, а разбирать
+// ISO-8601 в JavaScript ради этого незачем.
+type ustroystvoOkna struct {
+	Svoyo      bool   `json:"svoyo"`
+	Imya       string `json:"imya"`
+	Vid        string `json:"vid"`
+	Versiya    string `json:"versiya,omitempty"`
+	Vpervye    int64  `json:"vpervye,omitempty"`
+	Poslednee  int64  `json:"poslednee,omitempty"`
+	TrafikBayt int64  `json:"trafik_bayt,omitempty"`
 }
 
 // ozhidanieDoma — истинно ровно тогда, когда авторежим включён, обстановка
@@ -1198,10 +1245,32 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		o.PodpiskaEst = true
 		o.PodpiskaAktivna = s.svedeniya.Aktivna
 		o.PodpiskaLimitBayt, o.PodpiskaSyedenoBayt = s.svedeniya.LimitBayt, s.svedeniya.SyedenoB
+		for _, u := range s.svedeniya.Ustroystva {
+			o.Ustroystva = append(o.Ustroystva, ustroystvoOkna{
+				Svoyo:      u.Svoyo,
+				Imya:       u.Imya,
+				Vid:        u.Vid,
+				Versiya:    u.Versiya,
+				Vpervye:    u.VpervyeUnix(),
+				Poslednee:  u.PosledneeUnix(),
+				TrafikBayt: u.TrafikBayt,
+			})
+		}
 	}
 	k := s.kartina
 	if s.naydennoeObnovlenie != nil {
 		o.NovayaVersiyaDostupna = s.naydennoeObnovlenie.Versiya
+	}
+	// Долю отдаём ТОЛЬКО пока установка идёт и знаменатель известен: вне
+	// установки поля нет вовсе, и окно рисует то, что честно, — ничего.
+	if s.idetUstanovkaObnovleniya && s.vsegoObnovleniya > 0 {
+		d := float64(s.skachanoObnovleniya) / float64(s.vsegoObnovleniya)
+		// Сервер вправе прислать больше, чем обещал заголовком; «112%» в
+		// окне — беда прибора, а не сети.
+		if d > 1 {
+			d = 1
+		}
+		o.ObnovlenieDolya = d
 	}
 	s.zamok.Unlock()
 	o.Rezhim = string(k.Rezhim)
@@ -2141,6 +2210,68 @@ func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 				log.Printf("плановое обновление профиля не сохранилось: %v", err)
 			}
 		}
+	}
+}
+
+// ShagUchetaTrafika — как часто спрашивать у ядра его счётчики.
+//
+// Минута — не про точность, а про цену промаха. Счётчик ядра живёт в самом
+// ядре и умирает вместе с ним, поэтому недоспрошенным остаётся ровно то, что
+// прошло между последним опросом и падением: минута расхода — потеря, которой
+// не видно, час — заметная дыра в отчёте. Чаще минуты незачем: каждый
+// изменившийся тик пишет файл настроек на диск.
+var ShagUchetaTrafika = time.Minute
+
+// SchitatTrafik крутит учёт расхода по расписанию, пока живёт служба — тем же
+// ctx, что ObnovlyatProfil и SleditZaZhurnalami.
+//
+// Зачем это вообще есть. Сервер считает трафик по КЛЮЧУ доступа, а под одним
+// ключом ходят и телефон, и компьютер: сколько скачал каждый, по серверной
+// цифре не узнать никак. Различить может только само устройство — оно и
+// считает, а итог уезжает заголовком X-Device-Traffic на каждом запросе к
+// подписке (internal/podpiska).
+func (s *Sluzhba) SchitatTrafik(ctx context.Context, shag time.Duration) {
+	if shag <= 0 {
+		shag = ShagUchetaTrafika
+	}
+	t := time.NewTicker(shag)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.UchestTrafik()
+		}
+	}
+}
+
+// UchestTrafik — один тик учёта: снять показания ядра, добавить прирост к
+// итогу, закрепить итог на диске.
+//
+// Молчаливый возврат при любой беде — не небрежность, а требование. Ядро
+// стоит девять раз из десяти (человек не держит защиту включённой круглые
+// сутки), и Clash API тогда не отвечает по самой обычной причине; жаловаться
+// на это в журнал раз в минуту значит утопить в шуме те записи, ради которых
+// журнал и шлётся разработчику. Главное — что несостоявшийся опрос НИЧЕГО не
+// меняет: ни итога, ни отметки последнего показания, ни файла на диске.
+func (s *Sluzhba) UchestTrafik() {
+	if s.Yadro == nil || s.Nastroyki == nil {
+		return
+	}
+	t, err := s.Yadro.Trafik()
+	if err != nil || t == nil {
+		return
+	}
+	bylo := s.Nastroyki.TrafikUstroystva()
+	// Вверх и вниз складываются в одно число: сервер держит на устройство
+	// одну графу расхода, и разделение ему некуда положить.
+	stalo := s.Nastroyki.UchestPokazanieYadra(t.VverhBayt + t.VnizBayt)
+	if stalo == bylo {
+		return // прироста нет — незачем трогать диск каждую минуту простоя
+	}
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("расход трафика посчитан, но не сохранён: %v", err)
 	}
 }
 

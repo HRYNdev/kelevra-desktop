@@ -36,6 +36,21 @@ type Klient struct {
 	Shema    string // "https" в бою; "http" оставлен только для проверок на своём стенде
 	HTTP     *http.Client
 	DeviceID string
+	// Trafik — сколько байт эта машина прогнала через ядро за всё время.
+	// Функцией, а не числом: клиент живёт всё время работы приложения, а
+	// расход растёт каждую минуту — записанное при сборке число уехало бы на
+	// сервер устаревшим на неделю. nil — законно (стенды, ранний старт до
+	// первого замера): заголовок тогда просто не ставится.
+	Trafik func() int64
+}
+
+// trafik — расход, если его есть кому назвать. Отдельный метод, чтобы место
+// вызова не разыменовывало nil (тот же приём, что shema/host/http выше).
+func (k *Klient) trafik() int64 {
+	if k.Trafik == nil {
+		return 0
+	}
+	return k.Trafik()
 }
 
 func (k *Klient) shema() string {
@@ -76,7 +91,10 @@ func (k *Klient) zapros(ctx context.Context, url string) (*http.Request, error) 
 	// уже шлёт android-клиент (X-Device-Id / X-Device-Model / X-Device-Platform /
 	// X-App-Version). Через zapros идут ОБА запроса к серверу (Konfig и
 	// Svedeniya), поэтому точка правки тут одна.
-	ustroystvo.Zagolovki(r.Header, k.DeviceID, Versiya)
+	// X-Device-Traffic — пятый заголовок: расход ЭТОЙ машины. Сервер считает
+	// трафик по ключу доступа целиком и различить телефон с компьютером не
+	// может — цифру даёт устройство.
+	ustroystvo.ZagolovkiSTrafikom(r.Header, k.DeviceID, Versiya, k.trafik())
 	return r, nil
 }
 
@@ -133,7 +151,48 @@ type Svedeniya struct {
 	// вовсе, и nil — законный ответ, окно тогда просто не рисует строку.
 	Chelovek   *Imenovannyy `json:"person,omitempty"`
 	Ustroystvo *Imenovannyy `json:"device,omitempty"`
+	// Ustroystva — ВСЕ устройства этого ключа доступа, не только текущее.
+	// Сервер собирает список из своего реестра и помечает наше флагом Svoyo.
+	// Старый сервер поля не шлёт — пустой срез законен, окно тогда рисует
+	// одну строку про текущую машину, как и раньше.
+	Ustroystva []Ustroystvo `json:"devices,omitempty"`
 }
+
+// Ustroystvo — одна строка списка «кто ещё ходит под этим кодом».
+//
+// Дат сервер шлёт две и обе в ISO-8601 с зоной. Держим их строками ровно
+// такими, какими пришли, а наружу отдаём unix (см. методы ниже): окну нужно
+// считать «был два часа назад», а не разбирать формат, и заводить ради этого
+// свой тип времени в JSON-ответе службы — лишний слой на пустом месте.
+type Ustroystvo struct {
+	Svoyo      bool   `json:"self"`
+	Imya       string `json:"name"`
+	Vid        string `json:"kind"` // phone | laptop | desktop — для значка
+	Platforma  string `json:"platform"`
+	Versiya    string `json:"app_version"`
+	Vpervye    string `json:"first_seen"`
+	Poslednee  string `json:"last_seen"`
+	TrafikBayt int64  `json:"traffic_bytes"`
+}
+
+// vremyaISO разбирает время сервера. Пустая или битая строка — ноль: строка
+// «был тогда-то» тогда просто не рисуется, и это лучше выдуманной даты.
+func vremyaISO(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	for _, shablon := range []string{time.RFC3339, "2006-01-02T15:04:05Z0700", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(shablon, s); err == nil {
+			return t.Unix()
+		}
+	}
+	return 0
+}
+
+// PosledneeUnix и VpervyeUnix — те же две даты, но числом для окна.
+func (u Ustroystvo) PosledneeUnix() int64 { return vremyaISO(u.Poslednee) }
+func (u Ustroystvo) VpervyeUnix() int64   { return vremyaISO(u.Vpervye) }
 
 // Imenovannyy — общая форма для person и device: у обоих сервер отдаёт
 // единственное поле name.
