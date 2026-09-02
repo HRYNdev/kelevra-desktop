@@ -636,3 +636,157 @@ func TestDvaObnovleniyaPodryadNePlodyatHvosty(t *testing.T) {
 		t.Fatalf("UbratHvost задел само приложение: %q", b)
 	}
 }
+
+// ХОД СКАЧИВАНИЯ (02.09). Окно показывало «Скачиваю…» с неопределённой
+// полосой, потому что доли не существовало нигде: io.Copy считал байты только
+// себе. На телефоне в этом же месте стоит настоящее «Скачиваю… 47%».
+//
+// sborkaDliny собирает сборку заведомо длиннее одного буфера io.Copy (32КБ):
+// доля, которую доложили один раз в самом конце, ничем не отличается от
+// отсутствия доли, и тест обязан видеть ПРОМЕЖУТОЧНЫЕ доклады, а не только
+// последний.
+func sborkaDliny(bayt int) string { return strings.Repeat("K", bayt) }
+
+// dokladchik — общий сбор докладов Hod для тестов ниже. Замка нет и не нужно:
+// Hod зовётся из того же хода io.Copy, что и чтение тела, — одной горутиной.
+func dokladchik() (Hod, *[][2]int64) {
+	var vse [][2]int64
+	return func(skachano, vsego int64) {
+		vse = append(vse, [2]int64{skachano, vsego})
+	}, &vse
+}
+
+func TestHodSchitaetDolyuPoHoduSkachivaniya(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	novoe := sborkaDliny(200_000)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Длину называем САМИ: тело крупнее буфера ответа, и без этого
+		// заголовка Go ушёл бы в chunked — то есть в сцену следующего теста.
+		w.Header().Set("Content-Length", strconv.Itoa(len(novoe)))
+		fmt.Fprint(w, novoe)
+	}))
+	defer s.Close()
+
+	hod, dokladi := dokladchik()
+	err := PostavitSHodom(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put, hod)
+	if err != nil {
+		t.Fatalf("не поставилось: %v", err)
+	}
+	d := *dokladi
+	if len(d) < 3 {
+		t.Fatalf("докладов о ходе %d — доля, доложенная разом в конце, это не ход", len(d))
+	}
+	var promezhutochnyy bool
+	var proshlyy int64
+	for i, p := range d {
+		skachano, vsego := p[0], p[1]
+		if vsego != int64(len(novoe)) {
+			t.Fatalf("доклад %d: знаменатель %d, а длина ответа %d", i, vsego, len(novoe))
+		}
+		if skachano < proshlyy {
+			t.Fatalf("доклад %d: скачано %d, а до того было %d — доля пошла назад", i, skachano, proshlyy)
+		}
+		if skachano > vsego {
+			t.Fatalf("доклад %d: скачано %d из %d — доля больше единицы", i, skachano, vsego)
+		}
+		proshlyy = skachano
+		if skachano > 0 && skachano < vsego {
+			promezhutochnyy = true
+		}
+	}
+	if !promezhutochnyy {
+		t.Fatal("ни одного доклада между началом и концом — окну нечего показывать, пока идёт загрузка")
+	}
+	if proshlyy != int64(len(novoe)) {
+		t.Fatalf("последний доклад %d байт из %d — конец скачивания не доложен", proshlyy, len(novoe))
+	}
+}
+
+// Сервер не назвал длины ответа (chunked) — доля неизвестна, и это ЗАКОННЫЙ
+// случай, а не беда: обновление обязано встать, а окно — остаться на
+// неопределённой полосе вместо выдуманного процента.
+func TestHodBezDlinyOtvetaNeVydumyvaetDolyu(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	novoe := sborkaDliny(200_000)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Content-Length НЕ ставим: тело длиннее буфера ответа, и Go сам
+		// уходит в chunked — у клиента ContentLength == -1.
+		fmt.Fprint(w, novoe)
+	}))
+	defer s.Close()
+
+	hod, dokladi := dokladchik()
+	err := PostavitSHodom(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(len(novoe))}, put, hod)
+	if err != nil {
+		t.Fatalf("без длины ответа обновление не встало: %v", err)
+	}
+	if b, _ := os.ReadFile(put); string(b) != novoe {
+		t.Fatalf("на месте приложения не новая сборка (%d байт)", len(b))
+	}
+	d := *dokladi
+	if len(d) == 0 {
+		t.Fatal("ни одного доклада о ходе")
+	}
+	for i, p := range d {
+		if p[1] != 0 {
+			t.Fatalf("доклад %d назвал знаменатель %d, хотя длины ответа сервер не сообщал — "+
+				"это выдуманная доля", i, p[1])
+		}
+	}
+	if d[len(d)-1][0] != int64(len(novoe)) {
+		t.Fatalf("байты и без знаменателя обязаны считаться: досчитали до %d из %d",
+			d[len(d)-1][0], len(novoe))
+	}
+}
+
+// Обрыв посреди закачки. Проверяем не только отказ (это уже делает
+// TestOborvannayaZakachkaNeStavitsya), а то, ЧЕМ кончился ход: последний
+// доклад обязан остаться НЕПОЛНЫМ. Доложенная единица на оборванной закачке
+// — это «100%» в окне на пустом месте, и следом «не удалось поставить».
+func TestHodPriObryveNeDohoditDoEdinicy(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	polovina := sborkaDliny(100_000)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Обещаем вдвое больше, чем отдаём, и обрываем ответ — ровно то, что
+		// видит клиент при потере связи посреди загрузки.
+		w.Header().Set("Content-Length", strconv.Itoa(2*len(polovina)))
+		fmt.Fprint(w, polovina)
+	}))
+	defer s.Close()
+
+	hod, dokladi := dokladchik()
+	err := PostavitSHodom(context.Background(), s.Client(),
+		Novaya{Versiya: "0.5.0", Ssylka: s.URL, Razmer: int64(2 * len(polovina))}, put, hod)
+	if err == nil {
+		t.Fatal("обрыв закачки прошёл как успех")
+	}
+	if b, _ := os.ReadFile(put); string(b) != "STARYY" {
+		t.Fatalf("рабочее приложение испорчено: %q", b)
+	}
+	d := *dokladi
+	if len(d) == 0 {
+		t.Fatal("ни одного доклада о ходе")
+	}
+	posledniy := d[len(d)-1]
+	if posledniy[1] != int64(2*len(polovina)) {
+		t.Fatalf("знаменатель последнего доклада %d, а сервер обещал %d", posledniy[1], 2*len(polovina))
+	}
+	if posledniy[0] >= posledniy[1] {
+		t.Fatalf("оборванная закачка доложила %d из %d — окно показало бы 100%% там, "+
+			"где ничего не встало", posledniy[0], posledniy[1])
+	}
+}

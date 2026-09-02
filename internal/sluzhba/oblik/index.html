@@ -258,6 +258,17 @@
      поэтому активная вкладка красит иконку акцентом сама. */
   .tab .ikonka-tab { width:21px; height:21px; display:block; }
   .tab.aktivna { color:var(--akcent); font-weight:600; }
+  /* Точка «есть обновление» у вкладки «Настройки» — эталон телефона (бейдж на
+     той же вкладке). Висит у ИКОНКИ, а не у подписи: подпись меняет ширину от
+     слова к слову, иконка — нет, и точка не поедет, если слово когда-нибудь
+     сменится. position:relative нужен родителю-кнопке; отдельным правилом, а
+     не правкой .tab выше, чтобы не трогать её разобранную геометрию. */
+  .tab { position:relative; }
+  .tochka-vkladki {
+    position:absolute; top:11px; left:calc(50% + 7px);
+    width:7px; height:7px; border-radius:50%; background:var(--akcent);
+  }
+  .tochka-vkladki[hidden] { display:none; }
 
   /* Круг состояния — та же вещь, что на телефоне (KDial, Kelevra.kt/
      Components.kt): диаметр 210dp, обводка 2dp, и круг ЭТО КНОПКА — нажатие
@@ -327,7 +338,8 @@
   /* Подпись под кругом — как KHint на телефоне: капслок, моно, тихий цвет.
      Единственная строка на экране, которая прямо говорит, что нажатие
      сделает («нажмите, чтобы включить»). margin-top уменьшен с 16 до 6px, а
-     у строки ключа доступа ниже, наоборот, увеличен (.podpiska) — раньше обе
+     у карточки подписки ниже, наоборот, увеличен (#karta-podpiska; до 02.09
+     на её месте стояла строка .podpiska с тем же отступом) — раньше обе
      дистанции получались почти равными (круг→подсказка 28px, подсказка→ключ
      2px), и подсказка стояла вплотную к «Ключ доступа», читаясь как заголовок
      к НЕЙ, а не к кругу (диагноз по снимку 4_rabotaet.png, 24.08). Держит
@@ -515,6 +527,28 @@
   .shtorka-krest:hover { color:var(--tekst); }
   /* Подпись под полосой режима — эталон телефона, HomeScreen.kt 402-412. */
   .shtorka-podskazka { margin:6px 4px 10px; font-size:12px; color:var(--tihiy); }
+
+  /* ДИАЛОГ ОБНОВЛЕНИЯ — та же шторка, только по центру окна и уже: на телефоне
+     обновление показывается модальным окном поверх экрана, а не листом снизу.
+     Никакой своей механики подъёма и закрытия у него нет — те же otkrytShtorku
+     / zakrytShtorki, что у обеих шторок (см. их комментарий в JS). */
+  .shtorka-fon.po-centru { align-items:center; padding:18px; }
+  .shtorka.dialog {
+    max-width:360px; padding:18px;
+    border:1px solid var(--gran); border-radius:var(--r-m);
+  }
+  .dialog-tekst { font-size:13.5px; line-height:1.45; color:var(--tihiy); }
+  /* Версия — моноширинной строкой капсом, дословно как на телефоне
+     («ВЕРСИЯ 0.6.46»): номер сборки читают посимвольно, и пропорциональный
+     шрифт тут мешает. */
+  .dialog-versiya {
+    margin-top:12px; padding:10px 12px; border-radius:var(--r-s); text-align:center;
+    background:var(--karta); border:1px solid var(--gran);
+    font-size:12px; letter-spacing:1.4px; color:var(--tekst);
+  }
+  .dialog-hod { margin-top:10px; font-size:12.5px; color:var(--tihiy); }
+  .dialog-knopki { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
+  .dialog-knopki [hidden] { display:none; }
 
   /* Полоса выбора режима — образец: телефон, HomeScreen.kt ModeSwitch/ModeHalf
      (391-467): одна полоса, две половины, активная получает акцентный фон.
@@ -711,18 +745,22 @@
     font-weight:650; font-size:21px; letter-spacing:-.4px; color:var(--tekst);
     margin:18px 13px 6px;
   }
-  /* ВКЛАДКА «ПОДПИСКА». Эталон — шторка подписки на телефоне (HomeScreen.kt
-     464-514): заголовок «Подписка», карточка «Состояние» с подписью-строкой
-     «до 12 сентября · 12 из 50 ГБ», ниже карточка «Кто пользуется» +
-     «Устройство», под ней серая подсказка. Состав и порядок оттуда, не мои.
-     На телефоне это шторка, здесь — вкладка: у окна на компьютере внизу и
-     так стоит панель вкладок (KTabBar), и третья вкладка там дешевле, чем
-     шторка, которую нечем открыть — хозяин 01.09: «плюс нет вкладки подписки».
+  /* ШТОРКА «ПОДПИСКА». Эталон — она же на телефоне (HomeScreen.kt 464-514):
+     заголовок «Подписка», карточка «Состояние» с подписью-строкой «до 12
+     сентября · 12 из 50 ГБ», ниже кто пользуется и код доступа.
+     01.09 это была ТРЕТЬЯ вкладка нижней панели — и это была ошибка ровно
+     того рода, за которую платят вниманием: на телефоне вкладок ДВЕ, а
+     подписка живёт карточкой на главном экране и по нажатию открывает шторку
+     (хозяин, 02.09: «хочу больше как на телефоне, там всё уже выверено»).
+     Вкладка убрана целиком, содержимое переехало сюда, а поднимается шторка
+     тем же самым механизмом, что и «Выбор выхода» (otkrytShtorku в JS):
+     второй механизм для второй шторки завёл бы вторую же породу ошибок —
+     две шторки разом на экране и Esc, закрывающий не ту.
      Карточки те же .karta .karta-nastroyki, что у настроек, поэтому правила
-     карточки и разделителя строк ниже — копия правил #tab-nastroyki с той же
-     специфичностью (1 id + 2 класса), а не новая форма. */
-  #tab-podpiska .karta-nastroyki { padding-top:14px; padding-bottom:14px; overflow:hidden; }
-  #tab-podpiska .karta-nastroyki > .nastroyki-ryad:not([hidden]) ~ .nastroyki-ryad:not([hidden]) {
+     карточки и разделителя строк ниже — копия правил #tab-nastroyki, только
+     привязка теперь к .shtorka, а не к исчезнувшей вкладке. */
+  .shtorka .karta-nastroyki { padding-top:14px; padding-bottom:14px; overflow:hidden; }
+  .shtorka .karta-nastroyki > .nastroyki-ryad:not([hidden]) ~ .nastroyki-ryad:not([hidden]) {
     border-top:1px solid var(--gran); margin-top:14px; padding-top:14px;
   }
   /* Строка со СВОЕЙ МЕТКОЙ — KRowItem с полем label (Components.kt 244-299):
@@ -775,7 +813,66 @@
      карточка «кто пользуется» и подсказка исчезают вместе), поэтому зазор
      перед «Кодом доступа» одинаков в обоих случаях — 12px, тот же, что между
      любыми двумя карточками окна. */
-  #tab-podpiska .podskazka-pod-kartoy + .karta { margin-top:12px; }
+  .shtorka .podskazka-pod-kartoy + .karta { margin-top:12px; }
+
+  /* ПОЛОСА РАСХОДА — единственная новая форма в шторке, и она нарочно собрана
+     из уже принятых мер: высота 6px, скругление по кругу, цвета — те же три
+     роли состояния, что у точек узлов (норма / внимание / ошибка), четвёртой
+     не заводим. Пустой полосы не бывает: когда лимита нет (podpiska_limit_bayt
+     == 0), вместо неё стоит строка «Без ограничений» — полоса без потолка не
+     значит ничего и врёт формой. */
+  .polosa-rashod {
+    height:6px; margin-top:8px; border-radius:999px; background:var(--gran); overflow:hidden;
+  }
+  .polosa-rashod > i {
+    display:block; height:100%; border-radius:999px; background:var(--akcent); transition:width .3s;
+  }
+  .polosa-rashod > i.trevoga { background:var(--zhdem); }
+  .polosa-rashod > i.perebor { background:var(--beda); }
+  /* Неопределённая полоса — для скачивания обновления, у которого НЕ ВЫШЛО
+     узнать долю: сервер не назвал длины ответа (Content-Length), и служба
+     честно молчит про проценты (obnovlenie_dolya в /api/sostoyanie тогда нет
+     вовсе). Бегунок говорит ровно то, что известно, — «идёт», а не «идёт на
+     47%». Как только доля приезжает, класс снимается и та же полоса
+     наполняется по-настоящему, как полоса расхода подписки. */
+  .polosa-rashod.beskonechnaya > i { width:35%; animation:polosa-begaet 1.2s ease-in-out infinite; }
+  @keyframes polosa-begaet { from { margin-left:-35%; } to { margin-left:100%; } }
+  .rashod-shapka { display:flex; align-items:baseline; gap:8px; font-size:12.5px; color:var(--tihiy); }
+  .rashod-dolya {
+    margin-left:auto; font-family:ui-monospace, Consolas, monospace;
+    font-size:11.5px; font-variant-numeric:tabular-nums;
+  }
+
+  /* СТРОКА УСТРОЙСТВА — тот же скелет, что у .uzel (значок, текст, число
+     справа), но без своей рамки: строки живут внутри одной карточки и
+     разделены линией KDivider, как пункты настроек. Своё устройство метится
+     акцентным значком и тихой надписью — двух подсветок разом ему не надо.
+     align-items:flex-start, а не center: у строки три этажа текста, и при
+     center значок с расходом уезжали бы к середине всей строки, а не к её
+     первой строчке (та же беда, что чинили у .tihaya в настройках). */
+  .ustr { display:flex; align-items:flex-start; gap:11px; }
+  .ustr-znachok { flex:none; width:22px; height:22px; margin-top:1px; color:var(--tihiy); }
+  .ustr-znachok svg { width:100%; height:100%; display:block; }
+  .ustr.svoyo .ustr-znachok { color:var(--akcent); }
+  .ustr-tekst { display:flex; flex-direction:column; min-width:0; flex:1; }
+  /* Имя устройства ПЕРЕНОСИТСЯ, а не режется многоточием — то же правило и по
+     той же причине, что у .ryad-znachenie ниже: сервер отдаёт имена вроде
+     «ASUS TUF Gaming B550-PLUS WIFI II», и обрезанное имя не отвечает на
+     вопрос, ради которого строка тут стоит. */
+  .ustr-imya { font-size:14px; color:var(--tekst); line-height:1.35; word-break:break-word; }
+  .ustr-metka {
+    margin-left:6px; font-family:ui-monospace, Consolas, monospace;
+    font-size:9.5px; letter-spacing:.8px; text-transform:uppercase;
+    color:var(--akcent); white-space:nowrap;
+  }
+  .ustr-sost { margin-top:2px; font-size:12px; color:var(--tihiy); }
+  .ustr-sost.v-seti { color:var(--akcent); }
+  .ustr-melko { margin-top:2px; font-size:11px; line-height:1.35; color:var(--slabyy); }
+  .ustr-trafik {
+    flex:none; margin-left:auto; padding-left:8px; font-size:12.5px; color:var(--tihiy);
+    font-family:ui-monospace, Consolas, monospace; font-variant-numeric:tabular-nums;
+  }
+  .ustr-trafik.pusto { color:var(--slabyy); }
 
   /* Подвал «KELEVRA <версия>» — тот же текст, что и на телефоне
      (BuildConfig.VERSION_NAME), тем же моно-шрифтом и цветом Dim2
@@ -804,7 +901,7 @@
      длинных советов («Windows не дал создать сетевой адаптер» — два
      предложения) эта карточка одна съедала 146px из 538, списку узлов ниже
      оставалось 19px — меньше высоты одного узла (44.3px). Экономия ложится
-     на карточку беды, а не на .podpiska/.rezhim-perekl ниже: их уже ужимали
+     на карточку беды, а не на карточку подписки / .rezhim-perekl ниже: их уже ужимали
      раньше, и здесь была резервная высота больше всего. */
   .beda {
     display:none; margin-top:6px; padding:7px 13px; border-radius:var(--r-m);
@@ -826,33 +923,28 @@
     margin-top:8px; font-family:ui-monospace, Consolas, monospace;
     font-size:11px; line-height:1.45; color:var(--tihiy); word-break:break-word;
   }
-  /* Минимальные данные о подписке — спокойной строкой под кругом (спека
-     04.08: «должны быть минимальные данные о подписке»). Это не кнопка и не
-     карточка — подпись, поэтому без рамки и фона. Рамку и фон возвращаем
-     только когда срок на исходе: там строка обязана ловить глаз. */
-  .podpiska {
-    /* margin 22/10 → 20/6 (забор oblik_obrezka_kadra.py, 27.08): узел списка
-       ниже упирался в нижнюю границу .lenta, видна была половина строки
-       («Германия 1—» 22.5px из 44.3). Отступ ужат, а не смысл строки. Верх
-       не ниже 20px — ПРОВЕРЕНО повторно 27.08 при поиске места для
-       oblik_snimok.py «достижимости»: круг→подсказка держит РОВНО 18px на
-       всех сценах (не 6, как казалось по грубому замеру), и margin-top<19
-       ломает oblik_geometriya.py (б) — подсказка визуально отрывается от
-       круга и читается как заголовок к строке ключа доступа (диагноз
-       24.08). Место под список нашлось не здесь, а в карточке беды ниже. */
-    display:flex; align-items:center; gap:8px; margin:20px 0 6px; padding:2px 13px;
-    border:1px solid transparent; border-radius:var(--r-m);
-    font-size:12.5px; color:var(--tihiy);
-  }
-  /* margin-left:auto разносило имя и срок по краям строки (space-between) —
-     дыра посередине читалась как две несвязанные вещи (диагноз 24.08). Срок
-     теперь просто следующий кусок той же строки, с тем же gap:8px, что и
-     остальные пары «имя · значение» в окне. */
-  .podpiska .srok { color:var(--tihiy); }
-  .podpiska.istekaet {
-    padding:11px 13px; border-color:rgba(224,163,74,.3); background:rgba(224,163,74,.07);
-  }
-  .podpiska.istekaet .srok { color:var(--zhdem); }
+  /* КАРТОЧКА ПОДПИСКИ на главном экране. До 02.09 тут стояла сухая строка
+     «Ключ доступа: хозяин · действует до 12 сентября»: подпись без рамки, нажать
+     которую было нельзя, — а всё содержимое подписки жило на отдельной третьей
+     вкладке. На телефоне ровно наоборот: подписка — такая же карточка, как
+     «Выход», и по нажатию открывает шторку. Форму берём оттуда целиком (класс
+     .karta-vyhod, ни одной своей меры), своим тут остаётся ровно одно — жёлтая
+     рамка, когда срок на исходе.
+     margin-top:20px — НЕ вкусовое число и не «на глаз»: подпись под кругом
+     обязана держать от следующего блока не меньше 19px, иначе она отрывается
+     от круга и читается как заголовок к тому, что под ней (диагноз 24.08,
+     забор oblik_geometriya.py (б)). Ровно эти 20px были и у прежней строки. */
+  #karta-podpiska { margin-top:20px; }
+  #karta-podpiska.istekaet { border-color:rgba(224,163,74,.3); background:rgba(224,163,74,.07); }
+  #karta-podpiska.istekaet .vyhod-subtitle { color:var(--zhdem); }
+  /* Значение подписки на КАРТОЧКЕ красится, только когда оно тревожное.
+     «Активна» остаётся обычным цветом текста, как и заголовок соседней
+     карточки «Выход»: акцент на этом экране уже занят кругом, и второе
+     акцентное пятно в двух сантиметрах от него спорит с ним за глаз. В самой
+     шторке (.ryad-znachenie.horosho ниже) «Активна» по-прежнему акцентная —
+     там она главная и единственная, спорить не с чем. */
+  .vyhod-title.trevoga { color:var(--zhdem); }
+  .vyhod-title.molchit { color:var(--tihiy); }
 
   #zhurnal {
     max-height:190px; overflow:auto; margin-top:10px; padding:10px 12px;
@@ -940,12 +1032,23 @@
            нажатие. Текст зависит от того же состояния, что и сам круг. -->
       <div class="krug-podskazka" id="podskazka">нажмите, чтобы включить</div>
 
-      <!-- Минимальные данные о подписке — на главном экране, под кругом
-           (спека 04.08). Срок «на исходе» получает рамку и остаётся заметным
-           прямо тут же, а не только где-то в настройках. -->
-      <div class="podpiska" id="podpiska" hidden>
-        <span id="podpiska-imya"></span><span class="srok" id="podpiska-srok"></span>
-      </div>
+      <!-- КАРТОЧКА ПОДПИСКИ — на главном экране, под кругом (спека 04.08), и
+           теперь той же формы, что «Выход» под ней: метка, крупное значение,
+           подзаголовок, шеврон. До 02.09 тут стояла сухая нажать-нельзя строка
+           «Ключ доступа: хозяин · действует до 12 сентября», а всё остальное про
+           подписку жило на третьей вкладке нижней панели. На телефоне вкладок
+           две, и подписка — карточка, открывающая шторку; так теперь и здесь
+           (хозяин, 02.09: «хочу больше как на телефоне, там всё уже выверено»).
+           Срок «на исходе» по-прежнему получает жёлтую рамку прямо тут, а не
+           прячется в шторку: заметным он обязан быть без единого нажатия. -->
+      <button class="karta karta-vyhod" id="karta-podpiska" type="button">
+        <span class="vyhod-tekst">
+          <span class="vyhod-label">Подписка</span>
+          <span class="vyhod-title" id="podpiska-title"></span>
+          <span class="vyhod-subtitle" id="podpiska-subtitle"></span>
+        </span>
+        <span class="vyhod-shevron" aria-hidden="true">&#8250;</span>
+      </button>
       <!-- Строки «человек · устройство» здесь БОЛЬШЕ НЕТ: 01.09 она переехала
            на свою вкладку «Подписка» отдельными строками «Кто пользуется» и
            «Устройство» — так же, как на телефоне, где главный экран эти два
@@ -1013,6 +1116,112 @@
         </div>
         <div class="shtorka-podskazka" id="shtorka-podskazka"></div>
         <div id="uzly"></div>
+      </div>
+    </div>
+
+    <!-- ШТОРКА «ПОДПИСКА». Порядок сверху вниз повторяет шторку подписки на
+         телефоне (HomeScreen.kt 464-514), а не придуман здесь:
+           1) карточка «Состояние» — Активна/Приостановлена, подписью срок и
+              трафик одной строкой через « · » (Subscription.kt: note), под
+              ней полоса общего расхода подписки — или строка «Без
+              ограничений», когда потолка нет вовсе;
+           2) список устройств этого ключа доступа (поле ustroystva в
+              /api/sostoyanie) — ради него шторка и затевалась: человек хочет
+              видеть, что ещё сидит под его кодом, и своё устройство среди
+              них;
+           3) карточка «Кто пользуется» + «Устройство» — она остаётся ТОЛЬКО
+              для старого сервера, который списка устройств не шлёт вовсе;
+              как только список приехал, эти две строки — то же самое, но
+              беднее, и они прячутся;
+           4) серая подсказка под ней — дословная строка с телефона.
+         Своё, чего на телефоне нет, ровно одно: строка «Код доступа» — и она
+         намеренно ПОСЛЕДНЯЯ и в отдельной карточке. На телефоне код не
+         показан нигде, но там он и не нужен: приложение одно на устройстве, а
+         на компьютере человек ставит Kelevra рядом с телефоном и спрашивает
+         «тот ли ключ я сюда ввёл». Отвечают последние два знака
+         (podpiska.Maska) — узнать свой ключ ими можно, собрать чужой нельзя. -->
+    <div class="shtorka-fon" id="shtorka-podpiska-fon" hidden>
+      <div class="shtorka">
+        <div class="shtorka-shapka">
+          <div class="shtorka-zagolovok">Подписка</div>
+          <button class="shtorka-krest" id="shtorka-podpiska-zakryt" type="button" aria-label="Закрыть">&#10005;</button>
+        </div>
+
+        <div class="karta karta-nastroyki">
+          <div class="ryad-svedeniya nastroyki-ryad">
+            <span class="ryad-metka">Состояние</span>
+            <span class="ryad-znachenie molchit" id="podp-sostoyanie">Пока неизвестно</span>
+            <span class="ryad-podpis" id="podp-zametka" hidden></span>
+          </div>
+          <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-rashod" hidden>
+            <span class="ryad-metka">Трафик подписки</span>
+            <div class="rashod-shapka">
+              <span id="podp-rashod-slova"></span><span class="rashod-dolya" id="podp-rashod-dolya"></span>
+            </div>
+            <div class="polosa-rashod"><i id="podp-polosa"></i></div>
+          </div>
+          <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-bez-limita" hidden>
+            <span class="ryad-metka">Трафик подписки</span>
+            <span class="ryad-znachenie">Без ограничений</span>
+          </div>
+        </div>
+
+        <div class="zagolovok-bloka" id="podp-zag-ustroystv" hidden>Устройства</div>
+        <div class="karta karta-nastroyki" id="podp-karta-ustroystv" hidden></div>
+        <div class="podskazka-pod-kartoy" id="podp-net-rashoda" hidden>Расход по устройствам пока не считается — прочерк тут значит «не мерили», а не «ничего не качали».</div>
+
+        <div class="karta karta-nastroyki" id="podp-karta-kto" hidden>
+          <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-chelovek" hidden>
+            <span class="ryad-metka">Кто пользуется</span>
+            <span class="ryad-znachenie" id="podp-chelovek"></span>
+          </div>
+          <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-ustroystvo" hidden>
+            <span class="ryad-metka">Устройство</span>
+            <span class="ryad-znachenie" id="podp-ustroystvo"></span>
+          </div>
+        </div>
+        <div class="podskazka-pod-kartoy" id="podp-podskazka" hidden>так это устройство подписано на сервере</div>
+
+        <div class="karta karta-nastroyki" id="podp-karta-kod" hidden>
+          <div class="ryad-svedeniya nastroyki-ryad">
+            <span class="ryad-metka">Код доступа</span>
+            <span class="ryad-znachenie mono" id="podp-kod"></span>
+            <span class="ryad-podpis">Показаны последние два знака. Сменить код — в настройках.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ДИАЛОГ ОБНОВЛЕНИЯ — эталон телефона: модальное окно поверх экрана с
+         заголовком «Есть обновление», строкой версии моноширинно и парой
+         кнопок. До 02.09 единственным следом найденного обновления в окне
+         была подпись у пункта настроек — человек, который в настройки не
+         заходит, про обновление не узнавал вовсе, а вся установка выглядела
+         как надпись «Устанавливаем…» без единого признака хода.
+         Кнопка «Отмена» с телефона тут НЕ повторена, и это не забывчивость:
+         оборвать уже начатую установку нечем — /api/obnovlenie_postavit идёт
+         одним заходом и обрывать себя не умеет (internal/obnovlenie.Postavit).
+         Кнопка, которая называется «Отмена» и ничего не отменяет, — враньё
+         формой, поэтому во время скачивания она честно зовётся «Свернуть». -->
+    <div class="shtorka-fon po-centru" id="dialog-obnovleniya-fon" hidden>
+      <div class="shtorka dialog">
+        <div class="shtorka-shapka">
+          <div class="shtorka-zagolovok">Есть обновление</div>
+          <button class="shtorka-krest" id="dialog-obnovleniya-zakryt" type="button" aria-label="Закрыть">&#10005;</button>
+        </div>
+        <div class="dialog-tekst">Новая версия приложения готова к установке.</div>
+        <div class="dialog-versiya mono" id="dialog-obnovleniya-versiya">ВЕРСИЯ —</div>
+        <!-- Полоса хода скачивания. Класс «beskonechnaya» тут ПЕРВОНАЧАЛЬНЫЙ,
+             а не вечный: пока доли нет (её ещё не прислали или сервер не
+             назвал длины ответа) бежит бегунок, а с первой же присланной
+             долей JS снимает класс и полоса наполняется процентами — см.
+             narisovatDialogObnovleniya. -->
+        <div class="polosa-rashod beskonechnaya" id="dialog-obnovleniya-polosa" hidden><i></i></div>
+        <div class="dialog-hod" id="dialog-obnovleniya-hod" hidden></div>
+        <div class="dialog-knopki">
+          <button class="glavnaya" id="dialog-obnovlenie-postavit" type="button">ОБНОВИТЬ</button>
+          <button class="tihaya" id="dialog-obnovlenie-pozzhe" type="button">ПОЗЖЕ</button>
+        </div>
       </div>
     </div>
 
@@ -1098,50 +1307,6 @@
       <div class="podval-versiya mono" id="podval-versiya">KELEVRA —</div>
     </div>
 
-    <!-- ВКЛАДКА «ПОДПИСКА». Порядок строк повторяет шторку подписки на
-         телефоне (HomeScreen.kt 464-514), а не придуман здесь:
-           1) карточка «Состояние» — Активна/Приостановлена, подписью срок и
-              трафик одной строкой через « · » (Subscription.kt: note);
-           2) карточка «Кто пользуется» + «Устройство» — целиком исчезает,
-              если сервер не прислал ни одного имени;
-           3) серая подсказка под ней — дословная строка с телефона.
-         Своё, чего на телефоне нет, ровно одно: строка «Код доступа» — и она
-         намеренно ПОСЛЕДНЯЯ и в отдельной карточке. На телефоне код не
-         показан нигде, но там он и не нужен: приложение одно на устройстве, а
-         на компьютере человек ставит Kelevra рядом с телефоном и спрашивает
-         «тот ли ключ я сюда ввёл». Отвечают последние два знака
-         (podpiska.Maska) — узнать свой ключ ими можно, собрать чужой нельзя. -->
-    <div id="tab-podpiska" hidden>
-      <div class="zagolovok-ekrana">Подписка</div>
-
-      <div class="karta karta-nastroyki">
-        <div class="ryad-svedeniya nastroyki-ryad">
-          <span class="ryad-metka">Состояние</span>
-          <span class="ryad-znachenie molchit" id="podp-sostoyanie">Пока неизвестно</span>
-          <span class="ryad-podpis" id="podp-zametka" hidden></span>
-        </div>
-      </div>
-
-      <div class="karta karta-nastroyki" id="podp-karta-kto" hidden>
-        <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-chelovek" hidden>
-          <span class="ryad-metka">Кто пользуется</span>
-          <span class="ryad-znachenie" id="podp-chelovek"></span>
-        </div>
-        <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-ustroystvo" hidden>
-          <span class="ryad-metka">Устройство</span>
-          <span class="ryad-znachenie" id="podp-ustroystvo"></span>
-        </div>
-      </div>
-      <div class="podskazka-pod-kartoy" id="podp-podskazka" hidden>так это устройство подписано на сервере</div>
-
-      <div class="karta karta-nastroyki" id="podp-karta-kod" hidden>
-        <div class="ryad-svedeniya nastroyki-ryad">
-          <span class="ryad-metka">Код доступа</span>
-          <span class="ryad-znachenie mono" id="podp-kod"></span>
-          <span class="ryad-podpis">Показаны последние два знака. Сменить код — в настройках.</span>
-        </div>
-      </div>
-    </div>
   </div>
 
 </div>
@@ -1158,23 +1323,21 @@
       <circle cx="12" cy="12" r="5"/>
     </svg>Сеть
   </button>
-  <button class="tab" id="vkladka-podpiska" type="button">
-    <!-- Icons.Outlined.CardMembership — карточка с ленточкой. На телефоне
-         вкладки подписки нет вовсе (там она шторка с главного экрана), поэтому
-         иконку не с чего скопировать дословно; взята та, что Material даёт
-         именно подписке, и нарисована в том же наборе Outlined 24x24, что и
-         две соседние — чтобы панель не выглядела собранной из двух разных
-         иконок и одной чужой. -->
-    <svg class="ikonka-tab" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M20 2H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h5v5l3-2 3 2v-5h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm0 13H4v-2h16v2zm0-5H4V4h16v6z"/>
-    </svg>Подписка
-  </button>
+  <!-- ВКЛАДКИ «ПОДПИСКА» ЗДЕСЬ БОЛЬШЕ НЕТ, И ЭТО НАРОЧНО. 01.09 её завели
+       третьей кнопкой панели; на телефоне вкладок ДВЕ, а подписка — карточка
+       на главном экране, открывающая шторку (хозяин, 02.09: «хочу больше как на
+       телефоне, там всё уже выверено»). Содержимое переехало в
+       #shtorka-podpiska-fon, кнопка убрана вместе со своей иконкой. -->
   <button class="tab" id="vkladka-nastroyki" type="button">
     <!-- Icons.Outlined.Settings — шестерёнка, как на телефоне
          (MainActivity.kt:1136). -->
     <svg class="ikonka-tab" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.484.484 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
     </svg>Настройки
+    <!-- Точка «есть обновление»: единственный след находки фоновой проверки
+         на главном экране. Акцентом, а не красным: это не беда, а хорошая
+         новость, и красный тут спорил бы с цветом ошибок. -->
+    <span class="tochka-vkladki" id="tochka-obnovleniya" hidden></span>
   </button>
 </div>
 
@@ -1194,7 +1357,28 @@ async function api(put, telo) {
 // Слово в круге обязано влезать в окружность (r=65 при 144px): «не подключилось»
 // торчало за неё буквами по обе стороны. Держит это щуп «слово в круге» в
 // stend/oblik_snimok.py — длинное слово тут покраснеет само, без моей памяти.
-const podpisi = {stoit:"отключено", podnimaem:"подключаюсь", rabotaet:"подключено", slomalos:"нет связи"};
+//
+// Сами слова и их РЕГИСТР — с телефона (HomeScreen.kt 255-270), там их
+// выверяли на живом экране: «Подключить / Подключаюсь / Отключаюсь / Дома /
+// Подключено / Отключено / Связи нет». До 02.09 тут стояли свои строчные
+// («отключено», «нет связи») — разница видна сразу, если поставить окно рядом
+// с телефоном, а хозяин ставит (02.09: «хочу больше как на телефоне»).
+// Телефонных слов тринадцать, здесь их шесть, и это не недоделка: остальные
+// («Нет сети», «Ищу путь», «Медленно», «Не отвечает», «Проверяю связь»)
+// живут на телефонных пробах, которых у окна нет — ядро отдаёт ровно четыре
+// состояния (internal/yadro: stoit / podnimaem / rabotaet / slomalos).
+// Выдумывать по ним оттенки значило бы врать о том, чего не мерили. Ещё две
+// («Поднимаю комнату», «Комната не отвечает») на компьютере не нужны вовсе —
+// комнаты тут нет.
+const podpisi = {stoit:"Отключено", podnimaem:"Подключаюсь", rabotaet:"Подключено", slomalos:"Связи нет"};
+
+// Переходное слово на время СВОЕГО запроса: пока /api/otklyuchit в полёте,
+// ядро всё ещё «rabotaet», и круг до 02.09 продолжал писать «Подключено» —
+// нажатие выглядело потерянным. Телефонное «Отключаюсь» закрывает ровно эту
+// секунду. Держится только пока запрос жив (см. finally в обработчике круга),
+// поэтому соврать надолго не может: зависший запрос обрывает fetch, а не эта
+// переменная.
+let deystvieKruga = null;   // null | "podklyuchaem" | "otklyuchaem"
 
 // Вторая строка внутри круга: человеку важно не слово «stoit», а что именно
 // сейчас с его трафиком и через какой узел он идёт. Тип транспорта (xhttp ·
@@ -1210,7 +1394,7 @@ function podzagolovok(s) {
   // ядро в этот момент стоит («stoit»), но «трафик идёт напрямую» тут неправда
   // ровно наоборот, а не молчаливое совпадение — обход блокировок уже делает
   // роутер, VPN и не нужен (хозяин, 27.08).
-  if (s.ozhidanie_doma) return "дома VPN не нужен";
+  if (s.ozhidanie_doma) return "обход на роутере";
   if (s.sost === "rabotaet") {
     // «мимо идут игры» вместо прежнего «трафик браузеров»: старая строка
     // называла то, что защищено, и молчала о том, что НЕ защищено, — а
@@ -1376,6 +1560,14 @@ let obnovlenieItog = null;
 // нажимали, "idet" — запрос в полёте, иначе {beda:true} | {gotovo, versiya}.
 let ustanovkaItog = null;
 
+// Версия, по которой человек уже сказал «ПОЗЖЕ» (или просто закрыл диалог).
+// Живёт только до перезапуска окна: обещание «позже» — про сейчас, а не
+// навсегда, и следующий запуск про находку напомнит. Держать это на диске
+// значило бы завести четвёртое место, где хранится состояние обновления
+// (есть s.novaya_versiya_dostupna, ObyavlennoeObnovlenie в настройках и пузырь
+// трея) — и рассинхрон между ними.
+let otlozhennayaVersiya = null;
+
 // vRezhimeUstanovki — кнопка сейчас СТАВИТ найденную версию, а не проверяет:
 // либо фоновая проверка уже нашла что ставить (s.novaya_versiya_dostupna),
 // либо человек только что сам запустил установку (ustanovkaItog) — это
@@ -1412,19 +1604,92 @@ function podpisObnovleniya(s) {
   return "Версия " + (s.versiya || "—");
 }
 
-let poslednee = null;
-// Вкладки нижней панелью, как на телефоне (KTabBar). До 01.09 их было две —
-// «Сеть» и «Настройки»; третья, «Подписка», добавлена по прямой жалобе хозяина
-// («плюс нет вкладки подписки»). Панель — сама навигация, а не действие одной
-// из вкладок, поэтому видна на всех трёх; прячется только на экране ввода
-// кода — там переключать нечего (см. obnovit ниже).
+// Установка найденной сборки — ОДНО тело на две двери: пункт настроек и
+// кнопка «ОБНОВИТЬ» в диалоге. Раньше это тело жило прямо в обработчике
+// пункта настроек, и вторая дверь неизбежно завела бы вторую же его копию.
+// Замок тут двойной и оба нужны: локальный (ustanovkaItog === "idet") гасит
+// второй клик до отправки, а серверный (idetUstanovkaObnovleniya, sluzhba.go)
+// отвечает понятной бедой, если оба клика всё-таки успели уйти.
+async function postavitObnovlenie() {
+  if (ustanovkaItog === "idet") return;
+  ustanovkaItog = "idet";
+  pererisovatObnovlenie();
+  try {
+    const d = await api("obnovlenie_postavit", {});
+    ustanovkaItog = {gotovo: true, versiya: d.versiya};
+  } catch (e) {
+    ustanovkaItog = {beda: true};
+  }
+  pererisovatObnovlenie();
+}
+
+// Ход установки виден СРАЗУ в обоих местах — и в пункте настроек, и в
+// диалоге: они показывают одно и то же состояние, и обновляться порознь им
+// нельзя (иначе диалог скажет «Скачиваю…», а настройки под ним — «нажмите,
+// чтобы поставить»).
+function pererisovatObnovlenie() {
+  $("knopka-obnovlenie").disabled = ustanovkaItog === "idet";
+  if (poslednee) {
+    $("zagolovok-obnovlenie").textContent = zagolovokObnovleniya(poslednee);
+    $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
+  }
+  narisovatDialogObnovleniya();
+}
+
+// Диалог обновления. Проценты тут НАСТОЯЩИЕ и приходят полем obnovlenie_dolya
+// (/api/sostoyanie — otvetSostoyaniya в sluzhba.go; считает их сама загрузка,
+// obnovlenie.PostavitSHodom, от Content-Length живого соединения). Поля может
+// не быть — сервер не всегда называет длину ответа, — и тогда мы возвращаемся
+// ровно к прежнему честному поведению: неопределённая полоса и «Скачиваю…»
+// без числа. Выдумывать процент, которого никто не измерил, нельзя.
 //
-// Список, а не три ручных сравнения: добавление четвёртой вкладки не должно
-// требовать правки в трёх местах — ровно так и заводятся вкладки, которые
-// подсвечены, но не показаны (или наоборот).
+// Долю берём из poslednee (последний ответ /api/sostoyanie, опрос раз в 2
+// секунды), а не из ответа самой ручки установки: ручка отвечает ОДИН раз и
+// уже в конце — рассказывать о ходе ей нечем.
+function narisovatDialogObnovleniya() {
+  const idet = ustanovkaItog === "idet";
+  const gotovo = !!(ustanovkaItog && ustanovkaItog.gotovo);
+  const beda = !!(ustanovkaItog && ustanovkaItog.beda);
+  const dolya = idet && poslednee && typeof poslednee.obnovlenie_dolya === "number"
+      ? Math.max(0, Math.min(1, poslednee.obnovlenie_dolya)) : null;
+  const polosa = $("dialog-obnovleniya-polosa");
+  polosa.hidden = !idet;
+  // Ширина СНИМАЕТСЯ (не ставится в 35%), когда доли нет: у бегунка ширину
+  // задаёт правило .beskonechnaya, и оставленный инлайновый процент побил бы
+  // его собственной вёрсткой — полоса замерла бы на последнем известном
+  // числе вместо честного «идёт».
+  polosa.classList.toggle("beskonechnaya", dolya === null);
+  polosa.firstElementChild.style.width = dolya === null ? "" : Math.round(dolya * 100) + "%";
+  const hod = $("dialog-obnovleniya-hod");
+  hod.hidden = !(idet || gotovo || beda);
+  hod.textContent = idet ? (dolya === null ? "Скачиваю…" : "Скачиваю… " + Math.round(dolya * 100) + "%")
+      : gotovo ? "Готово, Kelevra перезапускается…"
+      : beda ? "Не удалось поставить — нажмите ещё раз" : "";
+  // Пока идёт установка, ставить второй раз нечего, а после успеха — некуда:
+  // копия уже уходит на перезапуск.
+  $("dialog-obnovlenie-postavit").hidden = idet || gotovo;
+  // «Отмена» с телефона тут была бы враньём: оборвать начатую установку
+  // нечем (см. комментарий у самого диалога в разметке). Пока качается,
+  // кнопка честно только прячет окно.
+  $("dialog-obnovlenie-pozzhe").textContent = idet ? "Свернуть" : gotovo ? "Закрыть" : "ПОЗЖЕ";
+}
+
+$("dialog-obnovlenie-postavit").onclick = postavitObnovlenie;
+$("dialog-obnovlenie-pozzhe").onclick = zakrytShtorki;
+
+let poslednee = null;
+// Вкладки нижней панелью, как на телефоне (KTabBar), и их снова ДВЕ. 01.09
+// тут завелась третья, «Подписка», — по жалобе «плюс нет вкладки подписки».
+// Жалоба была верной, лекарство — нет: на телефоне вкладок две, а подписка
+// живёт карточкой на главном экране и открывает шторку (хозяин, 02.09: «хочу
+// больше как на телефоне, там всё уже выверено»). Вкладка убрана, содержимое
+// переехало в #shtorka-podpiska-fon и никуда не потерялось.
+//
+// Список, а не ручные сравнения: добавление вкладки не должно требовать
+// правки в трёх местах — ровно так и заводятся вкладки, которые подсвечены,
+// но не показаны (или наоборот).
 const VKLADKI = [
   {imya: "set", knopka: "vkladka-set", ekran: "tab-set"},
-  {imya: "podpiska", knopka: "vkladka-podpiska", ekran: "tab-podpiska"},
   {imya: "nastroyki", knopka: "vkladka-nastroyki", ekran: "tab-nastroyki"},
 ];
 let vkladkaTek = "set";
@@ -1450,10 +1715,14 @@ for (const v of VKLADKI) {
 // Ни одного «—» и ни одной пустой скобки: чего сервер не прислал, того в
 // строке просто нет (то же правило, что на телефоне: «пустые там хуже
 // отсутствия»).
-function zametkaPodpiski(s) {
+// istekaet — срок на исходе (≤7 дней): тогда первый кусок говорит «кончится
+// 12 сентября» вместо «до 12 сентября». Ровно те же слова, что несла прежняя
+// строка подписки под кругом, — их и переносим на карточку вместе с жёлтой
+// рамкой, а не сочиняем заново.
+function zametkaPodpiski(s, istekaet) {
   const kuski = [];
   if (s.do_unix) {
-    kuski.push("до " + new Date(s.do_unix * 1000)
+    kuski.push((istekaet ? "кончится " : "до ") + new Date(s.do_unix * 1000)
         .toLocaleDateString("ru-RU", {day:"numeric", month:"long"}));
   }
   const gb = (b) => Math.round((b || 0) / 1073741824);
@@ -1463,11 +1732,160 @@ function zametkaPodpiski(s) {
   return kuski.join(" · ");
 }
 
-// Вкладка «Подписка» целиком. Состояние рисуется ТОЛЬКО когда сервер про неё
+// Склонение русского числительного: 1 минуту, 2 минуты, 5 минут. Без него в
+// строке устройства выходит «был 2 часов назад» — ровно та мелочь, по которой
+// видно, что строку писала не рука.
+function sklonenie(n, odna, dve, pyat) {
+  const sto = Math.abs(n) % 100, edinicy = sto % 10;
+  if (sto > 10 && sto < 20) return pyat;
+  if (edinicy === 1) return odna;
+  if (edinicy >= 2 && edinicy <= 4) return dve;
+  return pyat;
+}
+
+// «в сети» / «был 12 минут назад» / «был 2 часа назад» / «был вчера» /
+// «был 31 августа». Свежее 15 минут — считаем, что устройство на связи:
+// сервер метит poslednee по последнему обращению, а обращается приложение не
+// каждую секунду, и порог поменьше показывал бы «был 3 минуты назад» у
+// телефона, который лежит рядом и работает.
+function kogdaBylo(unix) {
+  if (!unix) return "";
+  const bylo = unix * 1000;
+  const minut = Math.floor((Date.now() - bylo) / 60000);
+  if (minut < 15) return "в сети";
+  if (minut < 60) return "был " + minut + " " + sklonenie(minut, "минуту", "минуты", "минут") + " назад";
+  const chasov = Math.floor(minut / 60);
+  if (chasov < 24) return "был " + chasov + " " + sklonenie(chasov, "час", "часа", "часов") + " назад";
+  const den = new Date(bylo), vchera = new Date();
+  vchera.setDate(vchera.getDate() - 1);
+  if (den.toDateString() === vchera.toDateString()) return "был вчера";
+  return "был " + den.toLocaleDateString("ru-RU", {day:"numeric", month:"long"});
+}
+
+// Байты человеку: «12,4 ГБ», запятая русская. Ноль отдаём ПУСТОЙ строкой, а не
+// «0 Б»: сбор расхода по устройствам ещё не включён (служба шлёт 0 всем), и
+// «0 Б» читалось бы как «ничего не качал» — то есть врало бы точным числом
+// там, где числа нет вовсе. Что делать с пустотой, решает тот, кто рисует
+// строку: у устройства это прочерк, у общего расхода подписки — настоящий 0.
+function bayty(b) {
+  if (!b || b < 0) return "";
+  const mery = [["ТБ", 1099511627776], ["ГБ", 1073741824], ["МБ", 1048576], ["КБ", 1024]];
+  for (const [imya, mera] of mery) {
+    if (b >= mera) {
+      const chislo = b / mera;
+      const slovo = chislo >= 10 ? String(Math.round(chislo)) : chislo.toFixed(1);
+      return slovo.replace(".", ",") + " " + imya;
+    }
+  }
+  return b + " Б";
+}
+
+// Значки устройств — свои, трёх видов (поле vid: phone / laptop / desktop).
+// Манера общая с остальным окном: сетка 24x24, обводка, заливки нет,
+// скруглённые концы; толщина 1.7 — между 2 у кольца круга и волосяными
+// линиями мелочи. Незнакомый вид получает системный блок: пустое место в
+// строке хуже приблизительного значка.
+const ZNACHKI_USTROYSTV = {
+  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.5"/>' +
+    '<path d="M10.5 18.6h3"/></svg>',
+  laptop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="12" rx="2"/>' +
+    '<path d="M2 19.5h20"/></svg>',
+  desktop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="12" rx="2"/>' +
+    '<path d="M12 15v4M8.5 19.5h7"/></svg>',
+};
+
+// СПИСОК УСТРОЙСТВ этого кода доступа (поле ustroystva, sluzhba.go). Ради него
+// шторка и затевалась: человек хочет видеть, кто ещё сидит под его ключом, и
+// узнать среди них своё. Старый сервер поля не шлёт вовсе — тогда список
+// исчезает целиком вместе с заголовком, а строки «Кто пользуется» /
+// «Устройство» ниже продолжают работать как работали.
+function narisovatUstroystva(spisok) {
+  const karta = $("podp-karta-ustroystv"), zag = $("podp-zag-ustroystv");
+  const est = Array.isArray(spisok) && spisok.length > 0;
+  karta.hidden = !est; zag.hidden = !est;
+  if (!est) { $("podp-net-rashoda").hidden = true; return; }
+  karta.innerHTML = "";
+  let hotGdeToTrafik = false;
+  for (const u of spisok) {
+    const ryad = document.createElement("div");
+    ryad.className = "ustr nastroyki-ryad" + (u.svoyo ? " svoyo" : "");
+
+    const znachok = document.createElement("span");
+    znachok.className = "ustr-znachok";
+    znachok.innerHTML = ZNACHKI_USTROYSTV[u.vid] || ZNACHKI_USTROYSTV.desktop;
+
+    const tekst = document.createElement("span");
+    tekst.className = "ustr-tekst";
+    const imya = document.createElement("span");
+    imya.className = "ustr-imya";
+    imya.textContent = u.imya || "Без имени";
+    if (u.svoyo) {
+      const metka = document.createElement("span");
+      metka.className = "ustr-metka";
+      metka.textContent = "это устройство";
+      imya.appendChild(metka);
+    }
+    tekst.appendChild(imya);
+
+    const kogda = kogdaBylo(u.poslednee);
+    if (kogda) {
+      const sost = document.createElement("span");
+      sost.className = "ustr-sost" + (kogda === "в сети" ? " v-seti" : "");
+      sost.textContent = kogda;
+      tekst.appendChild(sost);
+    }
+    // Версия и дата появления — мелочью третьей строкой. Чего сервер не
+    // прислал, того в строке просто нет: ни прочерков, ни пустых скобок (то
+    // же правило, что у zametkaPodpiski выше).
+    const melko = [];
+    if (u.versiya) melko.push("версия " + u.versiya);
+    if (u.vpervye) {
+      melko.push("с " + new Date(u.vpervye * 1000)
+          .toLocaleDateString("ru-RU", {day:"numeric", month:"long"}));
+    }
+    if (melko.length) {
+      const stroka = document.createElement("span");
+      stroka.className = "ustr-melko";
+      stroka.textContent = melko.join(" · ");
+      tekst.appendChild(stroka);
+    }
+
+    const trafik = document.createElement("span");
+    const skolko = bayty(u.trafik_bayt);
+    if (skolko) hotGdeToTrafik = true;
+    trafik.className = "ustr-trafik" + (skolko ? "" : " pusto");
+    trafik.textContent = skolko || "—";
+
+    ryad.append(znachok, tekst, trafik);
+    karta.appendChild(ryad);
+  }
+  // Строка-объяснение под карточкой видна ровно тогда, когда прочерки стоят у
+  // ВСЕХ: сбор расхода по устройствам ещё не включён, и без этой строки
+  // столбец прочерков читается как «никто ничего не качал».
+  $("podp-net-rashoda").hidden = hotGdeToTrafik;
+}
+
+// Шторка «Подписка» целиком. Состояние рисуется ТОЛЬКО когда сервер про неё
 // хоть раз ответил (s.podpiska_est): без этой развилки свежий запуск, где
 // /info ещё в полёте, показывал бы «Приостановлена» по нулевому полю — то
 // есть пугал бы человека выдуманной бедой.
 function narisovatPodpisku(s) {
+  // КАРТОЧКА на главном экране — то же состояние теми же словами, что и
+  // первая строка шторки: карточка это её обложка, а не отдельный рассказ.
+  const dney = s.do_unix ? Math.ceil((s.do_unix * 1000 - Date.now()) / 86400000) : null;
+  const istekaet = dney !== null && dney <= 7;
+  const title = $("podpiska-title"), subtitle = $("podpiska-subtitle");
+  title.textContent = s.podpiska_est ? (s.podpiska_aktivna ? "Активна" : "Приостановлена")
+      : "Пока неизвестно";
+  title.className = "vyhod-title " + (s.podpiska_est ? (s.podpiska_aktivna ? "" : "trevoga") : "molchit");
+  // Подзаголовок молчит, пока сказать нечего: без срока и без ответа сервера
+  // «без ограничений» было бы обещанием, которого никто не давал.
+  subtitle.textContent = (s.podpiska_est || s.do_unix) ? zametkaPodpiski(s, istekaet) : "";
+  $("karta-podpiska").className = "karta karta-vyhod" + (istekaet ? " istekaet" : "");
+
   const sost = $("podp-sostoyanie"), zametka = $("podp-zametka");
   if (s.podpiska_est) {
     sost.textContent = s.podpiska_aktivna ? "Активна" : "Приостановлена";
@@ -1484,17 +1902,45 @@ function narisovatPodpisku(s) {
     zametka.hidden = true;
   }
 
+  // Полоса расхода — только при заданном потолке. Лимит 0 значит «без
+  // ограничений», и полоса там нарисовалась бы пустой на всю ширину: форма
+  // сказала бы «израсходовано нисколько из чего-то», хотя правда — «мерить
+  // не по чему». Вместо полосы в этом случае стоит строка словами.
+  const estLimit = s.podpiska_est && s.podpiska_limit_bayt > 0;
+  $("podp-ryad-rashod").hidden = !estLimit;
+  $("podp-ryad-bez-limita").hidden = !(s.podpiska_est && !estLimit);
+  if (estLimit) {
+    const dolya = Math.min(1, (s.podpiska_syedeno_bayt || 0) / s.podpiska_limit_bayt);
+    // Тут ноль — настоящий измеренный ноль (подпиской не пользовались), а не
+    // «не считали», как у устройств: пишем его числом, а не прочерком.
+    $("podp-rashod-slova").textContent =
+        (bayty(s.podpiska_syedeno_bayt) || "0 Б") + " из " + bayty(s.podpiska_limit_bayt);
+    $("podp-rashod-dolya").textContent = Math.round(dolya * 100) + "%";
+    const polosa = $("podp-polosa");
+    polosa.style.width = Math.round(dolya * 100) + "%";
+    // Три роли состояния, те же, что у точек узлов: спокойно / внимание /
+    // ошибка. Четвёртого цвета в языке системы нет.
+    polosa.className = dolya >= .9 ? "perebor" : dolya >= .75 ? "trevoga" : "";
+  }
+
+  narisovatUstroystva(s.ustroystva);
+
   // Карточка «кто пользуется» исчезает ЦЕЛИКОМ вместе со своей подсказкой,
   // если сервер не прислал ни одного из двух имён (старый сервер их не шлёт
-  // вовсе) — пустая карточка с двумя прочерками хуже её отсутствия.
+  // вовсе) — пустая карточка с двумя прочерками хуже её отсутствия. С 02.09 у
+  // неё есть и вторая причина исчезнуть: приехал список устройств. Он говорит
+  // то же самое и полнее, а два ответа на один вопрос в одной шторке — ровно
+  // та жалоба, с которой начался прошлый заход («он чет на экране как минимум
+  // дублируется»).
+  const estSpisok = Array.isArray(s.ustroystva) && s.ustroystva.length > 0;
   const chelovek = (s.chelovek_imya || "").trim();
   const ustroystvo = (s.ustroystvo_imya || "").trim();
   $("podp-chelovek").textContent = chelovek;
   $("podp-ryad-chelovek").hidden = !chelovek;
-  $("podp-ustroystvo").textContent = ustroystvo;
-  $("podp-ryad-ustroystvo").hidden = !ustroystvo;
-  $("podp-karta-kto").hidden = !(chelovek || ustroystvo);
-  $("podp-podskazka").hidden = !(chelovek || ustroystvo);
+  $("podp-ustroystvo").textContent = ustroystvo || "";
+  $("podp-ryad-ustroystvo").hidden = !ustroystvo || estSpisok;
+  $("podp-karta-kto").hidden = !(chelovek || (ustroystvo && !estSpisok));
+  $("podp-podskazka").hidden = !(chelovek || (ustroystvo && !estSpisok)) || estSpisok;
 
   // Код доступа приходит УЖЕ замаскированным (internal/podpiska.Maska) —
   // окно не маскирует его само и целого кода не получает вовсе.
@@ -1526,7 +1972,17 @@ async function obnovit() {
   const chastichno = !!s.chastichnaya && s.sost === "rabotaet" && !s.ozhidanie_doma;
   $("krug-blok").className = "krug-blok " + s.sost +
       (s.ozhidanie_doma ? " ozhidanie" : "") + (chastichno ? " chastichno" : "");
-  const zvanie = s.ozhidanie_doma ? "ожидание" : chastichno ? "частично" : (podpisi[s.sost] || s.sost);
+  // «Дома» вместо прежнего «ожидание» — прямая жалоба хозяина 02.09: «дома круг
+  // пишет ожидание, а на телефоне Дома». Слово «ожидание» отвечало на вопрос
+  // «что делает программа», а человек смотрит на круг с другим вопросом —
+  // «что сейчас со мной»; ответ на него телефон уже выверил.
+  // «Частично» — своё, десктопное, такого состояния на телефоне нет вовсе:
+  // это про объём защиты (игры идут мимо), и слово остаётся тем же, ему
+  // подравнивается только регистр, чтобы оно не выпадало из соседей.
+  const zvanie = s.ozhidanie_doma ? "Дома"
+      : deystvieKruga === "otklyuchaem" ? "Отключаюсь"
+      : deystvieKruga === "podklyuchaem" ? "Подключаюсь"
+      : chastichno ? "Частично" : (podpisi[s.sost] || s.sost);
   $("zvanie").textContent = zvanie;
   $("zvanie").classList.toggle("dlinnoe", zvanie.length > 9);
   $("podzagolovok").textContent = podzagolovok(s);
@@ -1551,19 +2007,42 @@ async function obnovit() {
   if (ustanovkaItog && ustanovkaItog.gotovo && !s.novaya_versiya_dostupna) {
     ustanovkaItog = null;
   }
+  // Точка на вкладке «Настройки» и диалог поверх экрана — единственные следы
+  // находки, которые видно, НЕ заходя в настройки. До 02.09 их не было вовсе:
+  // фоновая проверка находила версию, а окно молчало (сказать об этом мог
+  // только пузырь трея, и только один раз).
+  const novaya = s.novaya_versiya_dostupna || "";
+  $("tochka-obnovleniya").hidden = !novaya;
+  if (novaya) $("dialog-obnovleniya-versiya").textContent = "ВЕРСИЯ " + novaya;
+  // Диалог поднимается сам, но ровно один раз на версию и НИКОГДА поверх
+  // того, что человек открыл руками: чужая шторка на экране — знак, что он
+  // сейчас занят другим (см. shtorkaOtkryta).
+  if (novaya && novaya !== otlozhennayaVersiya && ustanovkaItog === null
+      && !nuzhenKod && shtorkaOtkryta() === null) {
+    otkrytShtorku("dialog-obnovleniya-fon");
+  }
   $("zagolovok-obnovlenie").textContent = zagolovokObnovleniya(s);
   $("podpis-obnovlenie").textContent = podpisObnovleniya(s);
   $("knopka-obnovlenie").disabled = ustanovkaItog === "idet";
+  narisovatDialogObnovleniya();
 
   // Круг сам кнопка (см. index: #krug-blok — <button>): подпись под ним
   // говорит, что сделает нажатие, а не дублирует его текстом внутри круга.
   const knopka = $("krug-blok");
-  // Дома нажатие круга и так ничего не делает (сервер защиту не поднимает,
-  // см. podklyuchit, sluzhba.go) — мёртвая кнопка обязана выглядеть мёртвой,
-  // а не притворяться живой (хозяин, 27.08: жал «включить», а оно и так уже
-  // «включено» его же нажатием ранее).
-  knopka.disabled = s.sost === "podnimaem" || s.ozhidanie_doma;
-  $("podskazka").textContent = s.ozhidanie_doma ? "включится сам, когда уйдёте из дома"
+  // ДОМА КРУГ ТЕПЕРЬ НАЖИМАЕТСЯ. До 02.09 сюда входило ещё и s.ozhidanie_doma:
+  // сервер дома защиту не поднимает (podklyuchit, sluzhba.go — ветка
+  // avtorezhim.Doma), и мёртвая кнопка честно выглядела мёртвой. Но на
+  // телефоне круг дома живой: нажатие там — chooseManually(), осознанный
+  // переход в ручной режим, и защита встаёт. Ровно это делает и обработчик
+  // круга ниже (см. его комментарий про два запроса подряд), поэтому кнопка
+  // больше не мертва — блокирует её только собственное «Подключаюсь».
+  knopka.disabled = s.sost === "podnimaem";
+  // Подпись дома — телефонная (HomeScreen.kt): она говорит ПРО СОСТОЯНИЕ
+  // («туннель выключен, и это нормально»), а не про обещание «включится сам,
+  // когда уйдёте из дома», которое стояло тут раньше. Обещание никуда не
+  // делось — оно в заметке ниже (zametkaAvtorezhima), где ему и место: под
+  // кругом важнее ответить, почему сейчас выключено, чем что будет потом.
+  $("podskazka").textContent = s.ozhidanie_doma ? "дома интернет и так открыт, туннель выключен"
       : s.sost === "rabotaet" ? "нажмите, чтобы выключить"
       : s.sost === "podnimaem" ? "подождите"
       : "нажмите, чтобы включить";
@@ -1595,24 +2074,10 @@ async function obnovit() {
   zametka.className = "beda" + (zametkaTekst ? " vidno" : "") +
       (s.ruchnoy_proksi || chastichno ? " vnimanie" : " spokoyno");
 
-  const est = !!(s.imya || s.do_unix);
-  const podpiska = $("podpiska");
-  podpiska.hidden = !est;
-  if (est) {
-    // Без слова «ключ доступа» строка «хозяин … до 15 сентября» — загадка:
-    // человек видит своё имя и дату и не знает, что именно кончается.
-    $("podpiska-imya").textContent = s.imya ? "Ключ доступа: " + s.imya : "Ключ доступа";
-    const dney = s.do_unix ? Math.ceil((s.do_unix * 1000 - Date.now()) / 86400000) : null;
-    $("podpiska-srok").textContent = s.do_unix
-        ? (dney !== null && dney <= 7 ? "кончится " : "действует до ")
-          + new Date(s.do_unix * 1000).toLocaleDateString("ru-RU",
-            {day:"numeric", month:"long"}) : "";
-    const istekaet = dney !== null && dney <= 7;
-    // Строка всегда стоит на главном экране, под кругом (спека 04.08).
-    // Срок «на исходе» просто получает рамку и жёлтый цвет — она и так уже
-    // на самом заметном месте, никуда переезжать не надо.
-    podpiska.className = "podpiska" + (istekaet ? " istekaet" : "");
-  }
+  // Подписка целиком (и карточка под кругом, и содержимое шторки) рисуется
+  // одной функцией: до 02.09 срок считался ДВАЖДЫ — здесь для строки под
+  // кругом и там для вкладки, — и две копии одного расчёта разъехались бы в
+  // первый же день, когда правило «на исходе» сменится.
   narisovatPodpisku(s);
   const knopkaPolnaya = $("knopka-polnaya");
   knopkaPolnaya.hidden = !s.mozhno_tun;
@@ -1789,7 +2254,7 @@ function risovatUzly(gruppy) {
         catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
         // Клик по узлу закрывает шторку — эталон телефона, HomeScreen.kt 436
         // (showExits = false внутри onClick, безусловно).
-        zakrytShtorku();
+        zakrytShtorki();
         obnovitUzly();
       };
       koren2.appendChild(b);
@@ -1869,28 +2334,59 @@ function obnovitKartuVyhoda() {
   $("vyhod-subtitle").textContent = subtitle;
 }
 
-// Шторка выбора выхода — эталон телефона, HomeScreen.kt 374-443
-// (ModalBottomSheet). Открывается кликом по карточке «Выход», закрывается
-// кликом по фону (мимо самой шторки), крестиком, Esc и выбором узла
-// (см. risovatUzly выше — тот же приём, что и на телефоне, 436).
-function otkrytShtorku() {
-  $("shtorka-fon").hidden = false;
+// ШТОРКИ. Эталон телефона — HomeScreen.kt 374-443 (ModalBottomSheet).
+// Их теперь три (выбор выхода, подписка, диалог обновления), а механизм
+// по-прежнему ОДИН: открытие гасит все прочие, закрывают клик по фону мимо
+// шторки, крестик, Esc и выбор узла (risovatUzly выше — тот же приём, что и
+// на телефоне, 436). Второй механизм для второй шторки завёл бы вторую же
+// породу ошибок: две шторки разом на экране и Esc, закрывающий не ту.
+const SHTORKI = [
+  {fon: "shtorka-fon", krest: "shtorka-zakryt"},
+  {fon: "shtorka-podpiska-fon", krest: "shtorka-podpiska-zakryt"},
+  {fon: "dialog-obnovleniya-fon", krest: "dialog-obnovleniya-zakryt"},
+];
+
+// Какая шторка сейчас поднята (id её фона) или null. Нужно не для красоты:
+// диалог обновления поднимается САМ, и он не смеет прыгнуть поверх шторки,
+// которую человек открыл руками секунду назад.
+function shtorkaOtkryta() {
+  for (const sh of SHTORKI) if (!$(sh.fon).hidden) return sh.fon;
+  return null;
+}
+
+function otkrytShtorku(fonId) {
+  zakrytShtorki();
+  $(fonId).hidden = false;
   // Фон замирает, пока шторка открыта, — иначе полос прокрутки на экране
   // становится две сразу (см. #tab-set.pod-shtorkoy в стилях выше).
   $("tab-set").classList.add("pod-shtorkoy");
-  usadit(); // выбранный узел мог остаться вне видимой части с прошлого раза
+  // Выбранный узел мог остаться вне видимой части с прошлого раза — но это
+  // забота только шторки выхода, у остальных списка узлов нет вовсе.
+  if (fonId === "shtorka-fon") usadit();
 }
-function zakrytShtorku() {
-  $("shtorka-fon").hidden = true;
+
+function zakrytShtorki() {
+  // Закрытый диалог обновления запоминает свою версию отложенной — любым
+  // способом закрытия, а не только кнопкой «ПОЗЖЕ». Иначе следующий же тик
+  // опроса (раз в 2 секунды) поднял бы его снова, и человек не смог бы от
+  // него отделаться вовсе.
+  if (!$("dialog-obnovleniya-fon").hidden && poslednee) {
+    otlozhennayaVersiya = poslednee.novaya_versiya_dostupna || otlozhennayaVersiya;
+  }
+  for (const sh of SHTORKI) $(sh.fon).hidden = true;
   $("tab-set").classList.remove("pod-shtorkoy");
 }
-$("karta-vyhod").onclick = otkrytShtorku;
-$("shtorka-zakryt").onclick = zakrytShtorku;
-$("shtorka-fon").addEventListener("click", (e) => {
-  if (e.target === $("shtorka-fon")) zakrytShtorku(); // клик МИМО самой шторки
-});
+
+$("karta-vyhod").onclick = () => otkrytShtorku("shtorka-fon");
+$("karta-podpiska").onclick = () => otkrytShtorku("shtorka-podpiska-fon");
+for (const sh of SHTORKI) {
+  $(sh.krest).onclick = zakrytShtorki;
+  $(sh.fon).addEventListener("click", (e) => {
+    if (e.target === $(sh.fon)) zakrytShtorki(); // клик МИМО самой шторки
+  });
+}
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("shtorka-fon").hidden) zakrytShtorku();
+  if (e.key === "Escape" && shtorkaOtkryta()) zakrytShtorki();
 });
 
 async function obnovitUzly() {
@@ -1929,9 +2425,23 @@ $("pole-koda").addEventListener("keydown", (e) => {
 $("krug-blok").onclick = async () => {
   const knopka = $("krug-blok");
   const otklyuchit = !!(poslednee && poslednee.sost === "rabotaet");
+  // Дома одного /api/podklyuchit НЕ ХВАТИТ, и это не догадка: пока автомат
+  // включён, ручка сама решает «обстановка дома — защиту не поднимаю»
+  // (sluzhba.go, ветка avtorezhim.Doma) и нажатие уходит в никуда. Поэтому
+  // сперва выключаем автомат (/api/avtorezhim {vklyuchit:false} ставит
+  // RuchnoyVybor), и следующий же запрос поднимает защиту безусловно. Это
+  // ровно то, что делает телефон по нажатию круга дома — chooseManually():
+  // осознанный ручной выбор, который держится, пока человек не вернёт
+  // автомат полосой режима в шторке «Выбор выхода».
+  const domaVruchnuyu = !otklyuchit && !!(poslednee && poslednee.ozhidanie_doma);
+  deystvieKruga = otklyuchit ? "otklyuchaem" : "podklyuchaem";
   knopka.disabled = true; pokazatBedu($("beda-svyazi"), "");
-  try { await api(otklyuchit ? "otklyuchit" : "podklyuchit"); }
+  try {
+    if (domaVruchnuyu) await api("avtorezhim", {vklyuchit: false});
+    await api(otklyuchit ? "otklyuchit" : "podklyuchit");
+  }
   catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
+  finally { deystvieKruga = null; }
   knopka.disabled = false; obnovit();
 };
 
@@ -1997,22 +2507,7 @@ $("knopka-smenit").onclick = () => { smenaKoda = true; obnovit(); };
 // до того, как disabled применился, второй не потеряется без ответа.
 $("knopka-obnovlenie").onclick = async () => {
   if (poslednee && poslednee.novaya_versiya_dostupna) {
-    if (ustanovkaItog === "idet") return;
-    ustanovkaItog = "idet";
-    $("knopka-obnovlenie").disabled = true;
-    $("zagolovok-obnovlenie").textContent = zagolovokObnovleniya(poslednee);
-    $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
-    try {
-      const d = await api("obnovlenie_postavit", {});
-      ustanovkaItog = {gotovo: true, versiya: d.versiya};
-    } catch (e) {
-      ustanovkaItog = {beda: true};
-    }
-    $("knopka-obnovlenie").disabled = ustanovkaItog === "idet";
-    if (poslednee) {
-      $("zagolovok-obnovlenie").textContent = zagolovokObnovleniya(poslednee);
-      $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
-    }
+    await postavitObnovlenie();   // то же тело, что у кнопки «ОБНОВИТЬ» в диалоге
     return;
   }
   obnovlenieItog = "idet";

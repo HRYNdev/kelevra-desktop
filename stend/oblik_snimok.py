@@ -107,10 +107,61 @@ ZHARGON = ["ядро", "ядра", "ядру", "ядром", "туннел", "п
            # «защищено», «защищён» и падежи разом, тем же щупом.
            "защит"]
 
+# Исключения гейта: формы, которые в окне стоят ДОСЛОВНО с эталона и уже
+# приняты глазами. 02.09 — «туннель» из заметки авторежима «дома интернет и
+# так открыт, туннель выключен»: строка взята слово в слово с телефона,
+# который для нас эталон, и вопрос по ней закрыт. Вычёркиваем ровно эту
+# форму, а не корень: «туннел» остаётся запрещённым, и «в профиле нет
+# туннеля», «туннелем», «туннеля не будет» покраснеют, как краснели.
+ZHARGON_ISKLYUCHENIYA = ["туннель"]
+
 # «Срок на исходе» окно считает от СЕЙЧАС (dney <= 7), поэтому дату для этой
 # сцены берём живую: жёстко вписанная 15.09 через месяц перестала бы быть
 # исходом, и жёлтую подсветку снова не видел бы никто.
 DO_SKORO = int(time.time()) + 3 * 86400
+
+# СПИСОК УСТРОЙСТВ подписки (поле ustroystva в /api/sostoyanie, 02.09) — ради
+# него шторка «Подписка» и затевалась, а ни одна сцена выше этого поля не
+# знала вовсе: в шторке до сих пор снимались старые строки «Кто пользуется» /
+# «Устройство», и живого списка не видел никто, я включая.
+#
+# Время тут ЖИВОЕ, ровно по той же причине, что у DO_SKORO выше: окно считает
+# «в сети» / «был 2 часа назад» / «был вчера» от СЕЙЧАС (index.html:
+# kogdaBylo). Вписанная руками дата через неделю перестала бы быть «вчера», на
+# снимке встала бы голая дата — и разницу формулировок опять никто бы не
+# проверил, а сцена выглядела бы целой.
+SEYCHAS = int(time.time())
+
+# Три устройства одного ключа: своё (телефон, только что), чужой стационарный
+# (два часа назад) и чужой ноутбук (вчера). Ровно то, что должно попасть на
+# снимок разом: три разных vid — три разных значка, три разные формулировки
+# времени и обе ветки расхода — число у двоих и прочерк у третьего (служба
+# шлёт 0, пока сбор расхода по устройствам не включён).
+# 24 ч + полчаса, а не ровно сутки: при ровно 86400 окно считает chasov == 24,
+# в ветку «был N часов назад» уже не попадает, но и разница с ровными сутками
+# держится на секундах между замером и отрисовкой — полчаса запаса убирают
+# случайность, оставаясь вчерашним днём календаря.
+USTROYSTVA_TRI = [
+    {"svoyo": True, "imya": "OnePlus CPH2747", "vid": "phone",
+     "versiya": "1.14.104", "vpervye": 1756631052,
+     "poslednee": SEYCHAS - 60, "trafik_bayt": 12_400_000_000},
+    {"svoyo": False, "imya": "Gigabyte B760M DS3H AX DDR4", "vid": "desktop",
+     "versiya": "0.6.46", "vpervye": 1756631052,
+     "poslednee": SEYCHAS - 2 * 3600, "trafik_bayt": 3_200_000_000},
+    {"svoyo": False, "imya": "DEXP Atlas M15-I5W301", "vid": "laptop",
+     "versiya": "0.6.45", "vpervye": 1756800000,
+     "poslednee": SEYCHAS - 24 * 3600 - 1800, "trafik_bayt": 0},
+]
+
+# Обычный случай человека из семьи: под ключом сидит он один. Расход нулевой у
+# ВСЕХ (у единственного) — вторая ветка строки-объяснения под карточкой:
+# столбец из одних прочерков обязан быть подписан «не мерили», иначе он
+# читается как «ничего не качал».
+USTROYSTVA_ODNO = [
+    {"svoyo": True, "imya": "DEXP Atlas M15-I5W301", "vid": "laptop",
+     "versiya": "0.6.46", "vpervye": 1756800000,
+     "poslednee": SEYCHAS - 60, "trafik_bayt": 0},
+]
 
 BAZA = {"versiya": "0.5.3", "kod_est": True, "sost": "stoit",
         "vniz_bayt": 0, "vverh_bayt": 0, "pid": 0,
@@ -271,6 +322,17 @@ SCENY.update({
     "31_podpiska_dlinnye_imena": dict(
         BAZA, chelovek_imya="Константин Афанасьевич Синицын",
         ustroystvo_imya="ASUS TUF Gaming B550-PLUS WIFI II (домашний компьютер)"),
+    # 02.09: живой список устройств (см. USTROYSTVA_TRI выше). Имена сервер
+    # отдаёт как есть, машинными: «Gigabyte B760M DS3H AX DDR4» в 420px не
+    # помещается и обязано ПЕРЕНЕСТИСЬ, а не срезаться — то же правило, что у
+    # сцены 31 и по той же причине (обрезанное имя не отвечает на вопрос
+    # «какая это машина?», ради которого строка тут и стоит).
+    "32_podpiska_ustroystva": dict(BAZA, ustroystva=USTROYSTVA_TRI),
+    # Одно устройство — и вместе с ним вторая ветка: старые строки «Кто
+    # пользуется» / «Устройство» обязаны исчезнуть, как только список приехал,
+    # даже если сервер прислал и их (тут прислал: chelovek_imya от BAZA).
+    "33_podpiska_odno_ustroystvo": dict(BAZA, chelovek_imya="домашние",
+                                        ustroystva=USTROYSTVA_ODNO),
 })
 
 # 27.08: сцена 24 несла rezhim="proksi" и при этом заметку ПОЛНОГО режима —
@@ -294,9 +356,11 @@ for _imya, _s in SCENY.items():
 # было 20.08 с этим самым переключателем.
 NASTROYKI_SCENY = {"8_avtozapusk_vykl", "9_avtozapusk_vkl", "10_avtozapusk_ustarela"}
 
-# Вкладка «Подписка» (01.09, по жалобе хозяина «плюс нет вкладки подписки»). Тот
-# же приём, что у NASTROYKI_SCENY выше: без клика по вкладке сцена сняла бы
-# «Сеть», и целый экран остался бы вне приёмки — ровно так 20.08 немо исчез
+# Шторка «Подписка» (01.09 — вкладкой, по жалобе хозяина «плюс нет вкладки
+# подписки»; 02.09 — шторкой, открываемой карточкой #karta-podpiska: «хочу
+# больше как на телефоне», а там вкладок две и подписка живёт карточкой на
+# главном экране). Тот же приём, что у NASTROYKI_SCENY выше и у SHTORKA_SCENY
+# ниже: без клика сцена сняла бы «Сеть», и целый экран остался бы вне приёмки — ровно так 20.08 немо исчез
 # переключатель автозапуска. Четыре сцены закрывают все развилки отрисовки:
 # активна с лимитом и обоими именами; приостановлена и без лимита; старый
 # сервер (имён нет вовсе — карточка «кто пользуется» обязана исчезнуть
@@ -306,8 +370,12 @@ NASTROYKI_SCENY = {"8_avtozapusk_vykl", "9_avtozapusk_vkl", "10_avtozapusk_ustar
 # не срезать многоточием — щуп обрезки на этой сцене и стережёт разницу.
 # Первый заход правки поставил там nowrap+ellipsis: щуп покраснел бы сразу,
 # и правильно — обрезанное имя не отвечает на вопрос «эта машина какая?».
+# Шестая и седьмая — со списком устройств (02.09, поле ustroystva): три
+# устройства разом (все три вида значка, все три формулировки времени, обе
+# ветки расхода) и одно (обычный случай семьи + столбец из одних прочерков).
 PODPISKA_SCENY = {"27_podpiska", "28_podpiska_pauza", "29_podpiska_staryy_server",
-                  "30_podpiska_molchit", "31_podpiska_dlinnye_imena"}
+                  "30_podpiska_molchit", "31_podpiska_dlinnye_imena",
+                  "32_podpiska_ustroystva", "33_podpiska_odno_ustroystvo"}
 
 # Шторка выбора выхода (29.08, см. комментарий у сцен 25/26 выше) закрыта по
 # умолчанию — снимок без клика по карточке «Выход» показал бы главный экран,
@@ -415,7 +483,11 @@ DOSTUP_JS = """() => {
       // ModalBottomSheet на телефоне: фон не тыкается, пока шторка открыта,
       // и это её работа, а не брак вёрстки. Бедой остаётся только обратное —
       // кнопка САМОЙ шторки, накрытая чем-то ещё.
-      const modalka = document.getElementById("shtorka-fon");
+      // Шторок теперь три (выход, подписка, диалог обновления), и накрывать
+      // экран собой — работа любой из них, а не только первой. Ищем ту, что
+      // сейчас поднята, а не одну заранее известную по имени.
+      const modalka = [...document.querySelectorAll(".shtorka-fon")]
+          .find((sh) => !sh.hidden && getComputedStyle(sh).display !== "none") || null;
       const elVModalke = modalka && modalka.contains(el);
       const sverhuVModalke = modalka && (sverhu === modalka || modalka.contains(sverhu));
       if (!(sverhuVModalke && !elVModalke)) {
@@ -838,6 +910,11 @@ def kontrol_slova_v_kruge(br, port):
 def proverit_zhargon(str_, imya_sceny):
     """Ни одного машинного слова в том, что человек видит, ничего не открывая."""
     tekst = (str_.evaluate(VIDIMYY_TEKST_JS) or "").lower()
+    # Затираем исключения ЗАГЛУШКОЙ ТОЙ ЖЕ ДЛИНЫ, а не вырезаем: цитата в
+    # сообщении об ошибке ниже режется по смещению, и сдвиг текста показал бы
+    # человеку не тот кусок, что покраснел.
+    for slovo in ZHARGON_ISKLYUCHENIYA:
+        tekst = tekst.replace(slovo, "·" * len(slovo))
     bedy = []
     for slovo in ZHARGON:
         if slovo in tekst:
@@ -990,9 +1067,15 @@ def proverit_obnovlenie(str_, imya_sceny):
 
 
 def proverit_podpisku(str_, imya_sceny, sost):
-    """Вкладка «Подписка» говорит то, что прислал сервер, и НЕ говорит лишнего.
+    """Шторка «Подписка» говорит то, что прислал сервер, и НЕ говорит лишнего.
 
-    Ловит четыре класса беды разом, и все четыре тут уже случались в соседних
+    02.09 подписка переехала с третьей вкладки нижней панели (#vkladka-podpiska,
+    #tab-podpiska) в шторку #shtorka-podpiska-fon, которую открывает карточка
+    #karta-podpiska на главном экране — на телефоне вкладок две, и подписка
+    там устроена ровно так. Щуп смотрит то же самое и теми же глазами, только
+    внутри шторки: узлы (podp-*) переехали как есть, вместе с id.
+
+    Ловит пять классов беды разом, и все они тут уже случались в соседних
     экранах, поэтому проверяются, а не подразумеваются:
       1. состояние выдумано — «Приостановлена» показана там, где сервер ещё
          вообще не отвечал (свежий запуск: podpiska_est=false);
@@ -1004,6 +1087,13 @@ def proverit_podpisku(str_, imya_sceny, sost):
          человек шлёт в поддержку не задумываясь, и вместе со снимком уехал бы
          рабочий доступ к подписке. Гейт держит форму маски (звёздочки и не
          больше двух знаков), а не конкретную строку.
+      5. СПИСОК УСТРОЙСТВ (02.09) — ради него шторка и затевалась, и до этой
+         правки ни одна сцена поля ustroystva не знала вовсе: снимался старый
+         вид со строками «Кто пользуется»/«Устройство», а список не видел
+         никто. Спрашиваем то, на что человек смотрит: своё помечено, время
+         сказано словами, ноль расхода стоит прочерком (служба шлёт 0 всем,
+         пока сбор не включён — «0 Б» соврал бы точным числом), длинное имя
+         перенесено, а не срезано и не распёрло карточку.
     """
     d = str_.evaluate("""() => {
       const t = (id) => (document.getElementById(id).textContent || "").trim();
@@ -1011,11 +1101,15 @@ def proverit_podpisku(str_, imya_sceny, sost):
         const el = document.getElementById(id);
         return !!(el && el.offsetParent);
       };
-      const pustye = [...document.querySelectorAll('#tab-podpiska .ryad-znachenie')]
+      const pustye = [...document.querySelectorAll('#shtorka-podpiska-fon .ryad-znachenie')]
           .filter((el) => el.offsetParent && !(el.textContent || "").trim())
           .map((el) => el.id || "без id");
+      const shtorka = document.getElementById('shtorka-podpiska-fon');
       return {
-        vkladkaVidna: vidno("tab-podpiska"),
+        // offsetParent у position:fixed ВСЕГДА null — по нему шторку не проверить,
+        // она вечно выглядела бы закрытой. Смотрим на hidden и настоящий display.
+        shtorkaVidna: !!(shtorka && !shtorka.hidden
+                         && getComputedStyle(shtorka).display !== 'none'),
         sostoyanie: t("podp-sostoyanie"),
         zametka: vidno("podp-zametka") ? t("podp-zametka") : "",
         kartaKto: vidno("podp-karta-kto"),
@@ -1024,13 +1118,38 @@ def proverit_podpisku(str_, imya_sceny, sost):
         ustroystvo: vidno("podp-ryad-ustroystvo") ? t("podp-ustroystvo") : "",
         kod: vidno("podp-karta-kod") ? t("podp-kod") : "",
         pustye,
+        // СПИСОК УСТРОЙСТВ (02.09). Читаем то же, на что человек смотрит
+        // глазами: имя, пометку своего, время словами, расход и значок.
+        spisokViden: vidno("podp-karta-ustroystv"),
+        zagolovokViden: vidno("podp-zag-ustroystv"),
+        netRashoda: vidno("podp-net-rashoda"),
+        ryadUstroystvaViden: vidno("podp-ryad-ustroystvo"),
+        ustroystva: [...document.querySelectorAll("#podp-karta-ustroystv .ustr")].map((r) => {
+          const imya = r.querySelector(".ustr-imya");
+          const kogda = r.querySelector(".ustr-sost");
+          const trafik = r.querySelector(".ustr-trafik");
+          const znachok = r.querySelector(".ustr-znachok svg");
+          const rr = r.getBoundingClientRect(), kr = r.parentElement.getBoundingClientRect();
+          return {
+            // Имя берём ПЕРВЫМ узлом: метка «это устройство» лежит внутри
+            // того же span'а и иначе прилипла бы к имени, и сверка с тем,
+            // что прислал сервер, краснела бы на ровном месте.
+            imya: (imya && imya.firstChild ? imya.firstChild.textContent : "").trim(),
+            svoyo: r.classList.contains("svoyo"),
+            metka: !!r.querySelector(".ustr-metka"),
+            kogda: kogda ? (kogda.textContent || "").trim() : "",
+            trafik: trafik ? (trafik.textContent || "").trim() : "",
+            znachok: znachok ? znachok.innerHTML.replace(/\\s+/g, " ").trim() : "",
+            vylez: Math.round(Math.max(rr.right - kr.right, kr.left - rr.left)),
+          };
+        }),
       };
     }""")
     bedy = []
     p = lambda b: bedy.append(f"{imya_sceny}: {b}")
 
-    if not d["vkladkaVidna"]:
-        p("вкладка «Подписка» не показалась после клика по её кнопке")
+    if not d["shtorkaVidna"]:
+        p("шторка «Подписка» не открылась после клика по карточке #karta-podpiska")
         return bedy
 
     zhdem_sost = ("Пока неизвестно" if not sost.get("podpiska_est")
@@ -1057,12 +1176,83 @@ def proverit_podpisku(str_, imya_sceny, sost):
         p(f"сервер про подписку не отвечал, а строка срока и трафика всё равно "
           f"нарисована: «{d['zametka']}»")
 
-    est_imena = bool((sost.get("chelovek_imya") or "").strip()
-                     or (sost.get("ustroystvo_imya") or "").strip())
-    if d["kartaKto"] != est_imena:
+    # СПИСОК УСТРОЙСТВ — то, ради чего шторка и затевалась. Спрашиваем ровно
+    # то, на что человек смотрит глазами, и ни строчкой больше.
+    zhdem_ustr = sost.get("ustroystva") or []
+    if d["spisokViden"] != bool(zhdem_ustr):
+        p(f"карточка списка устройств {'видна' if d['spisokViden'] else 'скрыта'}, "
+          f"а сервер прислал устройств: {len(zhdem_ustr)}")
+    if d["zagolovokViden"] != bool(zhdem_ustr):
+        p("заголовок «Устройства» живёт отдельно от своего списка — "
+          "они обязаны появляться и исчезать вместе")
+    if len(d["ustroystva"]) != len(zhdem_ustr):
+        p(f"в списке {len(d['ustroystva'])} строк, а сервер прислал {len(zhdem_ustr)}")
+    else:
+        znachki = {}
+        for dano, na_ekrane in zip(zhdem_ustr, d["ustroystva"]):
+            imya = dano["imya"]
+            if na_ekrane["imya"] != imya:
+                p(f"имя устройства в окне «{na_ekrane['imya']}», а сервер прислал "
+                  f"«{imya}» — обрезано или подменено")
+            # Своё устройство метится и цветом значка (класс .svoyo), и словами
+            # («это устройство»). Одного мало: цвет на снимке спорный, слово без
+            # цвета теряется — щуп держит обе половины.
+            if na_ekrane["svoyo"] != dano["svoyo"] or na_ekrane["metka"] != dano["svoyo"]:
+                p(f"«{imya}»: сервер сказал своё={dano['svoyo']}, а в окне "
+                  f"пометка={na_ekrane['svoyo']} надпись={na_ekrane['metka']} — "
+                  "человек не отличит свою машину от чужой")
+            if dano.get("poslednee"):
+                kogda = na_ekrane["kogda"]
+                if not kogda:
+                    p(f"«{imya}»: сервер прислал время последнего выхода, "
+                      "а в строке его нет вовсе")
+                elif re.search(r"\d{9}", kogda):
+                    p(f"«{imya}»: время показано машинным числом «{kogda}»")
+                elif kogda != "в сети" and not kogda.startswith("был "):
+                    p(f"«{imya}»: «{kogda}» — не человеческая строка "
+                      "(ждали «в сети» или «был …»)")
+            if dano.get("trafik_bayt"):
+                if not na_ekrane["trafik"] or na_ekrane["trafik"] == "—":
+                    p(f"«{imya}»: расход {dano['trafik_bayt']} байт пропал "
+                      f"из строки («{na_ekrane['trafik']}»)")
+            elif na_ekrane["trafik"] != "—":
+                p(f"«{imya}»: расхода не мерили, а в строке «{na_ekrane['trafik']}» — "
+                  "прочерк тут единственная правда, «0 Б» соврал бы точным числом")
+            if not na_ekrane["znachok"]:
+                p(f"«{imya}»: строка устройства без значка вовсе")
+            # Длинное имя обязано перенестись внутри карточки, а не распереть
+            # её собой: щуп перелива стережёт край ОКНА, этот — край карточки.
+            if na_ekrane["vylez"] > 1:
+                p(f"«{imya}»: строка устройства вылезла за карточку "
+                  f"на {na_ekrane['vylez']}px")
+            znachki.setdefault(na_ekrane["znachok"], set()).add(dano["vid"])
+        for vidy in znachki.values():
+            if len(vidy) > 1:
+                p(f"виды устройств {sorted(vidy)} нарисованы одним значком — "
+                  "на снимке их не различить")
+    # Объяснение под карточкой — ровно тогда, когда прочерки у ВСЕХ: иначе
+    # столбец прочерков читается как «никто ничего не качал».
+    zhdem_net_rashoda = bool(zhdem_ustr) and not any(u.get("trafik_bayt") for u in zhdem_ustr)
+    if d["netRashoda"] != zhdem_net_rashoda:
+        p(f"объяснение прочерков {'видно' if d['netRashoda'] else 'скрыто'}, "
+          f"а расход прислан у {sum(1 for u in zhdem_ustr if u.get('trafik_bayt'))} "
+          f"из {len(zhdem_ustr)} устройств")
+    if zhdem_ustr and d["ryadUstroystvaViden"]:
+        p("строка «Устройство» осталась при живом списке устройств — один и тот "
+          "же факт сказан дважды, второй раз беднее")
+
+    # Карточка «кто пользуется» жива, только пока сказать больше нечем: пришёл
+    # список устройств — эти две строки то же самое, но беднее, и окно прячет
+    # строку «Устройство» вместе с подсказкой (index.html: narisovatPodpisku).
+    chelovek = (sost.get("chelovek_imya") or "").strip()
+    ustr_imya = (sost.get("ustroystvo_imya") or "").strip()
+    zhdem_kartu = bool(chelovek or (ustr_imya and not zhdem_ustr))
+    if d["kartaKto"] != zhdem_kartu:
         p(f"карточка «кто пользуется» {'видна' if d['kartaKto'] else 'скрыта'}, "
-          f"а имён от сервера {'есть' if est_imena else 'нет'}")
-    if d["podskazka"] != est_imena:
+          f"а ждали {'видна' if zhdem_kartu else 'скрыта'} (сервер прислал: "
+          f"человек={chelovek!r}, устройство={ustr_imya!r}, "
+          f"список из {len(zhdem_ustr)})")
+    if d["podskazka"] != (zhdem_kartu and not zhdem_ustr):
         p("подсказка «так это устройство подписано на сервере» живёт отдельно от "
           "своей карточки — они обязаны появляться и исчезать вместе")
 
@@ -1079,26 +1269,39 @@ def proverit_podpisku(str_, imya_sceny, sost):
             p(f"маска кода открывает слишком много: «{kod}» ({len(kod)} знаков, "
               f"больше «***» плюс два)")
     elif sost.get("kod_maska"):
-        p("маска кода пришла с сервера, а строки «Код доступа» на вкладке нет")
+        p("маска кода пришла с сервера, а строки «Код доступа» в шторке нет")
     return bedy
 
 
 def kontrol_podpiski(br, port):
-    """Щуп подписки обязан покраснеть, если код показать открытым текстом.
+    """Щуп подписки обязан покраснеть на трёх порчах разом.
 
-    Порча — ровно та, которой боимся: в строку кода кладём правдоподобный
-    целый ключ вместо маски. Без этого контроля зелень гейта ничего не значит.
+    Порчи — ровно те, которых боимся, и все три ставятся на одной сцене со
+    списком устройств (32), чтобы контроль трогал ВСЕ ветки щупа, а не одну:
+      1. в строку кода кладём правдоподобный целый ключ вместо маски;
+      2. со своего устройства снимаем и цвет (класс), и надпись «это
+         устройство» — человек перестаёт отличать свою машину от чужой;
+      3. в столбец расхода того, у кого расход не мерили, пишем «0 Б» —
+         точное число там, где числа нет вовсе.
+    Сцена 27 без списка устройств этих двух порч попросту не увидела бы:
+    проверка с пустым входом зеленеет, а «зелень» контроля дороже пропуска.
     """
-    sostoyanie["tek"] = SCENY["27_podpiska"]
+    imya_sceny = "32_podpiska_ustroystva"
+    sostoyanie["tek"] = SCENY[imya_sceny]
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
-    str_.click("#vkladka-podpiska")
+    str_.click("#karta-podpiska")
     str_.wait_for_timeout(200)
     str_.evaluate("""() => {
       document.getElementById('podp-kod').textContent = 'Hgh-QXAH8_8HQ_Et';
+      const svoyo = document.querySelector('#podp-karta-ustroystv .ustr.svoyo');
+      svoyo.classList.remove('svoyo');
+      svoyo.querySelector('.ustr-metka').remove();
+      const pusto = document.querySelector('#podp-karta-ustroystv .ustr-trafik.pusto');
+      pusto.textContent = '0 Б';
     }""")
-    bedy = proverit_podpisku(str_, "контроль-подписка", SCENY["27_podpiska"])
+    bedy = proverit_podpisku(str_, "контроль-подписка", SCENY[imya_sceny])
     str_.close()
     return bedy
 
@@ -1225,12 +1428,40 @@ def kontrol_obrezki(br, port):
 
 
 def kontrol_pereliva(br, port):
-    """Щуп перелива обязан покраснеть, если строке запретить перенос."""
-    sostoyanie["tek"] = SCENY["16_dlinnoe_imya"]
+    """Щуп перелива обязан покраснеть, если строке запретить перенос.
+
+    02.09: порча била в «.podpiska span» — строку ключа доступа, стоявшую на
+    главном экране. Строки этой больше нет: подписка уехала карточкой
+    #karta-podpiska и своей шторкой, класса .podpiska в облике не осталось
+    вовсе (index.html, комментарий у .krug-podskazka). Селектор перестал
+    находить хоть что-нибудь — порчи не было, щуп молчал честно, а стенд
+    объявлял мёртвым ЕГО, хотя мёртвой была порча. Разница не косметическая:
+    искать беду шли бы в щуп, а лежала она в контроле.
+    Бьём туда, где длинная строка живёт ТЕПЕРЬ: имя машины в шторке подписки
+    на сцене длинных имён — «ASUS TUF Gaming B550-PLUS WIFI II (домашний
+    компьютер)» в 420px не помещается никак, и держит его ровно перенос
+    (.ryad-znachenie: word-break, без ellipsis).
+    И проверяем, что попали: элемент найден и строка достаточно длинная. Порча,
+    не применившаяся молча, — это второй раз тот же промах.
+    """
+    sostoyanie["tek"] = SCENY["31_podpiska_dlinnye_imena"]
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)
-    str_.add_style_tag(content=".podpiska span { white-space: nowrap; }")
+    str_.click("#karta-podpiska")
+    str_.wait_for_timeout(200)
+    dlina = str_.evaluate("""() => {
+      const el = document.getElementById("podp-ustroystvo");
+      if (!el || !el.offsetParent) return -1;
+      el.style.whiteSpace = "nowrap";
+      return (el.textContent || "").trim().length;
+    }""")
+    if dlina < 30:
+        str_.close()
+        raise SystemExit(
+            "🔴 ПОРЧА КОНТРОЛЯ ПЕРЕЛИВА НЕ ПРИМЕНИЛАСЬ: строка «podp-ustroystvo» "
+            f"{'не найдена или скрыта' if dlina < 0 else f'длиной {dlina} знаков'} "
+            "— запрет переноса ей нечего ломать. Чинить надо порчу, а не щуп.")
     str_.wait_for_timeout(200)
     bedy = proverit_pereliv(str_, "контроль-перелив")
     str_.close()
@@ -1318,7 +1549,7 @@ def snyat():
                     str_.click("#vkladka-nastroyki")
                     str_.wait_for_timeout(200)
                 if imya in PODPISKA_SCENY:
-                    str_.click("#vkladka-podpiska")
+                    str_.click("#karta-podpiska")
                     str_.wait_for_timeout(200)
                 if imya in SHTORKA_SCENY:
                     str_.click("#karta-vyhod")

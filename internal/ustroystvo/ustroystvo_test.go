@@ -91,3 +91,43 @@ func TestZagolovkiStavyatsyaVse(t *testing.T) {
 		t.Error("пустой DeviceID не должен рождать заголовок")
 	}
 }
+
+// Расход уезжает десятичным числом — сервер разбирает его как есть.
+func TestZagolovokRashodaDesyatichnyy(t *testing.T) {
+	h := http.Header{}
+	ZagolovkiSTrafikom(h, "id-1", "0.7.0", 1234567890123)
+	if got := h.Get("X-Device-Traffic"); got != "1234567890123" {
+		t.Fatalf("X-Device-Traffic = %q, ждали 1234567890123", got)
+	}
+}
+
+// Пока считать нечего (ядро ни разу не поднималось), заголовка НЕТ вовсе.
+// Ноль означал бы «намерили ничего» — это другое утверждение, и сервер записал
+// бы его в реестр, затерев расход, посчитанный прошлой версией клиента.
+// Отсутствие заголовка законно: старые копии его не шлют вообще.
+func TestBezRashodaZagolovkaNet(t *testing.T) {
+	for _, skolko := range []int64{0, -1} {
+		h := http.Header{}
+		ZagolovkiSTrafikom(h, "id-1", "0.7.0", skolko)
+		if _, est := h["X-Device-Traffic"]; est {
+			t.Fatalf("при расходе %d заголовок всё же поставлен: %q", skolko, h.Get("X-Device-Traffic"))
+		}
+		// Остальные четыре заголовка при этом на месте: расход им не указ.
+		if h.Get("X-Device-Id") != "id-1" {
+			t.Fatalf("вместе с расходом потерялся X-Device-Id")
+		}
+	}
+}
+
+// Прежняя дверь (её зовёт отправка журналов функцией-полем) расход не шлёт и
+// не обязана: цифру ей взять неоткуда.
+func TestStarayaDverBezRashoda(t *testing.T) {
+	h := http.Header{}
+	Zagolovki(h, "id-1", "0.7.0")
+	if _, est := h["X-Device-Traffic"]; est {
+		t.Fatalf("Zagolovki поставила расход, которого не знает")
+	}
+	if h.Get("X-Device-Platform") == "" {
+		t.Fatalf("прежние заголовки перестали ставиться")
+	}
+}

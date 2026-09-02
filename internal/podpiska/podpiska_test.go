@@ -142,3 +142,47 @@ func TestMaskaNikogdaNeOtdaetKodTselikom(t *testing.T) {
 		t.Errorf("Maska(%q) = %q, ждали ***", "ab", m)
 	}
 }
+
+// Расход обязан уехать на ОБА запроса к серверу: и за конфигом, и за
+// сведениями. Точка сборки заголовков одна (zapros), но проверяем оба пути —
+// иначе правка, разведшая их, останется незамеченной.
+func TestRashodEdetNaObaZaprosa(t *testing.T) {
+	vidno := map[string]string{}
+	k := klientNa(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vidno[r.URL.Path] = r.Header.Get("X-Device-Traffic")
+		if strings.HasSuffix(r.URL.Path, "/info") {
+			w.Write([]byte(`{"name":"n","active":true}`))
+			return
+		}
+		w.Write([]byte(primerKonfiga))
+	}))
+	k.Trafik = func() int64 { return 987654321 }
+
+	if _, err := k.Konfig(context.Background(), "ABC"); err != nil {
+		t.Fatalf("конфиг не взялся: %v", err)
+	}
+	if _, err := k.Svedeniya(context.Background(), "ABC"); err != nil {
+		t.Fatalf("сведения не взялись: %v", err)
+	}
+	for _, put := range []string{"/k/ABC", "/k/ABC/info"} {
+		if vidno[put] != "987654321" {
+			t.Fatalf("на %s расход пришёл как %q, ждали 987654321", put, vidno[put])
+		}
+	}
+}
+
+// Источника расхода может не быть вовсе (стенд, ранний старт) — это не повод
+// падать и не повод слать пустой или нулевой заголовок.
+func TestBezIstochnikaRashodaZagolovkaNet(t *testing.T) {
+	var byl bool
+	k := klientNa(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, byl = r.Header["X-Device-Traffic"]
+		w.Write([]byte(primerKonfiga))
+	}))
+	if _, err := k.Konfig(context.Background(), "ABC"); err != nil {
+		t.Fatalf("конфиг не взялся: %v", err)
+	}
+	if byl {
+		t.Fatalf("клиент без источника расхода всё же поставил X-Device-Traffic")
+	}
+}

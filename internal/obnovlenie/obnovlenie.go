@@ -233,6 +233,39 @@ func kopirovatFayl(otkuda, kuda string) error {
 	return os.WriteFile(kuda, dannye, 0o755)
 }
 
+// Hod — сколько байт новой сборки уже у нас (skachano) и сколько их всего
+// (vsego). vsego == 0 значит «сколько всего, неизвестно»: сервер не назвал
+// длины ответа (ContentLength == -1). Это законный случай, а не беда: окно
+// тогда рисует неопределённую полосу и пишет «Скачиваю…» без процента —
+// выдуманный процент хуже честного «идёт».
+//
+// Знаменатель берём именно из ответа ТОГО сервера, который прямо сейчас шлёт
+// байты, а не из Novaya.Razmer: размер из списка релизов описывает файл на
+// GitHub, а не это соединение (редирект, прокси-заглушка, обрезанный ответ),
+// и подставлять его значило бы считать долю от чужого числа.
+type Hod func(skachano, vsego int64)
+
+// schetchik — читатель поверх тела ответа, который считает прошедшие мимо
+// байты. Обёртка, а не ручной цикл копирования: io.Copy сам подбирает буфер
+// и быстрые пути, а всё, что нужно от нас, — знать, сколько уже прошло.
+type schetchik struct {
+	iz      io.Reader
+	vsego   int64
+	proshlo int64
+	hod     Hod
+}
+
+func (s *schetchik) Read(b []byte) (int, error) {
+	n, err := s.iz.Read(b)
+	if n > 0 {
+		s.proshlo += int64(n)
+		if s.hod != nil {
+			s.hod(s.proshlo, s.vsego)
+		}
+	}
+	return n, err
+}
+
 // Postavit кладёт новую сборку на место текущей и возвращает путь к ней.
 //
 // Windows не даёт затереть запущенный .exe, но даёт его ПЕРЕИМЕНОВАТЬ: старый
@@ -246,6 +279,17 @@ func kopirovatFayl(otkuda, kuda string) error {
 // отката оставила владельца вовсе без .exe — на диске лежали только
 // два файла с хвостом .old.
 func Postavit(ctx context.Context, klient *http.Client, n Novaya, putExe string) error {
+	return PostavitSHodom(ctx, klient, n, putExe, nil)
+}
+
+// PostavitSHodom — та же Postavit, но с докладом о ходе скачивания (см. Hod).
+// Отдельная дверь, а не шестой параметр у Postavit: звонящих у неё пять, и
+// ход нужен ровно одному — окну (internal/sluzhba: PostavitNaydennoe), а
+// остальным пришлось бы дописывать nil без всякой на то причины.
+//
+// hod == nil — обычное дело: считать байты всё равно приходится (обёртка
+// стоит на пути), но рассказывать о них некому.
+func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe string, hod Hod) error {
 	if klient == nil {
 		klient = &http.Client{Timeout: 5 * time.Minute}
 	}
@@ -292,7 +336,20 @@ func Postavit(ctx context.Context, klient *http.Client, n Novaya, putExe string)
 		return fmt.Errorf("не могу выставить права на новый файл: %w", err)
 	}
 
-	_, err = io.Copy(f, otvet.Body)
+	// Знаменатель — длина ЭТОГО ответа. Её может не быть вовсе
+	// (ContentLength == -1 у ответа без Content-Length, например chunked):
+	// тогда vsego == 0 и доля неизвестна — см. Hod.
+	vsego := otvet.ContentLength
+	if vsego < 0 {
+		vsego = 0
+	}
+	// Первый доклад — ДО чтения тела: он говорит окну «загрузка началась» и
+	// сразу называет знаменатель. Без него окно узнало бы о начале только с
+	// первым прочитанным куском, а на медленной сети это заметная пауза.
+	if hod != nil {
+		hod(0, vsego)
+	}
+	_, err = io.Copy(f, &schetchik{iz: otvet.Body, vsego: vsego, hod: hod})
 	if err != nil {
 		f.Close()
 		return err
