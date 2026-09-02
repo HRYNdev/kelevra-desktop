@@ -260,6 +260,27 @@ type Sluzhba struct {
 	// Только сборка конфига: /api/sostoyanie про права отвечает человеку и
 	// обязано спрашивать систему само.
 	pravaDlyaStenda func() bool
+
+	// adapterZhivDlyaStenda — точка подмены tunnel.Zhivoy (есть ли в системе
+	// сетевой адаптер с таким именем). nil в бою. Настоящих адаптеров в
+	// проверках быть не должно вовсе — тот же запрет, что у pravaDlyaStenda
+	// выше, и та же причина: занятое имя иначе не воспроизвести, не подняв на
+	// машине проверяющего настоящий туннель.
+	adapterZhivDlyaStenda tunnel.Adapter
+
+	// srokOsvobozhdeniyaDlyaStenda — сколько ждать, что занятое имя адаптера
+	// освободится само. Ноль (бой) = tunnel.SrokOsvobozhdeniya; проверки
+	// ставят наносекунду, чтобы не ждать по-настоящему: они судят ВЫБОР
+	// приложения, а не его терпение.
+	srokOsvobozhdeniyaDlyaStenda time.Duration
+}
+
+// srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
+func (s *Sluzhba) srokOsvobozhdeniya() time.Duration {
+	if s.srokOsvobozhdeniyaDlyaStenda != 0 {
+		return s.srokOsvobozhdeniyaDlyaStenda
+	}
+	return tunnel.SrokOsvobozhdeniya
 }
 
 // estPrava — единственное место, где сборка конфига спрашивает про права
@@ -1659,6 +1680,22 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		log.Printf("не подготовил конфиг: %v", err)
 		return fmt.Errorf("не подготовил конфиг: %w", err)
 	}
+	// Имя сетевого адаптера туннеля должно быть свободно ДО запуска ядра.
+	//
+	// Беда с машины человека 01.09: он нажал «Отключить», через 13 секунд
+	// подключился снова, и ядро упало на «create adapter: файл уже существует
+	// | open existing adapter: элемент не найден» — имя tun125 осталось занято
+	// остатком прошлой попытки. Падает ядро не сразу, а через ПЯТНАДЦАТЬ
+	// секунд, и всё это время человек смотрит на «Подключаюсь», чтобы в конце
+	// получить половинную защиту вместо полной. За вечер это повторилось
+	// дважды. Вопрос системе про имя стоит миллисекунды — задаём его сами и
+	// заранее (internal/tunnel.SvobodnoeImya).
+	//
+	// otkatVProksi — защита в итоге поднимается НЕ в том режиме, который
+	// человек заказал. Объявлен тут, а не у лестницы отката ниже: спуститься
+	// ступенькой ниже можно и до первого запуска ядра — когда заранее видно,
+	// что запускать нечего.
+	vybor, otkatVProksi := s.podobratImyaAdaptera(vybor)
 	zapustit := s.Yadro.Zapustit
 	if s.zapustitYadro != nil {
 		zapustit = s.zapustitYadro
@@ -1720,6 +1757,55 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		return zapustit(zctxSP)
 	}
 	err = bezProksiEsliNado(&vybor, err)
+	// Ядро всё-таки упало на создании сетевого адаптера — повторяем на ДРУГОМ
+	// имени, один раз.
+	//
+	// Проверка перед запуском (podobratImyaAdaptera выше) ловит не всё, и это
+	// видно в самой строке ядра: «open existing adapter: Element not found»
+	// значит, что устройство есть на уровне драйвера, а в списке сетевых
+	// интерфейсов Windows его уже нет — то есть net.Interfaces() честно
+	// ответил нам «свободно». Переспрашивать систему тут бессмысленно, надо
+	// менять имя, не глядя на старое (tunnel.OboytiZanyatoe).
+	//
+	// Ровно один повтор. Если и соседнее имя не подошло, дело не в остатке
+	// прошлой попытки, а в самой системе, и третий заход только тратил бы ещё
+	// пятнадцать секунд человека перед тем же откатом.
+	if err != nil && tunnel.ZanyatoePoOshibke(err) && s.rezhimKartiny() == konfig.Tunnel {
+		s.zamok.Lock()
+		zanyatoe := s.kartina.TunImya
+		s.zamok.Unlock()
+		_ = s.Yadro.Ostanovit() // ядро могло не умереть, а зависнуть на таймауте
+		novoe, zanyaty := tunnel.OboytiZanyatoe(zanyatoe, s.adapterZhivDlyaStenda)
+		switch {
+		case novoe == "":
+			log.Printf("ядро не создало сетевой адаптер %q, и все соседние имена тоже заняты (%s) — "+
+				"полный режим сейчас не поднять", zanyatoe, strings.Join(zanyaty, ", "))
+			vybor.AdapterZanyat = true
+		default:
+			log.Printf("ядро не создало сетевой адаптер %q (имя занято) — повторяю на свободном имени %q", zanyatoe, novoe)
+			povtor := vybor
+			povtor.TunImya = novoe
+			if e := s.perestroit(povtor); e != nil {
+				log.Printf("конфиг с именем адаптера %q не собрался: %v", novoe, e)
+			} else {
+				zctxA, otmenaA := context.WithTimeout(ctx, 70*time.Second)
+				defer otmenaA()
+				errPovtor := zapustit(zctxA)
+				errPovtor = bezProksiEsliNado(&povtor, errPovtor)
+				if errPovtor == nil {
+					log.Printf("повтор на имени %q удался — полный режим поднят", novoe)
+					err, vybor = nil, povtor
+				} else {
+					log.Printf("повтор на имени %q тоже не удался: %v", novoe, errPovtor)
+					err = errPovtor
+					// Занято и новое имя — значит человеку надо сказать про
+					// устройство, а не общее «сейчас не вышло»: повторным
+					// нажатием он этого не починит (konfig.ZametkaAdapterZanyat).
+					vybor.AdapterZanyat = tunnel.ZanyatoePoOshibke(errPovtor)
+				}
+			}
+		}
+	}
 	// Второй такой же отказ, найден 23.08 замером настоящего ядра
 	// (.stend/sing-box-linux) на боевом профиле (22 route.rule_set, качаются
 	// с subkv.chickenkiller.com detour:"direct" — мимо туннеля). Источник
@@ -1795,7 +1881,6 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// прописать), и только потом поднимать следующую ступень. Иначе след
 	// неудачной попытки переживёт удачную и соврёт следующему запуску, что
 	// туннель поднимали мы (internal/tunnel, snyatOsirotevshiySledTunnelya).
-	otkatVProksi := false
 	if err != nil && s.rezhimKartiny() == konfig.Tunnel {
 		log.Printf("полный режим не поднялся (%v) — убираю следы попытки и опускаюсь на ступень ниже", err)
 		_ = s.Yadro.Ostanovit()
@@ -1919,6 +2004,68 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	}
 	s.soobshchitTreyuProZashchitu(err == nil)
 	return err
+}
+
+// podobratImyaAdaptera — под каким именем поднимать сетевой адаптер туннеля
+// в ЭТОТ раз. Зовётся один раз, перед первым запуском ядра.
+//
+// Возвращает поправленный vybor и признак «полный режим отменён заранее» (он
+// же otkatVProksi у вызывающего): последнее случается, когда свободного имени
+// не нашлось вовсе — тогда запускать ядро незачем, оно потратит пятнадцать
+// секунд человека и упадёт ровно на этом.
+//
+// Отдельным методом, а не куском PodnyatZashchitu: тут четыре разных исхода,
+// и каждый надо уметь проверить, не поднимая на машине проверяющего
+// настоящий туннель (см. поле adapterZhivDlyaStenda).
+func (s *Sluzhba) podobratImyaAdaptera(vybor konfig.Vybor) (konfig.Vybor, bool) {
+	if s.rezhimKartiny() != konfig.Tunnel {
+		return vybor, false // половинный режим адаптера не создаёт вовсе
+	}
+	s.zamok.Lock()
+	izProfilya := s.kartina.TunImya
+	s.zamok.Unlock()
+
+	podbor := tunnel.SvobodnoeImya(izProfilya, s.srokOsvobozhdeniya(), s.adapterZhivDlyaStenda)
+	if slova := podbor.Slovami(); slova != "" {
+		log.Printf("%s", slova)
+	}
+	switch {
+	case podbor.Ishodnoe == "":
+		// Профиль не назвал interface_name — имя выберет само ядро, и
+		// подбирать нам нечего.
+		return vybor, false
+	case podbor.Vyshlo() && !podbor.Zamena:
+		// Обычный путь: имя из профиля свободно. Ничего не пересобираем —
+		// конфиг на диске уже правильный.
+		return vybor, false
+	case podbor.Vyshlo():
+		novyy := vybor
+		novyy.TunImya = podbor.Imya
+		if err := s.perestroit(novyy); err != nil {
+			// Конфиг со свободным именем не собрался — идём как шли. Пусть
+			// лучше ядро попробует занятое имя (вдруг всё-таки поднимется),
+			// чем мы отменим человеку полный режим по своей же неудаче.
+			log.Printf("конфиг со свободным именем адаптера %q не собрался (%v) — пробую с прежним", podbor.Imya, err)
+			_ = s.perestroit(vybor)
+			return vybor, false
+		}
+		return novyy, false
+	default:
+		// Заняты и имя из профиля, и все соседние. Это уже не остаток нашей
+		// прошлой попытки, а состояние системы: ядро на нём гарантированно
+		// упадёт, и единственное честное действие — сразу опуститься на
+		// ступень ниже и НАЗВАТЬ человеку причину (konfig.AdapterZanyat),
+		// а не гонять его по кнопке «Подключиться» ещё раз.
+		nizhe := vybor
+		nizhe.BezTunnelya, nizhe.AdapterZanyat, nizhe.TunImya = true, true, ""
+		if err := s.perestroit(nizhe); err != nil {
+			log.Printf("конфиг половинного режима не собрался (%v) — пробую поднять полный как есть", err)
+			_ = s.perestroit(vybor)
+			return vybor, false
+		}
+		log.Printf("свободного имени сетевого адаптера нет — полный режим не пробую, поднимаю половинный")
+		return nizhe, true
+	}
 }
 
 // zakrepitTunnel — всё, что приложение делает в системе после того, как
