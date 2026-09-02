@@ -2002,7 +2002,15 @@ function narisovatPodpisku(s) {
 
 async function obnovit() {
   let s;
-  try { s = await api("sostoyanie"); } catch (e) { return; }
+  // okno=1 — не украшение адреса, а единственный способ службы узнать, что
+  // человек прямо сейчас смотрит в окно. По этой метке она решает, кому
+  // говорить про найденное обновление: диалогу ниже или пузырю в трее — но
+  // никогда обоим сразу (жалоба 02.09 на вторую, некрасивую уведомлялку;
+  // разбор в internal/sluzhba: povestitEsliNovaya). Метку несёт ИМЕННО этот
+  // опрос, который крутится раз в 2 секунды всё время, пока окно открыто, —
+  // молчание дольше нескольких секунд служба справедливо считает закрытым
+  // окном.
+  try { s = await api("sostoyanie?okno=1"); } catch (e) { return; }
   poslednee = s;
   const nuzhenKod = !s.kod_est || smenaKoda;
   $("karta-koda").hidden = !nuzhenKod;

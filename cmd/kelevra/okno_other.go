@@ -27,8 +27,10 @@ func podnyatChuzheeOkno() bool {
 	return false
 }
 
-// zakrytStaroeOkno вне Windows не делает ничего — там нет ни HWND, ни
-// самого окна (см. pokazatOkno выше).
-func zakrytStaroeOkno() bool {
-	return false
+// zakrytStaroeOkno вне Windows не делает ничего — там нет ни HWND, ни самого
+// окна (см. pokazatOkno выше). Нулевой итог тут не отговорка, а верный ответ:
+// окна не было, значит смене нечего закрывать и нечего открывать взамен
+// (см. itogSmenyOkna и pokazatLiOkno в smena_okna.go).
+func zakrytStaroeOkno() itogSmenyOkna {
+	return itogSmenyOkna{}
 }
