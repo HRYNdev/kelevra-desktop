@@ -127,7 +127,14 @@ jobs:
             exit 1
           fi
           echo "   в черновике Kelevra.exe: $RAZMER байт"
-          gh release edit "$TEG" --draft=false --latest
+          # Предварительный выпуск не может быть «последним»: GitHub отвечает
+          # на такое отказом 422 и релиз остаётся черновиком, то есть человек
+          # его не видит вовсе. Последним помечаем только боевые версии.
+          if [ "${{ steps.versiya.outputs.predvaritelnyy }}" = "true" ]; then
+            gh release edit "$TEG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$TEG" --draft=false --latest
+          fi
           echo "── скачиваю как посторонний"
           for popytka in 1 2 3 4 5; do
             rm -f /tmp/skachano.exe
