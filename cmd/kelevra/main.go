@@ -39,6 +39,9 @@ const (
 	argTiho      = "--tiho"
 	argSmena     = "--smena"
 	argPriStarte = "--pri-starte"
+	// Установка службы Windows: единственное действие, ради которого
+	// приложение просит администратора, и просит один раз за установку.
+	argPostavitSluzhbu = "--postavit-sluzhbu"
 )
 
 // srokOzhidaniyaSmeny — сколько новая, уже повышенная копия ждёт смерти
@@ -71,6 +74,14 @@ func main() {
 	//
 	// KELEVRA_BEZ_OKNA=1 — синоним --sluzhba: на нём стоит мой стенд
 	// (stend/windows.sh) и разбор беды у человека, менять эту переменную нельзя.
+	// --postavit-sluzhbu: эта копия поднята через UAC ровно ради одного дела —
+	// завести общую папку, перенести данные и зарегистрировать службу. Сделала
+	// и ушла; ни окна, ни ядра, ни трея тут не бывает.
+	if estArg(argPostavitSluzhbu) {
+		postavitSluzhbuIUyti(putZhurnala)
+		return
+	}
+
 	rezhimSluzhby := os.Getenv("KELEVRA_BEZ_OKNA") == "1" || estArg(argSluzhba)
 	defer lovitPaniku(putZhurnala, rezhimSluzhby)
 	log.Printf("--- запуск Kelevra %s (%s/%s), данные: %s", podpiska.Versiya, runtime.GOOS, runtime.GOARCH, papka)
@@ -534,6 +545,29 @@ func podnyatSluzhbuOtdelno(papka string) (string, error) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return "", fmt.Errorf("не дождался метки службы за %s", srokPodnyatiyaSluzhby)
+}
+
+
+// postavitSluzhbuIUyti — тело режима --postavit-sluzhbu.
+//
+// Отдельной функцией, а не строчкой в main: у неё своя ответственность и свой
+// разговор с человеком. Отказ здесь не молчит — иначе человек нажал кнопку,
+// увидел окно администратора, согласился, и ничего не произошло.
+func postavitSluzhbuIUyti(putZhurnala string) {
+	put, err := os.Executable()
+	if err != nil {
+		umeret(putZhurnala, "Kelevra не поняла, где лежит сама", err)
+	}
+	log.Printf("ставлю службу Windows из %s", put)
+	if err := vinsluzhba.UstanovitPolnostyu(put); err != nil {
+		log.Printf("служба не установилась: %v", err)
+		skazat("Kelevra не смогла установить службу",
+			"Без неё туннель будет просить подтверждение при каждом входе в систему.
+
+"+err.Error())
+		os.Exit(1)
+	}
+	log.Printf("служба Windows установлена и запущена")
 }
 
 // zapustitSluzhbu — режим --sluzhba (и его синоним KELEVRA_BEZ_OKNA=1):
