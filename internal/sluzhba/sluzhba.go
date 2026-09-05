@@ -739,6 +739,16 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 	return n.Versiya, nil
 }
 
+// ZadatVyhod меняет способ, которым копия уходит после того, как поставила
+// обновление или отдала права новой копии.
+//
+// По умолчанию это os.Exit(0) — обычному процессу больше ничего и не нужно.
+// Службе Windows нужно другое: уйти так, чтобы диспетчер служб счёл это
+// отказом и поднял её заново уже из нового файла. Своего кода выхода у службы
+// тут нет, поэтому решение отдаётся наружу, в cmd/kelevra, где про режим
+// запуска известно всё.
+func (s *Sluzhba) ZadatVyhod(f func()) { s.vyhod = f }
+
 // SleditZaObnovleniem крутит ProveritObnovlenieFonom по расписанию, пока
 // живёт служба (тот же ctx, что и ObnovlyatProfil — оба гасит один и тот же
 // defer otmena() в zapustitSluzhbu).
