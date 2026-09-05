@@ -1307,6 +1307,16 @@
           </button>
         </div>
         <div class="beda" id="beda-avtozapusk"></div>
+        <!-- Служба Windows. Строка живёт, только пока службы нет: после
+             установки говорить не о чем, подтверждение больше не спрашивают.
+             Оформлена как «Подключить по коду» — то же действие в один тычок,
+             а не переключатель: включить и выключить это не симметричные вещи. -->
+        <button class="tihaya nastroyki-ryad" id="knopka-sluzhba" hidden>
+          <span class="tihaya-tekst">
+            <span class="tihaya-zagolovok">Работать без подтверждений</span>
+            <span class="tihaya-podpis" id="podpis-sluzhba">Сейчас Windows спрашивает разрешение при каждом входе</span>
+          </span>
+        </button>
         <!-- Автоустановка на холодном старте убрана сознательно
              (cmd/kelevra/main.go) — единственная дверь к установке была тычок
              в пузырь трея (trey_windows.go: tychokVPuzyr). 28.08: у этой кнопки
@@ -2018,6 +2028,7 @@ async function obnovit() {
   $("vkladki").hidden = nuzhenKod;
   $("lenta").classList.toggle("bez-nizhney", nuzhenKod);
   primenitVkladku();
+  obnovitStrokuSluzhby(s);
 
   // Ожидание дома — класс ДОПОЛНИТЕЛЬНЫЙ к s.sost (обычно "stoit"), а не
   // замена: .krug-blok.ozhidanie CSS-правило (см. выше .stoit) стоит позже в
@@ -2542,6 +2553,31 @@ $("knopka-polnaya").onclick = async () => {
 
 // Клик всегда делает «правильную» вещь для того, что видно на экране:
 // выключено → включить, включено и свежо → выключить, включено но
+// устарело → включить заново (Vklyuchit перезаписывает путь).
+// Строка «Работать без подтверждений» показывается, только пока службы нет.
+// После установки её быть не должно вовсе: обратного действия у неё нет, а
+// строка, которая ничего не делает, читается как сломанная.
+function obnovitStrokuSluzhby(sost) {
+  const knopka = $("knopka-sluzhba");
+  if (!knopka) return;
+  knopka.hidden = !!sost.sluzhba_est;
+}
+
+$("knopka-sluzhba").onclick = async () => {
+  const podpis = $("podpis-sluzhba");
+  podpis.textContent = "Подтвердите в окне Windows…";
+  try {
+    const otvet = await api("sluzhba_postavit", {});
+    if (otvet && otvet.gotovo) {
+      podpis.textContent = "Готово, подтверждение больше не понадобится";
+    } else {
+      podpis.textContent = (otvet && otvet.pochemu) || "Не получилось";
+    }
+  } catch (e) {
+    podpis.textContent = "Не получилось";
+  }
+};
+
 // устарело → включить заново (Vklyuchit перезаписывает путь).
 $("perekl-avtozapusk").onclick = async () => {
   const perekl = $("perekl-avtozapusk");
