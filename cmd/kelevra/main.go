@@ -296,6 +296,28 @@ func adresKopii(papka, putZhurnala string, smenaPID int) (string, bool, itogSmen
 		return adres, true, itogOkna
 	}
 
+	// Служба Windows установлена — значит ядро и туннель держит она, а не мы.
+	// Своего служебного процесса тут быть не должно вовсе: два хозяина у одного
+	// туннеля означают борьбу за адаптер и за порт, а метка запуска — вещь одна
+	// на машину. Наше дело здесь скромное: убедиться, что служба поднята, и
+	// дождаться её метки.
+	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
+		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
+			log.Printf("служба Windows установлена, но стоит — поднимаю")
+			if err := vinsluzhba.Zapustit(); err != nil {
+				log.Printf("не поднять службу Windows: %v", err)
+			}
+		}
+		if adres, err := zhdatMetkuSluzhby(papka); err == nil {
+			log.Printf("работаю через службу Windows: %s", adres)
+			return adres, true, itogOkna
+		} else {
+			// Служба есть, но метки не дождались. Молча падать нельзя: без
+			// объяснения человек видит приложение, которое просто не
+			// открывается. Дальше пробуем по-старому, своим процессом.
+			log.Printf("служба Windows не отозвалась: %v, поднимаю свой процесс", err)
+		}
+	}
 	// Службы ещё нет: поднимаем её ОТДЕЛЬНЫМ отсоединённым процессом и ждём
 	// метку копии. Раньше это же место поднимало службу прямо тут, в процессе
 	// окна, — и служба умирала вместе с окном.
@@ -545,6 +567,23 @@ func podnyatSluzhbuOtdelno(papka string) (string, error) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return "", fmt.Errorf("не дождался метки службы за %s", srokPodnyatiyaSluzhby)
+}
+
+// zhdatMetkuSluzhby ждёт, пока служба Windows объявит свой адрес.
+//
+// Отдельно от podnyatSluzhbuOtdelno, хотя ожидание то же: там мы САМИ подняли
+// процесс и знаем, что он вот-вот отзовётся, а тут служба живёт своей жизнью и
+// могла подниматься ещё до входа человека в систему. Разные причины ждать —
+// разные сообщения об отказе, и по журналу видно, чего именно не дождались.
+func zhdatMetkuSluzhby(papka string) (string, error) {
+	predel := time.Now().Add(srokPodnyatiyaSluzhby)
+	for time.Now().Before(predel) {
+		if adres, est := kopiya.Nayti(papka); est {
+			return adres, nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return "", fmt.Errorf("служба Windows не оставила метку за %s", srokPodnyatiyaSluzhby)
 }
 
 
