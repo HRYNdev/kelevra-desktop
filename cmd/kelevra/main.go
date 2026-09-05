@@ -708,7 +708,23 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// выполняет свою основную функцию»): подсказка была константой и звучала
 	// одинаково в обоих режимах — см. cmd/kelevra/metka_zashchity.go.
 	s.MetkaZashchity = pometitZashchitu
-	s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
+	if sTreem {
+		s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
+	} else {
+		// Служба Windows перезапускает себя не сама. Новую копию порождать
+		// нельзя вовсе: она стартует обычным процессом, диспетчер служб про
+		// неё ничего не знает, и на машине оказываются два хозяина одного
+		// туннеля. Вместо этого служба завершается с отказом, а поднимает её
+		// заново диспетчер — самоподъём прописан при установке (vinsluzhba).
+		s.PerezapuskPosleObnovleniya = perezapustitSluzhbuPosleObnovleniya
+		// И уходит она с отказом, а не с нулём: диспетчер служб поднимает
+		// заново только то, что упало. Нулевой выход он считает штатной
+		// остановкой и оставляет службу лежать до перезагрузки.
+		s.ZadatVyhod(func() {
+			log.Printf("служба Windows: ухожу после обновления, диспетчер поднимет новую версию")
+			os.Exit(1)
+		})
+	}
 	// Тычок в пузырь трея зовёт этот же метод напрямую (trey_windows.go:
 	// tychokVPuzyr) — пакет trey про internal/sluzhba ничего не знает, тем же
 	// принципом, что и OblachkoObnovleniya выше.
