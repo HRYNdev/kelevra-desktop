@@ -23,7 +23,7 @@ func stroka() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("не понял, где лежу сам: %w", err)
 	}
-	return `"` + put + `" ` + Argument, nil
+	return `"` + put + `" ` + Nuzhnyy(sluzhbaEst()), nil
 }
 
 // Vklyuchen отвечает на вопрос «стартует ли Kelevra вместе с Windows».
@@ -102,4 +102,21 @@ func Vyklyuchit() error {
 		return fmt.Errorf("не убрать автозагрузку: %w", err)
 	}
 	return nil
+}
+
+// sluzhbaEst — установлена ли служба Windows. Пакет автозапуска про службы
+// ничего не знает, поэтому спрашивает системный реестр напрямую, а не тянет
+// зависимость: иначе получился бы круг, ведь установка службы сама правит
+// автозапуск.
+//
+// Ошибка чтения означает «не знаю» и трактуется как «службы нет»: старый
+// режим автозапуска работает всегда, а новый — только когда служба точно есть.
+func sluzhbaEst() bool {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\KelevraSluzhba`, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	k.Close()
+	return true
 }
