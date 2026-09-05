@@ -951,12 +951,38 @@
   .beda.vidno { display:block; }
   .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
   .beda.vnimanie { background:rgba(224,163,74,.09); border-color:rgba(224,163,74,.3); color:var(--zhdem); }
-  .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:3px; }
+  /* ШАПКА БЛОКА БЕДЫ: заголовок и «подробности» В ОДНОЙ СТРОКЕ.
+     До этой правки «подробности» были ПОСЛЕДНИМ элементом блока — своей
+     строкой под советом. Совет приходит от ядра, его длина вёрсткой не
+     выбирается, и кнопка вставала туда, куда её вытолкнет текст. На разборе
+     «Windows не дал создать сетевой адаптер» (совет в четыре строки) она
+     приземлилась ровно на нижнюю границу области прокрутки: 566.8..583.4 при
+     границе 576 — человеку видно 9.2px из 16.7px, половина кнопки, по которой
+     ему предлагают нажать (забор stend/oblik_obrezka_kadra.py).
+     Двигать пиксели тут бессмысленно: беда не в 15px переполнения, а в том,
+     что положение кнопки зависит от длины ЧУЖОГО текста. В шапке она стоит
+     на месте, посчитанном от начала блока, а начало блока держат элементы
+     постоянной высоты (круг, подсказка, две карточки) — сколько бы строк ни
+     занял совет, кнопка остаётся на первом кадре целиком.
+     ВЫСОТЫ ЭТО ПОЧТИ НЕ ЭКОНОМИТ, и врать тут не надо: блок теряет свою
+     последнюю строку с отбивкой (22.7px), но заголовок, ужатый кнопкой с
+     336px до 246px, переносится на вторую строку и забирает 19.6px обратно.
+     Итог замером на разборе «Windows не дал создать сетевой адаптер»: блок
+     133.7 → 130.6px, переполнение экрана 15 → 12px. Экран на этой сцене
+     по-прежнему прокручивается, и она по-прежнему в PROKRUTKA_ZAKONNA
+     (oblik_snimok.py) — длину совета выбирает ядро, а не вёрстка, и резать
+     его ради «влезло» значило бы прятать то, ради чего блок и заведён.
+     Чинится тут не переполнение, а зависимость положения кнопки от чужого
+     текста: сколько бы строк ни занял совет, кнопка остаётся там же.
+     min-width:0 у заголовка — чтобы длинный заголовок переносился внутри
+     своей доли строки, а не выдавливал кнопку за правый край. */
+  .beda-shapka { display:flex; align-items:baseline; gap:10px; margin-bottom:3px; }
+  .beda-zagolovok { font-weight:600; font-size:13.5px; min-width:0; }
   .beda-sovet { color:var(--tihiy); }
   .beda-podrobnosti {
-    display:block; margin-top:6px; padding:0; border:0; background:none;
+    margin-left:auto; flex:none; padding:0; border:0; background:none;
     color:var(--tihiy); font:inherit; font-size:11.5px; text-decoration:underline;
-    text-underline-offset:2px; cursor:pointer;
+    text-underline-offset:2px; cursor:pointer; white-space:nowrap;
   }
   .beda-syroe {
     margin-top:8px; font-family:ui-monospace, Consolas, monospace;
@@ -1653,9 +1679,18 @@ function pokazatBeduSvyazi(syroe, spokoyno) {
   knopka.textContent = "подробности";
   knopka.addEventListener("click", () => {
     syr.hidden = !syr.hidden;
-    knopka.textContent = syr.hidden ? "подробности" : "скрыть подробности";
+    // «скрыть», а не «скрыть подробности»: кнопка стоит в одной строке с
+    // заголовком (.beda-shapka), и слово вдвое длиннее переносило бы
+    // заголовок на вторую строку прямо под пальцем — экран дёргался бы от
+    // собственного нажатия.
+    knopka.textContent = syr.hidden ? "подробности" : "скрыть";
   });
-  uzel.append(zag, sovet, knopka, syr);
+  // Заголовок и «подробности» — одной строкой, кнопка справа. Почему не
+  // последней строкой блока, как было, — см. .beda-shapka в стилях.
+  const shapka = document.createElement("div");
+  shapka.className = "beda-shapka";
+  shapka.append(zag, knopka);
+  uzel.append(shapka, sovet, syr);
 }
 
 function pokazatBedu(uzel, tekst, spokoyno) {
