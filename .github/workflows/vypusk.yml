@@ -49,6 +49,15 @@ jobs:
           fi
           echo "teg=$TEG" >> "$GITHUB_OUTPUT"
           echo "versiya=$VERSIYA" >> "$GITHUB_OUTPUT"
+          # Версия с суффиксом (0.6.50-sluzhba) — выпуск предварительный.
+          # Обновление у людей такие пропускает намеренно (internal/obnovlenie:
+          # r.Prerelease), поэтому непроверенное живьём не уезжает всей семье
+          # само, а тот, кто взялся проверять, берёт его со страницы релизов,
+          # а не из вложений к сборке.
+          case "$VERSIYA" in
+            *-*) echo "predvaritelnyy=true" >> "$GITHUB_OUTPUT"; echo "выпуск предварительный" ;;
+            *)   echo "predvaritelnyy=false" >> "$GITHUB_OUTPUT" ;;
+          esac
           echo "выпускаю $VERSIYA по тегу $TEG"
 
       - name: Сборка под Windows
@@ -101,7 +110,7 @@ jobs:
           body_path: build/opisanie.md
           files: build/Kelevra.exe
           draft: true
-          prerelease: false
+          prerelease: ${{ steps.versiya.outputs.predvaritelnyy == 'true' }}
 
       # Публикуем только после того, как файл лёг и виден снаружи, и только
       # если скачанное посторонним совпало со сборкой по sha256.
