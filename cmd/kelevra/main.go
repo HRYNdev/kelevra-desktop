@@ -562,9 +562,8 @@ func postavitSluzhbuIUyti(putZhurnala string) {
 	if err := vinsluzhba.UstanovitPolnostyu(put); err != nil {
 		log.Printf("служба не установилась: %v", err)
 		skazat("Kelevra не смогла установить службу",
-			"Без неё туннель будет просить подтверждение при каждом входе в систему.
-
-"+err.Error())
+			"Без неё туннель будет просить подтверждение при каждом входе в систему."+
+				"\n\n"+err.Error())
 		os.Exit(1)
 	}
 	log.Printf("служба Windows установлена и запущена")
