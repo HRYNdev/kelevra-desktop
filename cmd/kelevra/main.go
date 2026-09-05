@@ -708,6 +708,16 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// выполняет свою основную функцию»): подсказка была константой и звучала
 	// одинаково в обоих режимах — см. cmd/kelevra/metka_zashchity.go.
 	s.MetkaZashchity = pometitZashchitu
+	// Кнопка «работать без подтверждений» в настройках. Просит права и ставит
+	// службу — единственное место, где приложение вообще заводит разговор об
+	// администраторе после того, как служба один раз установлена.
+	s.PostavitSluzhbuWindows = func() error {
+		return prava.PoprositDlya(argPostavitSluzhbu)
+	}
+	s.SluzhbaWindowsEst = func() bool {
+		est, _ := vinsluzhba.Ustanovlena()
+		return est
+	}
 	if sTreem {
 		s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
 	} else {

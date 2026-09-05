@@ -165,6 +165,15 @@ type Sluzhba struct {
 	// самого Postavit(), snимает вопрос совсем — его и передаём.
 	PerezapuskPosleObnovleniya func(put string, pid int) error
 
+	// PostavitSluzhbuWindows — попросить у человека права и поставить службу
+	// Windows. Хук, а не прямой вызов: решение о том, как именно просить права
+	// и что при этом запускать, живёт в cmd/kelevra, где известен режим запуска.
+	// nil означает «на этой системе службы нет» — ручка тогда честно откажет.
+	PostavitSluzhbuWindows func() error
+	// SluzhbaWindowsEst — установлена ли служба. Тоже хук: пакету незачем
+	// знать, как устроен диспетчер служб, ему нужен ответ да или нет.
+	SluzhbaWindowsEst func() bool
+
 	zamok      sync.Mutex
 	svedeniya  *podpiska.Svedeniya
 	klyuch     string
@@ -418,6 +427,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/polnaya_zashchita", s.polnayaZashchita)
 	m.HandleFunc(pref+"/api/avtozapusk", s.avtozapuskRuchka)
 	m.HandleFunc(pref+"/api/avtorezhim", s.avtorezhimRuchka)
+	m.HandleFunc(pref+"/api/sluzhba_postavit", s.sluzhbaPostavit)
 	m.HandleFunc(pref+"/api/uzly", s.uzly)
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
@@ -740,6 +750,29 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 }
 
 // ZadatVyhod меняет способ, которым копия уходит после того, как поставила
+// sluzhbaPostavit — ручка «работать без подтверждений».
+//
+// Отвечает сразу, не дожидаясь конца установки: дальше на экране человека
+// появляется окно администратора Windows, и держать в это время открытый
+// запрос незачем — новая копия ставит службу сама и уходит, а эта копия к
+// тому моменту может быть уже перезапущена диспетчером.
+func (s *Sluzhba) sluzhbaPostavit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "только POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.PostavitSluzhbuWindows == nil {
+		otdat(w, map[string]any{"gotovo": false, "pochemu": "на этой системе службы нет"}, nil)
+		return
+	}
+	if err := s.PostavitSluzhbuWindows(); err != nil {
+		log.Printf("установка службы не начата: %v", err)
+		otdat(w, map[string]any{"gotovo": false, "pochemu": err.Error()}, nil)
+		return
+	}
+	otdat(w, map[string]any{"gotovo": true}, nil)
+}
+
 // обновление или отдала права новой копии.
 //
 // По умолчанию это os.Exit(0) — обычному процессу больше ничего и не нужно.
@@ -1095,6 +1128,7 @@ type otvetSostoyaniya struct {
 	Zametka    string `json:"zametka,omitempty"`    // почему режим такой
 	MozhnoTun  bool   `json:"mozhno_tun,omitempty"` // туннель в профиле есть, а прав нет
 	Prava      bool   `json:"prava"`                // запущены ли мы администратором
+	SluzhbaEst bool   `json:"sluzhba_est"`          // установлена ли служба Windows: с ней подтверждение прав спрашивается один раз
 	// RuchnoyProksi — система отказалась настроить прокси сама, адрес придётся вписать руками.
 	RuchnoyProksi bool `json:"ruchnoy_proksi,omitempty"`
 	// Chastichnaya — защита ПОЛОВИННАЯ: ядро стоит системным прокси, и мимо
@@ -1390,6 +1424,9 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	// (zametkaAvtorezhima, oblik/index.html) и этой правки не касается.
 	o.Zametka, o.Chastichnaya, o.PochemuChastichnaya = obyomZashchity(o.Sost, k)
 	o.Prava = prava.Est()
+	if s.SluzhbaWindowsEst != nil {
+		o.SluzhbaEst = s.SluzhbaWindowsEst()
+	}
 	o.MozhnoTun = k.EstTunnel && !o.Prava
 	o.PravaUzheSprosheny = s.Nastroyki.UzheSprosiliPrava()
 	o.RuchnoyProksi = k.RuchnoyProksi
