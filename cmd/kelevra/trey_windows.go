@@ -21,15 +21,20 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
 )
 
 //go:embed znachok.ico
@@ -106,6 +111,11 @@ const (
 	idMenuOtkryt  = 1001
 	idMenuVyhod   = 1002
 	idMenuObnovit = 1003
+	// «Отключить туннель» — управление защитой прямо из значка. Появился
+	// вместе со службой Windows: раньше выход из значка гасил и туннель, а
+	// теперь это разные действия, и способ выключить защиту должен остаться
+	// на виду, не только в окне.
+	idMenuOtklyuchit = 1004
 
 	trayIconID = 1
 )
@@ -275,6 +285,9 @@ func zapustitTrey(vyhod chan<- struct{}) {
 			case idMenuObnovit:
 				log.Printf("трей: «Обновить» из меню")
 				go tychokVObnovlenie("пункт меню")
+			case idMenuOtklyuchit:
+				log.Printf("трей: «Отключить туннель» из меню")
+				go otklyuchitIzTreya()
 			case idMenuOtkryt:
 				otkrytOknoIzTreya()
 			case idMenuVyhod:
@@ -679,6 +692,9 @@ func pokazatMenuTreya(hwnd syscall.Handle) {
 
 	otkr, _ := syscall.UTF16PtrFromString("Открыть")
 	vyh, _ := syscall.UTF16PtrFromString("Выход")
+	otkl, _ := syscall.UTF16PtrFromString("Отключить туннель")
+	procAppendMenuW.Call(hMenu, mfString, uintptr(idMenuOtklyuchit), uintptr(unsafe.Pointer(otkl)))
+	procAppendMenuW.Call(hMenu, mfSeparator, 0, 0)
 	procAppendMenuW.Call(hMenu, mfString, uintptr(idMenuOtkryt), uintptr(unsafe.Pointer(otkr)))
 	procAppendMenuW.Call(hMenu, mfString, uintptr(idMenuVyhod), uintptr(unsafe.Pointer(vyh)))
 
@@ -713,4 +729,30 @@ func otkrytOknoIzTreya() {
 		log.Printf("трей: «Открыть» не отпустил процесс: %v", err)
 	}
 	log.Printf("трей: «Открыть» запустил отдельную копию без аргументов")
+}
+
+// otklyuchitIzTreya — «Отключить туннель» из меню значка.
+//
+// Раньше выключить защиту можно было только из окна или выходом из значка,
+// который заодно гасил и всё приложение. Со службой Windows это перестало
+// годиться: выход из значка защиту больше не снимает, а значит способ снять
+// её вручную обязан остаться на виду — иначе человек с плохо работающим
+// туннелем остаётся без выключателя.
+//
+// Служба ищется той же меткой, что и везде (internal/kopiya): отдельного
+// знания о ней у значка нет и заводить его незачем.
+func otklyuchitIzTreya() {
+	adres, est := kopiya.Nayti(hranenie.Papka())
+	if !est {
+		log.Printf("трей: службы не нашёл, отключать нечего")
+		return
+	}
+	klient := &http.Client{Timeout: 10 * time.Second}
+	otvet, err := klient.Post(strings.TrimSuffix(adres, "/")+"/api/otklyuchit", "application/json", nil)
+	if err != nil {
+		log.Printf("трей: отключение не дошло до службы: %v", err)
+		return
+	}
+	defer otvet.Body.Close()
+	log.Printf("трей: служба ответила на отключение: %s", otvet.Status)
 }
