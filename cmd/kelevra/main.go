@@ -22,6 +22,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
 	"github.com/HRYNdev/kelevra-desktop/internal/sluzhba"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
+	"github.com/HRYNdev/kelevra-desktop/internal/vinsluzhba"
 )
 
 // argSluzhba/argTiho — режимы запуска этого же .exe (см. шапку файла).
@@ -89,6 +90,24 @@ func main() {
 	// след, поднятая им следом служба не найдёт уже ничего и промолчит.
 	// Живая чужая копия защищена внутри — её след не трогаем (см. tunnel.UbratOsirotevshiy).
 	snyatOsirotevshiySledTunnelya(papka)
+
+	// Нас запустил диспетчер служб Windows — это отдельный режим, и узнаётся
+	// он у системы, а не по аргументу: аргумент подставляет она сама, но при
+	// ручном запуске с тем же аргументом службы вокруг нас нет, и svc.Run
+	// повис бы, не дождавшись диспетчера.
+	//
+	// Стоит ВЫШЕ обычной служебной ветки и сразу после уборки следа туннеля:
+	// уборка нужна и здесь (после жёсткого выключения компьютера служба
+	// поднимется первой и до окна), а вот всё оконное ниже — уже нет.
+	if vinsluzhba.PodSluzhboy() {
+		log.Printf("запущены диспетчером служб Windows")
+		if err := vinsluzhba.Krutit(func(ctx context.Context) {
+			rabotaSluzhbyWindows(ctx, papka, putZhurnala)
+		}); err != nil {
+			log.Printf("служба Windows не встала: %v", err)
+		}
+		return
+	}
 
 	if rezhimSluzhby {
 		zapustitSluzhbu(papka, putZhurnala)
@@ -526,6 +545,26 @@ func podnyatSluzhbuOtdelno(papka string) (string, error) {
 // снимал бы прокси, который поставил не он, и делал бы это на закрытии
 // крестиком, что и было исходной бедой.
 func zapustitSluzhbu(papka, putZhurnala string) {
+	// Обычный служебный процесс: живёт в сеансе человека, показывает значок
+	// в трее и сам снимает системный прокси за собой.
+	rabotaSluzhby(context.Background(), papka, putZhurnala, true)
+}
+
+// rabotaSluzhbyWindows — то же самое, но под диспетчером служб Windows.
+//
+// Отличий ровно два, и оба вынужденные. Значка в трее нет: у службы нет
+// интерактивного сеанса, показывать его некому и негде. Системный прокси не
+// снимается: он лежит в ветке реестра ПОЛЬЗОВАТЕЛЯ, а служба работает под
+// системной учётной записью и попала бы в чужой профиль — ставит и снимает
+// его оконная часть, она же и убирает осиротевший след.
+func rabotaSluzhbyWindows(ctx context.Context, papka, putZhurnala string) {
+	rabotaSluzhby(ctx, papka, putZhurnala, false)
+}
+
+// rabotaSluzhby — общее тело обоих режимов. vneshniy отменяется, когда работу
+// пора сворачивать: у службы Windows это команда диспетчера, у обычного
+// процесса он бессрочный, и остановку приносит сигнал или «Выход» из трея.
+func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem bool) {
 	s, err := sluzhba.Novaya()
 	if err != nil {
 		umeret(putZhurnala, "Kelevra не смогла подготовить свои файлы", err)
@@ -561,7 +600,7 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	}
 	defer kopiya.Osvobodit(papka)
 
-	ctx, otmena := context.WithCancel(context.Background())
+	ctx, otmena := context.WithCancel(vneshniy)
 	defer otmena()
 	go s.ObnovlyatProfil(ctx)
 	// Копия, которую человек не закрывал днями, никогда больше не проходит
@@ -596,23 +635,36 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	// понять это и выключить нечем). Своя горутина со своим recover: отказ
 	// трея (включая Windows без explorer.exe, как на моём стенде под wine)
 	// не имеет права уронить службу с прокси.
-	vyhodIzTreya := make(chan struct{}, 1)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("трей: авария в потоке значка, продолжаю без него: %v\n%s", r, debug.Stack())
-			}
+	if sTreem {
+		vyhodIzTreya := make(chan struct{}, 1)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("трей: авария в потоке значка, продолжаю без него: %v\n%s", r, debug.Stack())
+				}
+			}()
+			zapustitTrey(vyhodIzTreya)
 		}()
-		zapustitTrey(vyhodIzTreya)
-	}()
 
-	zhdatSignal(vyhodIzTreya)
+		zhdatSignal(vyhodIzTreya)
+	} else {
+		// Служба Windows: остановку приносит диспетчер служб отменой контекста.
+		// Сигналы сюда не доходят вовсе, а значка в трее нет по устройству:
+		// интерактивного сеанса у службы не бывает.
+		<-vneshniy.Done()
+		log.Printf("служба Windows: диспетчер попросил остановиться")
+	}
 
 	_ = s.Yadro.Ostanovit()
-	// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
-	// Без этой строки после закрытия приложения у человека перестают
-	// открываться сайты (жалоба 20.08).
-	proksi.Snyat()
+	if sTreem {
+		// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
+		// Без этой строки после закрытия приложения у человека перестают
+		// открываться сайты (жалоба 20.08).
+		proksi.Snyat()
+		// В службе Windows этой строки нет намеренно: системный прокси лежит
+		// в ветке реестра ПОЛЬЗОВАТЕЛЯ, и снимать его из-под системной учётной
+		// записи значит промахнуться мимо профиля человека.
+	}
 	// След туннеля — той же природы: ядро ушло, адаптер вместе с ним, и
 	// следующий запуск не должен искать то, чего мы сами штатно убрали.
 	tunnel.UbratMetku()
