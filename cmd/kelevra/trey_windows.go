@@ -647,6 +647,26 @@ func snyatZnachokTreya(hwnd syscall.Handle) {
 	log.Printf("трей: Shell_NotifyIconW(NIM_DELETE) -> %v", r != 0)
 }
 
+// ubratZnachokPriZavershenii — обёртка без hwnd для пути завершения по
+// сигналу (zhdatSignal в main.go, который trey_windows.go напрямую не
+// вызывает: hwnd там приватный, берём его сами тем же приёмом, что и
+// obnovitPodskazkuTreya). Без этого вызова человек уходит из системы,
+// служба гаснет службой Windows, обновлением или диспетчером задач — а
+// значок с подсказкой «...работает» остаётся висеть в трее и лжёт, что
+// защита ещё жива. Путь «Выход» из меню уже снимает значок сам
+// (idMenuVyhod выше) — второй вызов сюда по тому же hwnd безвреден,
+// NIM_DELETE по уже снятому значку ничего не ломает; на hwnd==0 (трей ещё
+// не поднялся или уже погас) не идём в syscall вовсе.
+func ubratZnachokPriZavershenii() {
+	treyZamok.Lock()
+	hwnd := treyHwnd
+	treyZamok.Unlock()
+	if hwnd == 0 {
+		return
+	}
+	snyatZnachokTreya(hwnd)
+}
+
 func kopirovatStrokuUTF16(dst []uint16, s string) {
 	u := syscall.StringToUTF16(s)
 	n := copy(dst, u)
