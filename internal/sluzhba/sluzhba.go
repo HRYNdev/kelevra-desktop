@@ -770,6 +770,14 @@ func (s *Sluzhba) sluzhbaPostavit(w http.ResponseWriter, r *http.Request) {
 		otdat(w, map[string]any{"gotovo": false, "pochemu": err.Error()}, nil)
 		return
 	}
+	// vinsluzhba.Ustanovit запускает службу сразу по завершении регистрации —
+	// с этой секунды туннель поднимает ОНА. Эта, уже работающая копия обязана
+	// погасить своё ядро, иначе на машине останутся два хозяина одного
+	// адаптера (беда 25.08 тем же кодом лечится на polnayaZashchita и
+	// установке обновления — см. uydiPosleSoglasiyaNaPrava и Yadro.Ostanovit
+	// в obnovleniePostavit). Сам процесс не уходит: в отличие от тех путей,
+	// его никто не подменяет новой копией — окно и трей должны жить дальше.
+	_ = s.Yadro.Ostanovit()
 	otdat(w, map[string]any{"gotovo": true}, nil)
 }
 
