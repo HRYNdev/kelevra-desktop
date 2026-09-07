@@ -34,3 +34,11 @@ func pokazatOblachkoObnovleniya(versiya string) {
 func obnovitPodskazkuTreya() {
 	log.Printf("трей (не-Windows заглушка): подсказка значка -> %q", podskazkaTreya())
 }
+
+// ubratZnachokPriZavershenii вне Windows снимать нечего — значка нет вовсе
+// (см. zapustitTrey выше). Строка в журнале нужна по той же причине, что и
+// у соседей в этом файле: живой стенд проверяет след в журнале там, где
+// настоящей отрисовки/уборки значка на этой платформе быть не может.
+func ubratZnachokPriZavershenii() {
+	log.Printf("трей (не-Windows заглушка): значок снимать нечего")
+}
