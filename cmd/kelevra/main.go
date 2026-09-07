@@ -608,6 +608,13 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 
 	zhdatSignal(vyhodIzTreya)
 
+	// Значок обязан исчезнуть ДО того, как гаснет ядро: путь «Выход» из
+	// меню трея снимает его сам (trey_windows.go), но этот путь —
+	// остановка службы Windows, обновление, диспетчер задач — до сих пор
+	// проходил мимо, и человек видел «Kelevra: ...работает» над мёртвой
+	// защитой (см. ubratZnachokPriZavershenii в trey_windows.go/other.go).
+	ubratZnachokPriZavershenii()
+
 	_ = s.Yadro.Ostanovit()
 	// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
 	// Без этой строки после закрытия приложения у человека перестают
