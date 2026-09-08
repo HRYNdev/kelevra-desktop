@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -83,6 +84,10 @@ type DnsZond struct {
 	Nuzhno          int
 	KontrolnyyDomen string // "" — берётся KontrolnyyDomenPoUmolchaniyu
 	Taimaut         time.Duration
+
+	// otchet — что зонд увидел в последний заход, для журнала (см. OtchetZonda).
+	zamok  sync.Mutex
+	otchet OtchetZonda
 }
 
 // rezolverPryamoy собирает *net.Resolver, который спрашивает не системный
@@ -142,15 +147,49 @@ func NovyyDnsZond() *DnsZond {
 // всегда настоящий) — это тотальный перехватчик (публичный Wi-Fi), а не
 // выборочный домашний обход. Молчание контрольного домена, как и молчание
 // остальных, ни за, ни против не считается.
+// OtchetZonda — что зонд увидел за один заход, словами для журнала.
+//
+// Заведён 09.09 по разбору живой беды: у человека вне дома авторежим через
+// две секунды после подъёма туннеля объявлял «дома» и гасил защиту, а в
+// журнале от всего захода была одна строка — сколько миллисекунд занял
+// DNS-подэтап. Ни кого спрашивали, ни что ответили, ни почему вышло «дома»,
+// узнать было нельзя, и разбор упирался в догадки.
+type OtchetZonda struct {
+	Rezolver   string   // кого спрашивали: адрес резолвера или «системный»
+	Cherez     string   // с какого локального адреса, если привязывались
+	Otvetili   int      // сколько контрольных доменов вообще ответили
+	Podmen     int      // на скольких из них увидели подменный адрес
+	Kontrolnyy string   // что ответил контрольный домен: настоящий/подменён/молчит
+	Otvety     []string // домен=адрес, как есть
+}
+
+// Otchet — отчёт последнего захода зонда.
+func (z *DnsZond) Otchet() OtchetZonda {
+	z.zamok.Lock()
+	defer z.zamok.Unlock()
+	return z.otchet
+}
+
+func (z *DnsZond) zapomnit(o OtchetZonda) {
+	z.zamok.Lock()
+	z.otchet = o
+	z.zamok.Unlock()
+}
+
 func (z *DnsZond) DomaPoDns(ctx context.Context) (bool, error) {
+	otchet := OtchetZonda{Rezolver: "системный", Cherez: z.LokalnyAdres}
 	r := z.Resolver
 	if r == nil {
 		if z.AdresResolvera != "" {
 			r = rezolverPryamoy(z.AdresResolvera, z.LokalnyAdres)
+			otchet.Rezolver = z.AdresResolvera
 		} else {
 			r = net.DefaultResolver
 		}
+	} else if z.AdresResolvera != "" {
+		otchet.Rezolver = z.AdresResolvera
 	}
+	defer func() { z.zapomnit(otchet) }()
 	taimaut := z.Taimaut
 	if taimaut <= 0 {
 		taimaut = 3 * time.Second
@@ -176,9 +215,11 @@ func (z *DnsZond) DomaPoDns(ctx context.Context) (bool, error) {
 	for _, host := range domeny {
 		ips, err := r.LookupIP(cctx, "ip4", host)
 		if err != nil || len(ips) == 0 {
+			otchet.Otvety = append(otchet.Otvety, host+"=молчит")
 			continue // молчание — не довод ни за, ни против
 		}
 		otvetili++
+		otchet.Otvety = append(otchet.Otvety, host+"="+ips[0].String())
 		for _, ip := range ips {
 			if fakeIP(ip) {
 				hits++
@@ -186,14 +227,19 @@ func (z *DnsZond) DomaPoDns(ctx context.Context) (bool, error) {
 			}
 		}
 	}
+	otchet.Otvetili, otchet.Podmen = otvetili, hits
 	if otvetili == 0 {
+		otchet.Kontrolnyy = "не спрашивали"
 		return false, fmt.Errorf("резолвер не ответил ни на один из %d доменов", len(domeny))
 	}
 
+	otchet.Kontrolnyy = "молчит"
 	kontrolnyyIps, err := r.LookupIP(cctx, "ip4", kontrolnyy)
 	if err == nil && len(kontrolnyyIps) > 0 {
+		otchet.Kontrolnyy = "настоящий " + kontrolnyyIps[0].String()
 		for _, ip := range kontrolnyyIps {
 			if fakeIP(ip) {
+				otchet.Kontrolnyy = "подменён " + ip.String()
 				return false, nil // контрольный домен тоже подменён — это перехватчик, не дом
 			}
 		}
