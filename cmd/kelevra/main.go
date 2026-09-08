@@ -816,6 +816,13 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 		log.Printf("служба Windows: диспетчер попросил остановиться")
 	}
 
+	// Значок обязан исчезнуть ДО того, как гаснет ядро: путь «Выход» из
+	// меню трея снимает его сам (trey_windows.go), но этот путь —
+	// остановка службы Windows, обновление, диспетчер задач — до сих пор
+	// проходил мимо, и человек видел «Kelevra: ...работает» над мёртвой
+	// защитой (см. ubratZnachokPriZavershenii в trey_windows.go/other.go).
+	ubratZnachokPriZavershenii()
+
 	_ = s.Yadro.Ostanovit()
 	if sTreem {
 		// Ядро гасится жёстко и откатить системный прокси за собой не успевает.

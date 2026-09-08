@@ -11,7 +11,8 @@
 # (fakeip 198.18.0.0/15), поэтому dns_zond.go спрашивал не роутер, а себя —
 # avtorezhim.go костылём (TunnelPodnyat) в этом режиме просто НАВСЕГДА
 # выключал зонды: «дома» не определить никогда, пока поднят туннель. Живой
-# замер этой машины (192.168.1.77) через домашний резолвер 192.168.1.192:
+# замер этой машины (адрес — переменная ZOND_HOST) через домашний резолвер
+# (адрес — переменная ZOND_RESOLVER):
 #   youtube.com   -> 198.18.3.10   (подмена)
 #   discord.com   -> 198.18.9.93   (подмена)
 #   rutracker.org -> 198.18.2.210  (подмена)
@@ -22,7 +23,7 @@
 # снимает ZondSlep, если этот адрес узнан и приватен.
 #
 # Сценарии:
-#   A. зелёный — DnsZond с AdresResolvera=192.168.1.192:53 (домашний
+#   A. зелёный — DnsZond с AdresResolvera=ZOND_RESOLVER:53 (домашний
 #      резолвер) — признак дома (3 из 3, порог 2).
 #   B. красный (ожидаемо) — тот же зонд, но AdresResolvera=1.1.1.1:53
 #      (чужой публичный резолвер, реальные адреса без подмены) — признака
@@ -45,7 +46,12 @@ export PATH="$PATH:/usr/local/go/bin"
 export HOME=${HOME:-/root}
 export GOCACHE=${GOCACHE:-/tmp/gocache}
 
-DOMASHNIY_RESOLVER="192.168.1.192:53"
+# Реальные адреса домашней сети задаются переменными окружения
+# ZOND_RESOLVER (домашний DNS-резолвер) и ZOND_HOST (адрес этой машины
+# в домашней сети); значения ниже — нейтральные заглушки по умолчанию.
+ZOND_RESOLVER="${ZOND_RESOLVER:-192.168.1.1}"
+ZOND_HOST="${ZOND_HOST:-127.0.0.1}"
+DOMASHNIY_RESOLVER="${ZOND_RESOLVER}:53"
 CHUZHOY_RESOLVER="1.1.1.1:53"
 STEND="$KOREN/.stend/zond_doma"
 ZAMER="$STEND/zamer_zond"
@@ -61,7 +67,7 @@ fi
 
 echo
 echo "── A. зелёный ожидается: DnsZond через домашний резолвер $DOMASHNIY_RESOLVER ──"
-VYVOD_A=$("$ZAMER" -rezhim=dns -resolver="$DOMASHNIY_RESOLVER" -lokalny=192.168.1.77 -taimaut=6s 2>&1)
+VYVOD_A=$("$ZAMER" -rezhim=dns -resolver="$DOMASHNIY_RESOLVER" -lokalny="$ZOND_HOST" -taimaut=6s 2>&1)
 echo "  $VYVOD_A"
 if ! echo "$VYVOD_A" | grep -q "doma=true"; then
   echo "  КРАСНЫЙ: домашний резолвер обязан дать признак дома (3 из 3 подменных) — не дал"
@@ -72,7 +78,7 @@ fi
 
 echo
 echo "── B. красный ожидается (контроль): тот же зонд через чужой резолвер $CHUZHOY_RESOLVER ──"
-VYVOD_B=$("$ZAMER" -rezhim=dns -resolver="$CHUZHOY_RESOLVER" -lokalny=192.168.1.77 -taimaut=6s 2>&1)
+VYVOD_B=$("$ZAMER" -rezhim=dns -resolver="$CHUZHOY_RESOLVER" -lokalny="$ZOND_HOST" -taimaut=6s 2>&1)
 echo "  $VYVOD_B"
 if echo "$VYVOD_B" | grep -q "doma=true"; then
   echo "  КРАСНЫЙ: чужой публичный резолвер дал признак дома — зонд залип на одном цвете, замер недостоверен"
