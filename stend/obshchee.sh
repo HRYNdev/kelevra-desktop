@@ -59,6 +59,17 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ]; then
   mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
 fi
 
+# ploshchadka_ne_tyanet <zhurnal> — истина, если в журнале лежит строка
+# документированного лимита wine (см. шапку stend/windows.sh, коммит
+# 3ccefef): wine не отдаёт ядру список сетевых адаптеров
+# («getadaptersaddresses: Invalid data»), ядро решает, что интернета нет, и
+# любое подключение с этого места падает — не из-за брака продукта, а из-за
+# того, ЧЕМ проверяем. Одна общая функция, а не копия проверки в каждом
+# стенде: тот же лимит бьёт и в prava_avtozapros.sh, и в proksi.sh.
+ploshchadka_ne_tyanet() {
+  grep -q 'getadaptersaddresses: Invalid data' "$1" 2>/dev/null
+}
+
 wine_zapusti() {
   local log=$1 zhurnal=$2 stroka=$3 taimaut=$4
   shift 4
