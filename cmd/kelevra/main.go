@@ -22,6 +22,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
 	"github.com/HRYNdev/kelevra-desktop/internal/sluzhba"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
+	"github.com/HRYNdev/kelevra-desktop/internal/vinsluzhba"
 )
 
 // argSluzhba/argTiho — режимы запуска этого же .exe (см. шапку файла).
@@ -38,6 +39,14 @@ const (
 	argTiho      = "--tiho"
 	argSmena     = "--smena"
 	argPriStarte = "--pri-starte"
+	// Установка службы Windows: единственное действие, ради которого
+	// приложение просит администратора, и просит один раз за установку.
+	argPostavitSluzhbu = "--postavit-sluzhbu"
+	// Значок в трее без окна. Нужен вместе со службой Windows: она держит
+	// туннель, но показать значок из неё нельзя — у службы нет сеанса, в
+	// котором есть панель задач. Поэтому значок живёт отдельным лёгким
+	// процессом в сеансе человека, и автозапуск ставит именно его.
+	argTrey = "--trey"
 )
 
 // srokOzhidaniyaSmeny — сколько новая, уже повышенная копия ждёт смерти
@@ -70,6 +79,23 @@ func main() {
 	//
 	// KELEVRA_BEZ_OKNA=1 — синоним --sluzhba: на нём стоит мой стенд
 	// (stend/windows.sh) и разбор беды у человека, менять эту переменную нельзя.
+	// нельзя.
+
+	// --trey: только значок в трее, без окна и без своего ядра. Так стартует
+	// автозапуск, когда туннель держит служба Windows.
+	if estArg(argTrey) {
+		zhitZnachkom(papka, putZhurnala)
+		return
+	}
+
+	// --postavit-sluzhbu: эта копия поднята через UAC ровно ради одного дела —
+	// завести общую папку, перенести данные и зарегистрировать службу. Сделала
+	// и ушла; ни окна, ни ядра, ни трея тут не бывает.
+	if estArg(argPostavitSluzhbu) {
+		postavitSluzhbuIUyti(putZhurnala)
+		return
+	}
+
 	rezhimSluzhby := os.Getenv("KELEVRA_BEZ_OKNA") == "1" || estArg(argSluzhba)
 	defer lovitPaniku(putZhurnala, rezhimSluzhby)
 	log.Printf("--- запуск Kelevra %s (%s/%s), данные: %s", podpiska.Versiya, runtime.GOOS, runtime.GOARCH, papka)
@@ -89,6 +115,24 @@ func main() {
 	// след, поднятая им следом служба не найдёт уже ничего и промолчит.
 	// Живая чужая копия защищена внутри — её след не трогаем (см. tunnel.UbratOsirotevshiy).
 	snyatOsirotevshiySledTunnelya(papka)
+
+	// Нас запустил диспетчер служб Windows — это отдельный режим, и узнаётся
+	// он у системы, а не по аргументу: аргумент подставляет она сама, но при
+	// ручном запуске с тем же аргументом службы вокруг нас нет, и svc.Run
+	// повис бы, не дождавшись диспетчера.
+	//
+	// Стоит ВЫШЕ обычной служебной ветки и сразу после уборки следа туннеля:
+	// уборка нужна и здесь (после жёсткого выключения компьютера служба
+	// поднимется первой и до окна), а вот всё оконное ниже — уже нет.
+	if vinsluzhba.PodSluzhboy() {
+		log.Printf("запущены диспетчером служб Windows")
+		if err := vinsluzhba.Krutit(func(ctx context.Context) {
+			rabotaSluzhbyWindows(ctx, papka, putZhurnala)
+		}); err != nil {
+			log.Printf("служба Windows не встала: %v", err)
+		}
+		return
+	}
 
 	if rezhimSluzhby {
 		zapustitSluzhbu(papka, putZhurnala)
@@ -266,6 +310,28 @@ func adresKopii(papka, putZhurnala string, smenaPID int) (string, bool, itogSmen
 		return adres, true, itogOkna
 	}
 
+	// Служба Windows установлена — значит ядро и туннель держит она, а не мы.
+	// Своего служебного процесса тут быть не должно вовсе: два хозяина у одного
+	// туннеля означают борьбу за адаптер и за порт, а метка запуска — вещь одна
+	// на машину. Наше дело здесь скромное: убедиться, что служба поднята, и
+	// дождаться её метки.
+	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
+		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
+			log.Printf("служба Windows установлена, но стоит — поднимаю")
+			if err := vinsluzhba.Zapustit(); err != nil {
+				log.Printf("не поднять службу Windows: %v", err)
+			}
+		}
+		if adres, err := zhdatMetkuSluzhby(papka); err == nil {
+			log.Printf("работаю через службу Windows: %s", adres)
+			return adres, true, itogOkna
+		} else {
+			// Служба есть, но метки не дождались. Молча падать нельзя: без
+			// объяснения человек видит приложение, которое просто не
+			// открывается. Дальше пробуем по-старому, своим процессом.
+			log.Printf("служба Windows не отозвалась: %v, поднимаю свой процесс", err)
+		}
+	}
 	// Службы ещё нет: поднимаем её ОТДЕЛЬНЫМ отсоединённым процессом и ждём
 	// метку копии. Раньше это же место поднимало службу прямо тут, в процессе
 	// окна, — и служба умирала вместе с окном.
@@ -517,6 +583,87 @@ func podnyatSluzhbuOtdelno(papka string) (string, error) {
 	return "", fmt.Errorf("не дождался метки службы за %s", srokPodnyatiyaSluzhby)
 }
 
+// zhitZnachkom — режим --trey: только значок в панели задач, без окна и без
+// своего ядра.
+//
+// Зачем отдельный процесс. Туннель держит служба Windows, но значок из неё не
+// показать: у службы нет сеанса, в котором есть панель задач. Раньше значок
+// жил в служебном процессе, и это работало ровно потому, что тот процесс был
+// в сеансе человека — со службой такое кончилось.
+//
+// Чего этот режим НЕ делает, и это главное: он не гасит туннель при выходе.
+// Выход из значка убирает значок, а не снимает защиту со всей семьи. Отключить
+// туннель можно кнопкой в окне или пунктом «Отключить» в самом значке.
+func zhitZnachkom(papka, putZhurnala string) {
+	log.Printf("режим значка: туннель держит служба, значок держим мы")
+	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
+		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
+			if err := vinsluzhba.Zapustit(); err != nil {
+				log.Printf("не поднять службу Windows: %v", err)
+			}
+		}
+	}
+	// Адрес службы значку нужен, чтобы показывать состояние и открывать окно.
+	// Не дождались — значок всё равно ставим: без него человек не поймёт, что
+	// приложение вообще запущено, и полезет запускать второе.
+	if adres, err := zhdatMetkuSluzhby(papka); err == nil {
+		log.Printf("значок работает через службу: %s", adres)
+	} else {
+		log.Printf("значок без службы: %v", err)
+	}
+
+	vyhod := make(chan struct{}, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("трей: авария в потоке значка: %v\n%s", r, debug.Stack())
+			}
+		}()
+		zapustitTrey(vyhod)
+	}()
+	zhdatSignal(vyhod)
+	log.Printf("режим значка: выход. Туннель остаётся у службы, снимать его не наше дело")
+}
+
+// zhdatMetkuSluzhby ждёт, пока служба Windows объявит свой адрес.
+//
+// Отдельно от podnyatSluzhbuOtdelno, хотя ожидание то же: там мы САМИ подняли
+// процесс и знаем, что он вот-вот отзовётся, а тут служба живёт своей жизнью и
+// могла подниматься ещё до входа человека в систему. Разные причины ждать —
+// разные сообщения об отказе, и по журналу видно, чего именно не дождались.
+func zhdatMetkuSluzhby(papka string) (string, error) {
+	predel := time.Now().Add(srokPodnyatiyaSluzhby)
+	for time.Now().Before(predel) {
+		if adres, est := kopiya.Nayti(papka); est {
+			return adres, nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return "", fmt.Errorf("служба Windows не оставила метку за %s", srokPodnyatiyaSluzhby)
+}
+
+
+// postavitSluzhbuIUyti — тело режима --postavit-sluzhbu.
+//
+// Отдельной функцией, а не строчкой в main: у неё своя ответственность и свой
+// разговор с человеком. Отказ здесь не молчит — иначе человек нажал кнопку,
+// увидел окно администратора, согласился, и ничего не произошло.
+func postavitSluzhbuIUyti(putZhurnala string) {
+	put, err := os.Executable()
+	if err != nil {
+		umeret(putZhurnala, "Kelevra не поняла, где лежит сама", err)
+	}
+	log.Printf("ставлю службу Windows из %s", put)
+	if err := vinsluzhba.UstanovitPolnostyu(put); err != nil {
+		log.Printf("служба не установилась: %v", err)
+		skazat("Kelevra не смогла установить службу",
+			"Без неё туннель будет просить подтверждение при каждом входе в систему."+
+				"\n\n"+err.Error())
+		os.Exit(1)
+	}
+	log.Printf("служба Windows установлена и запущена")
+}
+
 // zapustitSluzhbu — режим --sluzhba (и его синоним KELEVRA_BEZ_OKNA=1):
 // ядро, HTTP-служба и ожидание сигнала остановки, без окна и без проверки
 // обновлений (её уже сделала копия, которая эту службу подняла).
@@ -526,6 +673,26 @@ func podnyatSluzhbuOtdelno(papka string) (string, error) {
 // снимал бы прокси, который поставил не он, и делал бы это на закрытии
 // крестиком, что и было исходной бедой.
 func zapustitSluzhbu(papka, putZhurnala string) {
+	// Обычный служебный процесс: живёт в сеансе человека, показывает значок
+	// в трее и сам снимает системный прокси за собой.
+	rabotaSluzhby(context.Background(), papka, putZhurnala, true)
+}
+
+// rabotaSluzhbyWindows — то же самое, но под диспетчером служб Windows.
+//
+// Отличий ровно два, и оба вынужденные. Значка в трее нет: у службы нет
+// интерактивного сеанса, показывать его некому и негде. Системный прокси не
+// снимается: он лежит в ветке реестра ПОЛЬЗОВАТЕЛЯ, а служба работает под
+// системной учётной записью и попала бы в чужой профиль — ставит и снимает
+// его оконная часть, она же и убирает осиротевший след.
+func rabotaSluzhbyWindows(ctx context.Context, papka, putZhurnala string) {
+	rabotaSluzhby(ctx, papka, putZhurnala, false)
+}
+
+// rabotaSluzhby — общее тело обоих режимов. vneshniy отменяется, когда работу
+// пора сворачивать: у службы Windows это команда диспетчера, у обычного
+// процесса он бессрочный, и остановку приносит сигнал или «Выход» из трея.
+func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem bool) {
 	s, err := sluzhba.Novaya()
 	if err != nil {
 		umeret(putZhurnala, "Kelevra не смогла подготовить свои файлы", err)
@@ -541,7 +708,33 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	// выполняет свою основную функцию»): подсказка была константой и звучала
 	// одинаково в обоих режимах — см. cmd/kelevra/metka_zashchity.go.
 	s.MetkaZashchity = pometitZashchitu
-	s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
+	// Кнопка «работать без подтверждений» в настройках. Просит права и ставит
+	// службу — единственное место, где приложение вообще заводит разговор об
+	// администраторе после того, как служба один раз установлена.
+	s.PostavitSluzhbuWindows = func() error {
+		return prava.PoprositDlya(argPostavitSluzhbu)
+	}
+	s.SluzhbaWindowsEst = func() bool {
+		est, _ := vinsluzhba.Ustanovlena()
+		return est
+	}
+	if sTreem {
+		s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
+	} else {
+		// Служба Windows перезапускает себя не сама. Новую копию порождать
+		// нельзя вовсе: она стартует обычным процессом, диспетчер служб про
+		// неё ничего не знает, и на машине оказываются два хозяина одного
+		// туннеля. Вместо этого служба завершается с отказом, а поднимает её
+		// заново диспетчер — самоподъём прописан при установке (vinsluzhba).
+		s.PerezapuskPosleObnovleniya = perezapustitSluzhbuPosleObnovleniya
+		// И уходит она с отказом, а не с нулём: диспетчер служб поднимает
+		// заново только то, что упало. Нулевой выход он считает штатной
+		// остановкой и оставляет службу лежать до перезагрузки.
+		s.ZadatVyhod(func() {
+			log.Printf("служба Windows: ухожу после обновления, диспетчер поднимет новую версию")
+			os.Exit(1)
+		})
+	}
 	// Тычок в пузырь трея зовёт этот же метод напрямую (trey_windows.go:
 	// tychokVPuzyr) — пакет trey про internal/sluzhba ничего не знает, тем же
 	// принципом, что и OblachkoObnovleniya выше.
@@ -561,7 +754,7 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	}
 	defer kopiya.Osvobodit(papka)
 
-	ctx, otmena := context.WithCancel(context.Background())
+	ctx, otmena := context.WithCancel(vneshniy)
 	defer otmena()
 	go s.ObnovlyatProfil(ctx)
 	// Копия, которую человек не закрывал днями, никогда больше не проходит
@@ -596,23 +789,36 @@ func zapustitSluzhbu(papka, putZhurnala string) {
 	// понять это и выключить нечем). Своя горутина со своим recover: отказ
 	// трея (включая Windows без explorer.exe, как на моём стенде под wine)
 	// не имеет права уронить службу с прокси.
-	vyhodIzTreya := make(chan struct{}, 1)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("трей: авария в потоке значка, продолжаю без него: %v\n%s", r, debug.Stack())
-			}
+	if sTreem {
+		vyhodIzTreya := make(chan struct{}, 1)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("трей: авария в потоке значка, продолжаю без него: %v\n%s", r, debug.Stack())
+				}
+			}()
+			zapustitTrey(vyhodIzTreya)
 		}()
-		zapustitTrey(vyhodIzTreya)
-	}()
 
-	zhdatSignal(vyhodIzTreya)
+		zhdatSignal(vyhodIzTreya)
+	} else {
+		// Служба Windows: остановку приносит диспетчер служб отменой контекста.
+		// Сигналы сюда не доходят вовсе, а значка в трее нет по устройству:
+		// интерактивного сеанса у службы не бывает.
+		<-vneshniy.Done()
+		log.Printf("служба Windows: диспетчер попросил остановиться")
+	}
 
 	_ = s.Yadro.Ostanovit()
-	// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
-	// Без этой строки после закрытия приложения у человека перестают
-	// открываться сайты (жалоба 20.08).
-	proksi.Snyat()
+	if sTreem {
+		// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
+		// Без этой строки после закрытия приложения у человека перестают
+		// открываться сайты (жалоба 20.08).
+		proksi.Snyat()
+		// В службе Windows этой строки нет намеренно: системный прокси лежит
+		// в ветке реестра ПОЛЬЗОВАТЕЛЯ, и снимать его из-под системной учётной
+		// записи значит промахнуться мимо профиля человека.
+	}
 	// След туннеля — той же природы: ядро ушло, адаптер вместе с ним, и
 	// следующий запуск не должен искать то, чего мы сами штатно убрали.
 	tunnel.UbratMetku()

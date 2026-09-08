@@ -112,3 +112,49 @@ func TestZagruzitBezFaylaDayotEshcheNeSprosheno(t *testing.T) {
 		t.Fatal("на чистом инсталле (файла не было) UzheSprosiliPrava не должен быть true — иначе автозапрос прав никогда не сработает")
 	}
 }
+
+// Общая папка нужна службе Windows: её собственный профиль человеку не виден,
+// а окну из чужого сеанса недоступен. Как только общая папка появилась, в неё
+// обязаны смотреть ОБА процесса — иначе служба поднимет ядро по одному
+// конфигу, а окно покажет другой.
+func TestObshchayaPapkaPeretyagivaetOba(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("общая папка есть только в Windows")
+	}
+	obshchaya := t.TempDir()
+	t.Setenv("KELEVRA_DIR", "")
+	t.Setenv("PROGRAMDATA", obshchaya)
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+
+	// Пока общей папки нет — работаем по-старому, в профиле человека.
+	if p := Papka(); p == filepath.Join(obshchaya, "Kelevra") {
+		t.Fatalf("общей папки ещё нет, а Papka() уже показывает на неё: %q", p)
+	}
+
+	// Появилась — оба процесса обязаны переехать.
+	svoya := filepath.Join(obshchaya, "Kelevra")
+	if err := os.MkdirAll(svoya, 0o755); err != nil {
+		t.Fatalf("не создать общую папку: %v", err)
+	}
+	if p := Papka(); p != svoya {
+		t.Fatalf("Papka() = %q, хочу общую %q", p, svoya)
+	}
+}
+
+// KELEVRA_DIR старше всего: на нём стоят стенд и тесты, и общая папка не имеет
+// права его перебить — иначе прогон тестов пишет в живые данные машины.
+func TestPeremennayaStarsheObshchey(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("общая папка есть только в Windows")
+	}
+	svoya := t.TempDir()
+	obshchaya := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(obshchaya, "Kelevra"), 0o755); err != nil {
+		t.Fatalf("не создать общую папку: %v", err)
+	}
+	t.Setenv("PROGRAMDATA", obshchaya)
+	t.Setenv("KELEVRA_DIR", svoya)
+	if p := Papka(); p != svoya {
+		t.Fatalf("Papka() = %q, а KELEVRA_DIR = %q — переменную перебили", p, svoya)
+	}
+}
