@@ -54,6 +54,7 @@ func setSystemProxyVhoda(t *testing.T, s *Sluzhba) (bool, bool) {
 // err ДО лестницы, который был про rule-set, а не про proxy. Человек
 // оставался вовсе без связи там, где обе подстраховки по отдельности рабочие.
 func TestSistemnyyProksiLovitsyaNaStupeniKomplekta(t *testing.T) {
+	nuzhenChelovekBezPrav(t)
 	s := gotovStendLestnicy(t)
 
 	popytok := 0

@@ -19,6 +19,7 @@ import (
 // этого просить права заново не должен: они уже спрошены (или отказаны) и
 // отмечены в Nastroyki.
 func TestPervoePodklyuchenieSamoSprashivaetPrava(t *testing.T) {
+	nuzhenChelovekBezPrav(t)
 	s := gotovStendLestnicy(t)
 	svezho := false // gotovStendLestnicy отмечает «уже спрошены» по умолчанию — этому тесту нужны именно СВЕЖИЕ настройки
 	s.Nastroyki.PravaZaprosheny = &svezho
@@ -83,6 +84,7 @@ func TestPervoePodklyuchenieSamoSprashivaetPrava(t *testing.T) {
 // быстрый Sohranit на t.TempDir() укладывается что до, что после спавна той
 // горутины. Порядок ловим прямой записью двух синхронных меток.
 func TestAvtozaprosSohranyaetDoUhoda(t *testing.T) {
+	nuzhenChelovekBezPrav(t)
 	s := gotovStendLestnicy(t)
 	svezho := false // gotovStendLestnicy отмечает «уже спрошены» по умолчанию — этому тесту нужны именно СВЕЖИЕ настройки
 	s.Nastroyki.PravaZaprosheny = &svezho
