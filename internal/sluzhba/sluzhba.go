@@ -198,6 +198,11 @@ type Sluzhba struct {
 	// разъяснением, и признак того, что показывать вообще надо. Гасится
 	// первым же опросом состояния (см. Sostoyanie): один раз, не навсегда.
 	posleObnovleniya string
+	// svezhihPravil — сколько наборов правил обновилось на диске и ждёт
+	// применения. Ядро читает наборы только при старте, поэтому свежие файлы
+	// вступают в силу при следующем подъёме связи, а не сразу. Держим число,
+	// чтобы это было видно и в окне, и в журнале, а не молчаливо копилось.
+	svezhihPravil int
 	// podyomIdet — прямо сейчас работает PodnyatZashchitu.
 	//
 	// Заведено 08.09 по замеру с живой машины. Хронология оттуда: полный
@@ -1180,6 +1185,11 @@ type otvetSostoyaniya struct {
 	// она провисела неделю, а версия так и осталась старой (замер 08.09).
 	// Значение — номер свежей версии, чтобы окно могло её назвать.
 	PosleObnovleniya string `json:"posle_obnovleniya,omitempty"`
+	// SvezhihPravil — сколько наборов правил уже скачано на диск и ждёт
+	// следующего подключения, чтобы попасть в работу. Ядро читает наборы
+	// только при старте, и без этого поля обновление правил остаётся
+	// невидимым: файлы поменялись, а человеку это никак не показано.
+	SvezhihPravil int `json:"svezhih_pravil,omitempty"`
 	// RuchnoyProksi — система отказалась настроить прокси сама, адрес придётся вписать руками.
 	RuchnoyProksi bool `json:"ruchnoy_proksi,omitempty"`
 	// Chastichnaya — защита ПОЛОВИННАЯ: ядро стоит системным прокси, и мимо
@@ -1485,6 +1495,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	s.zamok.Lock()
 	o.PosleObnovleniya = s.posleObnovleniya
 	s.posleObnovleniya = ""
+	o.SvezhihPravil = s.svezhihPravil
 	s.zamok.Unlock()
 	o.MozhnoTun = k.EstTunnel && !o.Prava
 	o.PravaUzheSprosheny = s.Nastroyki.UzheSprosiliPrava()
@@ -1894,7 +1905,15 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	if kesh := pravila.IzKesha(hranenie.PapkaYadra(), s.tegiPravil()); kesh != nil {
 		vybor.PravilaIzKomplekta = kesh
 		vybor.PravilaKomplektData = "" // не комплект, а свежие с диска — заметку не показываем
-		log.Printf("правила беру из кеша на диске (%d наборов) — ядру не придётся качать их на старте", len(kesh))
+		// Возраст кеша в журнале — не украшение. Без него «беру из кеша»
+		// одинаково выглядит и для правил, скачанных десять минут назад, и
+		// для месячной давности; ровно из-за этой слепоты 08.09 нельзя было
+		// проверить жалобу «списки никогда не обновляются».
+		log.Printf("правила беру из кеша на диске (%d наборов, последняя сверка с сервером %s назад) — ядру не придётся качать их на старте",
+			len(kesh), okruglit(pravila.Vozrast(hranenie.PapkaYadra(), s.tegiPravil())))
+		s.zamok.Lock()
+		s.svezhihPravil = 0 // применили: то, что лежало на диске, теперь в работе
+		s.zamok.Unlock()
 	}
 	if err := s.perestroit(vybor); err != nil {
 		log.Printf("не подготовил конфиг: %v", err)
@@ -2974,9 +2993,41 @@ func (s *Sluzhba) tegiPravil() []string {
 	return tegi
 }
 
-// ObnovitKeshPravil качает свежие наборы правил на диск. Зовётся ФОНОМ и
-// только когда связь уже поднята: на старте ядра сеть занята собой, и именно
-// поэтому кеш вообще понадобился (шапка internal/pravila/kesh.go).
+// ShagSverkiPravil — как часто служба сверяет наборы правил с сервером.
+//
+// Полчаса, а решает всё равно pravila.Ustarel (час): тик чаще срока нужен,
+// чтобы час не превращался в два из-за того, что первый тик пришёл на минуту
+// раньше срока и промолчал.
+var ShagSverkiPravil = 30 * time.Minute
+
+// SveryatPravila — часы обновления правил, живут столько же, сколько служба.
+//
+// ЗАЧЕМ ОТДЕЛЬНЫЕ ЧАСЫ. До 09.09 обновление кеша звалось РОВНО В ОДНОМ месте
+// — сразу после удачного подъёма связи. Человек, у которого машина не
+// выключается, не подключался заново сутками, и правила у него не менялись
+// никогда. Его слова: «списки кешируются и никогда не обновляются, это
+// залупа и костыль». По делу — так и было.
+func (s *Sluzhba) SveryatPravila(ctx context.Context, shag time.Duration) {
+	if shag <= 0 {
+		shag = ShagSverkiPravil
+	}
+	t := time.NewTicker(shag)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.ObnovitKeshPravil(ctx)
+		}
+	}
+}
+
+// ObnovitKeshPravil сверяет наборы правил с сервером и обновляет изменившиеся.
+//
+// Зовётся ФОНОМ: на старте ядра сеть занята собой, и именно поэтому кеш
+// вообще понадобился (шапка internal/pravila/kesh.go). Два повода: удачный
+// подъём связи и свои часы (SveryatPravila).
 func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) {
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
@@ -2990,16 +3041,45 @@ func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) {
 	for teg := range adresa {
 		tegi = append(tegi, teg)
 	}
+	vozrast := pravila.Vozrast(hranenie.PapkaYadra(), tegi)
 	if !pravila.Ustarel(hranenie.PapkaYadra(), tegi) {
 		return
 	}
-	log.Printf("обновляю кеш правил фоном (%d наборов)", len(adresa))
-	skachano, err := pravila.Obnovit(ctx, &http.Client{Timeout: 2 * time.Minute}, adresa, hranenie.PapkaYadra())
+	log.Printf("сверяю правила с сервером (%d наборов, последняя сверка %s назад)", len(adresa), okruglit(vozrast))
+	itog, err := pravila.Obnovit(ctx, &http.Client{Timeout: 2 * time.Minute}, adresa, hranenie.PapkaYadra())
 	if err != nil {
-		log.Printf("кеш правил обновлён не полностью: %d из %d (%v) — на старте возьмётся то, что есть", skachano, len(adresa), err)
+		log.Printf("правила сверены не полностью: %d из %d, обновлено %d, отказов %d (%v) — на старте возьмётся то, что есть",
+			itog.Svereno, len(adresa), itog.Obnovleno, itog.Otkazy, err)
 		return
 	}
-	log.Printf("кеш правил обновлён: %d наборов", skachano)
+	if itog.Obnovleno == 0 {
+		log.Printf("правила сверены: %d наборов, на сервере ничего не менялось", itog.Svereno)
+		return
+	}
+	// Ядро читает наборы только при старте: свежие файлы на диске попадут в
+	// работу при следующем подъёме связи. Говорим об этом прямо, чтобы
+	// «обновлено 3» из журнала не читалось как «уже действует».
+	log.Printf("правила сверены: %d наборов, обновилось %d — в работу пойдут при следующем подключении", itog.Svereno, itog.Obnovleno)
+	s.zapomnitSvezhiePravila(itog.Obnovleno)
+}
+
+// zapomnitSvezhiePravila запоминает, что на диске появились новые наборы.
+//
+// В работу они пойдут при следующем подъёме связи: ядро читает наборы только
+// при старте. Число нужно, чтобы человек видел в окне, что правила свежие и
+// ждут, а не гадал, обновляются ли они вообще.
+func (s *Sluzhba) zapomnitSvezhiePravila(skolko int) {
+	s.zamok.Lock()
+	s.svezhihPravil += skolko
+	s.zamok.Unlock()
+}
+
+// okruglit — длительность для журнала без хвоста из наносекунд.
+func okruglit(d time.Duration) time.Duration {
+	if d > time.Hour {
+		return d.Round(time.Minute)
+	}
+	return d.Round(time.Second)
 }
 
 // ustupitMestoRuchka — «на машине запустили копию новее, уходи».
