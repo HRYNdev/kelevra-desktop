@@ -1926,6 +1926,19 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// в момент старта ядра резолв не работал — Windows перестраивает DNS под
 	// туннель, старый резолвер уже молчит, новый ещё не поднялся, потому что
 	// ядро и не стартовало. Человек в этой петле оставался без связи.
+	// Кеша нет вовсе — наполняем его ПРЯМО СЕЙЧАС, пока туннеля ещё нет.
+	//
+	// Замер на стенде 09.09, чистая машина: первый подъём собирал конфиг с
+	// remote-правилами, ядро лезло за ними в сеть само и заняло 16 секунд
+	// против 1.7 при повторном подключении. Это ровно та петля, против
+	// которой кеш и заведён: если в этот момент DNS перестраивается под
+	// туннель, ядро не поднимется вовсе.
+	//
+	// Момент выбран нарочно: туннель ещё не поднят, DNS обычный, сеть
+	// работает как у любой другой программы. Срок короткий — при живой сети
+	// весь комплект (около мегабайта) приезжает за пару секунд, а без сети
+	// незачем задерживать человека дольше.
+	s.napolnitKeshPravilPeredStartom(ctx)
 	if kesh := pravila.IzKesha(hranenie.PapkaYadra(), s.tegiPravil()); kesh != nil {
 		vybor.PravilaIzKomplekta = kesh
 		vybor.PravilaKomplektData = "" // не комплект, а свежие с диска — заметку не показываем
@@ -3085,6 +3098,45 @@ func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) {
 	// «обновлено 3» из журнала не читалось как «уже действует».
 	log.Printf("правила сверены: %d наборов, обновилось %d — в работу пойдут при следующем подключении", itog.Svereno, itog.Obnovleno)
 	s.zapomnitSvezhiePravila(itog.Obnovleno)
+}
+
+// SrokPervogoNapolneniyaKesha — сколько ждём правила перед стартом ядра.
+//
+// Пятнадцать секунд: по замеру 09.09 весь комплект (23 набора, ≈1 МБ)
+// скачивается за 1-2 секунды по домашнему каналу, а держать человека дольше
+// ради подстраховки нельзя — у него просто не поднимается связь.
+var SrokPervogoNapolneniyaKesha = 15 * time.Second
+
+// napolnitKeshPravilPeredStartom качает наборы, если кеша ещё нет.
+//
+// Только при ПУСТОМ или неполном кеше: полный кеш обновляется фоном и своими
+// часами (SveryatPravila), задерживать ради этого подъём связи незачем.
+func (s *Sluzhba) napolnitKeshPravilPeredStartom(ctx context.Context) {
+	tegi := s.tegiPravil()
+	if len(tegi) == 0 {
+		return
+	}
+	if pravila.IzKesha(hranenie.PapkaYadra(), tegi) != nil {
+		return
+	}
+	syroy, err := os.ReadFile(hranenie.PutProfilya())
+	if err != nil {
+		return
+	}
+	adresa := konfig.AdresaPravil(syroy)
+	if len(adresa) == 0 {
+		return
+	}
+	log.Printf("кеша правил нет — качаю %d наборов до старта ядра, пока сеть обычная", len(adresa))
+	srok, otmena := context.WithTimeout(ctx, SrokPervogoNapolneniyaKesha)
+	defer otmena()
+	itog, err := pravila.Obnovit(srok, &http.Client{Timeout: SrokPervogoNapolneniyaKesha}, adresa, hranenie.PapkaYadra())
+	if err != nil {
+		log.Printf("правила до старта скачались не полностью: %d из %d (%v) — ядро возьмёт их само или пойдёт встроенный комплект",
+			itog.Obnovleno, len(adresa), err)
+		return
+	}
+	log.Printf("правила скачаны до старта ядра: %d наборов", itog.Obnovleno)
 }
 
 // zapomnitSvezhiePravila запоминает, что на диске появились новые наборы.
