@@ -423,9 +423,33 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	s.zamok.Lock()
 	s.kartina = k
 	s.zamok.Unlock()
-	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s",
-		k.Rezhim, dop.Prava, k.EstTunnel, k.ClashAdres, zametka(k.Zametka))
+	// Размер пакета и источник правил — в ту же строку, где режим и права.
+	//
+	// Без них журнал десктопа за 08.09 не отвечал ни на один вопрос дня:
+	// слова «mtu» в нём не было ни разу за всю историю, про наборы правил он
+	// не писал ничего вовсе, и разбирать жалобы «сайты по 10 секунд» и
+	// «списки не обновляются» было буквально нечем.
+	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s",
+		k.Rezhim, dop.Prava, k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), zametka(k.Zametka))
 	return nil
+}
+
+// pripiskaMtu — размер пакета туннеля для строки журнала. В половинном режиме
+// туннеля нет вовсе, и приписки тоже нет.
+func pripiskaMtu(mtu int) string {
+	if mtu == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", размер пакета %d", mtu)
+}
+
+// pripiskaPravil — откуда взяты наборы правил. Пусто означает «ядро качает
+// сам по профилю», и это тоже надо уметь прочитать в журнале.
+func pripiskaPravil(k konfig.Kartina) string {
+	if k.PravilaOtkuda == "" {
+		return ", правила ядро качает само"
+	}
+	return fmt.Sprintf(", правила: %d наборов, %s", k.PravilNaborov, k.PravilaOtkuda)
 }
 
 // SohranitProfil кладёт присланный профиль на диск и пересобирает конфиг ядра.

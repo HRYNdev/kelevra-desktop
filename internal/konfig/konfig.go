@@ -82,6 +82,22 @@ type Kartina struct {
 	// след туннеля на диске (internal/tunnel) проверяет после жёсткой смерти
 	// копии, не остался ли висеть адаптер.
 	TunImya string `json:"tun_imya,omitempty"`
+	// MtuTun — размер пакета туннеля в СОБРАННОМ конфиге, а не в профиле.
+	//
+	// Заведено 09.09. Профиль присылает 9000 (заводское значение sing-box,
+	// рассчитанное на телефон), клиент сбивает его до 1420, и от этого числа
+	// прямо зависит, открываются сайты за секунду или за десять (замер 08.09:
+	// TLS-рукопожатие 6.5 с против 1.1 с). При этом слова «mtu» не было ни в
+	// одной строке журналов десктопа за всю их историю — жалобу на скорость
+	// нечем было проверить. Теперь оно попадает в журнал при каждой сборке.
+	MtuTun int `json:"mtu_tun,omitempty"`
+	// PravilaOtkuda — откуда взяты наборы правил в этом конфиге: «сеть»
+	// (ядро качает само), «кеш» (свежие с диска) или «встроенный комплект».
+	// Второе поле того же назначения, что и MtuTun: без него по журналу
+	// нельзя сказать, какими правилами человек живёт прямо сейчас.
+	PravilaOtkuda string `json:"pravila_otkuda,omitempty"`
+	// PravilNaborov — сколько наборов правил в конфиге.
+	PravilNaborov int `json:"pravil_naborov,omitempty"`
 }
 
 // ClashPoUmolchaniyu — адрес, если профиль про Clash API молчит.
@@ -373,6 +389,14 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 			// с поднятым туннелем пропала локальная сеть (см.
 			// internal/konfig/lokalnaya_set.go).
 			nastroitTunPodLokalnuyuSet(vh)
+			// Размер пакета — в картину: по нему разбирают жалобы на
+			// скорость, а до 09.09 его не было видно нигде (см. MtuTun).
+			switch m := vh["mtu"].(type) {
+			case float64:
+				k.MtuTun = int(m)
+			case int:
+				k.MtuTun = m
+			}
 			// Имя адаптера подменяем ТОЛЬКО когда вызывающий его назвал:
 			// он один знает, занято ли имя профиля в системе прямо сейчас
 			// (sluzhba.PodnyatZashchitu спрашивает про это до запуска ядра).
@@ -471,7 +495,21 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 		if err := primenitPravilaIzKomplekta(d, v.PravilaIzKomplekta); err != nil {
 			return nil, k, err
 		}
-		k.Zametka = fmt.Sprintf(ZametkaPravilaIzKomplekta, dataPoChelovecheski(v.PravilaKomplektData))
+		k.PravilNaborov = len(v.PravilaIzKomplekta)
+		// ДВА РАЗНЫХ СЛУЧАЯ, а заметка была одна на оба.
+		//
+		// Наборы с диска — это либо свежий кеш (скачан этой машиной при
+		// прошлом подъёме связи), либо встроенный комплект (вшит в .exe и
+		// стареет от выпуска к выпуску). Дата есть только у комплекта;
+		// у кеша PravilaKomplektData пуст, и человек видел в окне
+		// «работают встроенные (от )» — с пустой скобкой и неправдой по
+		// сути: правила у него были свежее комплекта.
+		if v.PravilaKomplektData == "" {
+			k.PravilaOtkuda = "кеш"
+		} else {
+			k.PravilaOtkuda = "встроенный комплект"
+			k.Zametka = fmt.Sprintf(ZametkaPravilaIzKomplekta, dataPoChelovecheski(v.PravilaKomplektData))
+		}
 	} else if v.BezSetevyhPravil {
 		if err := ubratSetevyePravila(d); err != nil {
 			return nil, k, err
