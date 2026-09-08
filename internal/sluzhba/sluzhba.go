@@ -2086,6 +2086,18 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 				_ = s.Yadro.Ostanovit()
 				s.snyatProksi()
 				tunnel.UbratMetku()
+				// И отправляем журнал НЕМЕДЛЕННО, не дожидаясь ночи.
+				//
+				// 08.09 у второго человека семьи связь не поднялась в чужой
+				// сети, и разобрать причину было нечем: журнал уезжает раз в
+				// сутки, около двух ночи. Человеку плохо сейчас, а факты
+				// появляются через сутки — и то если машина к тому времени в
+				// сети. Дважды подряд разбор упирался ровно в это.
+				//
+				// Отправка сама по себе безвредна: сеть у человека обычно
+				// живая (само приложение ходит по ней напрямую), запрос
+				// маленький, а не дошёл — расписание попробует как прежде.
+				go s.OtpravitZhurnalySrochno(context.WithoutCancel(ctx))
 			}
 		}
 	}
@@ -2542,6 +2554,19 @@ func (s *Sluzhba) ObnovitSvedeniya(ctx context.Context) {
 	s.zamok.Lock()
 	s.svedeniya = sv
 	s.zamok.Unlock()
+
+	// Сервер попросил журнал — отдаём сейчас, не дожидаясь ночной посылки.
+	//
+	// Так разбор беды перестаёт зависеть от человека: 08.09 у двух человек
+	// семьи связь легла среди рабочего дня, и единственным способом узнать
+	// причину было попросить их скопировать журнал из окна — то есть дёргать
+	// того, кто и так сидит без интернета. Теперь достаточно поставить
+	// пометку на сервере, а клиент придёт за ней сам: он спрашивает эту
+	// сводку раз в 15 минут и при каждом открытии окна.
+	if sv != nil && sv.ZhurnalSrochno {
+		log.Printf("сервер просит журнал сейчас — отправляю, не дожидаясь расписания")
+		go s.OtpravitZhurnalySrochno(context.WithoutCancel(ctx))
+	}
 }
 
 // ObnovlyatProfil перекачивает конфиг по расписанию, как это делает мобильный клиент.
@@ -2818,4 +2843,42 @@ func (s *Sluzhba) snyatProksi() {
 		return
 	}
 	proksi.Snyat()
+}
+
+// OtpravitZhurnalySrochno шлёт журнал вне расписания — когда человеку уже
+// плохо и ждать ночи нельзя.
+//
+// Отдельно от OtpravitZhurnalyEsliPora, а не флагом внутри неё: та отвечает
+// на вопрос «пора ли», и ответ «нет» у неё правильный. Здесь вопрос другой —
+// «случилась беда, о которой надо рассказать сейчас», и расписание к нему
+// отношения не имеет.
+//
+// Защита от повторов остаётся общая: zhurnalyIdut не даёт двум отправкам
+// наложиться, а отметка об удаче не даёт ночной посылке уйти второй раз с
+// теми же байтами.
+func (s *Sluzhba) OtpravitZhurnalySrochno(ctx context.Context) {
+	s.zamok.Lock()
+	if s.zhurnalyIdut {
+		s.zamok.Unlock()
+		return
+	}
+	s.zhurnalyIdut = true
+	otpravshchik := s.otpravshchikZhurnalovDlyaStenda
+	s.zamok.Unlock()
+	defer func() {
+		s.zamok.Lock()
+		s.zhurnalyIdut = false
+		s.zamok.Unlock()
+	}()
+	if otpravshchik == nil {
+		otpravshchik = s.otpravshchikZhurnalov()
+	}
+	otchet, err := otpravshchik.Otpravit(ctx)
+	if err != nil {
+		log.Printf("срочная отправка журнала не удалась: %v — уйдёт по расписанию", err)
+		return
+	}
+	log.Printf("срочная отправка журнала после неудачи связи: кусков %d, сырых %d Б, сжато %d Б",
+		len(otchet.Kuski), otchet.SyrykhBayt, otchet.SzhatoBayt)
+	s.Nastroyki.OtmetitOtpravkuZhurnalov(time.Now().Unix())
 }

@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+	"github.com/HRYNdev/kelevra-desktop/internal/zhurnaly"
 )
 
 // Последняя ступень лестницы деградации режимов: полный режим не поднялся.
@@ -269,5 +274,104 @@ func TestNiPolnyyNiPolovinnyyUbiraetZaSoboy(t *testing.T) {
 	// ядро, которого нет, и браузер молчит при живой сети.
 	if snyatiy == 0 {
 		t.Fatal("системный прокси не снят после полного провала — браузер человека умрёт при живой сети")
+	}
+}
+
+// После полного провала журнал уходит СРАЗУ, а не ночью по расписанию.
+//
+// Дважды подряд разбор беды на живой машине упирался в одно и то же: человеку
+// плохо сейчас, а журнал уезжает раз в сутки около двух ночи — и то если
+// машина к тому времени в сети. 08.09 у второго человека семьи связь не
+// поднялась в чужой сети, и причину было нечем установить вовсе.
+func TestPosleProvalaZhurnalUhoditSrazu(t *testing.T) {
+	s := stendSPravami(t)
+	s.snyatProksiDlyaStenda = func() {}
+
+	prishlo := make(chan struct{}, 4)
+	priyomnik := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case prishlo <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer priyomnik.Close()
+
+	// Файл журнала, которому есть что рассказать: пустое отправщик не шлёт.
+	putZhurnala := filepath.Join(t.TempDir(), "kelevra.log")
+	if err := os.WriteFile(putZhurnala, []byte("связь не поднялась"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.otpravshchikZhurnalovDlyaStenda = &zhurnaly.Otpravshchik{
+		Adres:    priyomnik.URL + "/logs",
+		DeviceID: "stend",
+		Versiya:  "stend",
+		Puti:     []string{putZhurnala},
+		PutMetok: filepath.Join(t.TempDir(), "otmetki.json"),
+	}
+
+	s.zapustitYadro = func(ctx context.Context) error {
+		return fmt.Errorf("%s", oshibkaTunnelya)
+	}
+	if err := s.PodnyatZashchitu(context.Background()); err == nil {
+		t.Fatal("обе попытки провалились, а служба отчиталась успехом")
+	}
+
+	select {
+	case <-prishlo:
+	case <-time.After(5 * time.Second):
+		t.Fatal("журнал не ушёл после полного провала — разбирать беду будет нечем до следующей ночи")
+	}
+}
+
+// Сервер попросил журнал — клиент отдаёт его сам, не трогая человека.
+//
+// 08.09: у двух человек семьи связь легла среди рабочего дня, а журнал
+// уезжает раз в сутки. Единственным способом узнать причину было попросить
+// человека скопировать журнал из окна — то есть отвлечь того, кто и так
+// сидит без интернета посреди работы. Прямое слово Вовы в тот же день:
+// «маме не до скидывания журнала». Поэтому просьбу ставит разбор беды на
+// сервере, а клиент забирает её сам при очередном опросе сводки.
+func TestServerPoprosilZhurnalKlientOtpravlyaet(t *testing.T) {
+	s := gotovStendLestnicy(t)
+
+	prishlo := make(chan struct{}, 4)
+	priyomnik := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case prishlo <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer priyomnik.Close()
+
+	putZhurnala := filepath.Join(t.TempDir(), "kelevra.log")
+	if err := os.WriteFile(putZhurnala, []byte("что было в тот день"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.otpravshchikZhurnalovDlyaStenda = &zhurnaly.Otpravshchik{
+		Adres:    priyomnik.URL + "/logs",
+		DeviceID: "stend",
+		Versiya:  "stend",
+		Puti:     []string{putZhurnala},
+		PutMetok: filepath.Join(t.TempDir(), "otmetki.json"),
+	}
+
+	// Сводка с сервера, в которой стоит просьба.
+	svedeniya := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"name":"stend","active":true,"send_log_now":true}`)
+	}))
+	defer svedeniya.Close()
+	adres := strings.TrimPrefix(svedeniya.URL, "http://")
+	s.Podpiska.Shema, s.Podpiska.Host = "http", adres
+	s.Nastroyki.Kod = "stend"
+
+	s.ObnovitSvedeniya(context.Background())
+
+	select {
+	case <-prishlo:
+	case <-time.After(5 * time.Second):
+		t.Fatal("сервер попросил журнал, а клиент его не прислал — разбор беды снова упрётся в человека")
 	}
 }
