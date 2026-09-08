@@ -184,6 +184,16 @@ BAZA = {"versiya": "0.5.3", "kod_est": True, "sost": "stoit",
 SCENY = {
     "1_kod": dict(BAZA, kod_est=False),
     "2_otklyucheno": dict(BAZA),
+    # 08.09: разъяснение после обновления. Показывается ОДИН раз сразу после
+    # установки новой версии — тихая подсказка в значке до человека не
+    # доходит (у второго человека семьи она провисела неделю, а версия так и
+    # осталась старой). Две сцены: со службой и без неё, тексты разные.
+    "31_posle_obnovleniya_bez_sluzhby": dict(BAZA, sost="rabotaet", pid="8124",
+                                             rezhim="tunnel", posle_obnovleniya="0.6.52",
+                                             sluzhba_est=False),
+    "32_posle_obnovleniya_so_sluzhboy": dict(BAZA, sost="rabotaet", pid="8124",
+                                             rezhim="tunnel", posle_obnovleniya="0.6.52",
+                                             sluzhba_est=True),
     "3_podnimaem": dict(BAZA, sost="podnimaem"),
     "4_rabotaet": dict(BAZA, sost="rabotaet", pid="8124",
                        rezhim="proksi", vniz_bayt=418_365_440, vverh_bayt=21_495_808,
