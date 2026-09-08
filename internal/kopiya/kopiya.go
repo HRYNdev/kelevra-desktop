@@ -34,6 +34,27 @@ type zapis struct {
 // Metka — файл, которым запущенная копия отмечает себя.
 func Metka(papka string) string { return filepath.Join(papka, "zapushcheno.json") }
 
+// KtoZanyal — чья метка лежит на диске: адрес и pid, без проверки живости.
+//
+// Нужна там, где важно РАЗЛИЧИТЬ хозяев метки, а не просто узнать адрес.
+// Случай с живой машины 09.09: копия, запущенная после обновления, стирала
+// метку как «оставшуюся от умирающей старой» — а её секундой раньше поставила
+// новая служба, поднятая диспетчером. Метка исчезала, ждать было нечего, и
+// через двадцать секунд на машине появлялась ЛИШНЯЯ пара процессов. Каждый
+// следующий запуск добавлял ещё одну: три копии дрались за сетевой адаптер и
+// за файл кеша ядра, ядро падало, окна показывали каждое своё.
+func KtoZanyal(papka string) (url string, pid int, est bool) {
+	b, err := os.ReadFile(Metka(papka))
+	if err != nil {
+		return "", 0, false
+	}
+	var z zapis
+	if err := json.Unmarshal(b, &z); err != nil || z.URL == "" {
+		return "", 0, false
+	}
+	return z.URL, z.PID, true
+}
+
 // Nayti возвращает адрес окна уже работающей копии, если она жива.
 func Nayti(papka string) (string, bool) {
 	b, err := os.ReadFile(Metka(papka))
