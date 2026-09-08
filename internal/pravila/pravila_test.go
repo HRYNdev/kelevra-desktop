@@ -7,10 +7,40 @@ import (
 	"time"
 )
 
-func TestTegi22(t *testing.T) {
-	tegi := Tegi()
-	if len(tegi) != 22 {
-		t.Fatalf("ожидал 22 тега (по числу route.rule_set боевого профиля), получил %d: %v", len(tegi), tegi)
+// Встроенный комплект обязан покрывать ВСЕ наборы боевого профиля — поимённо,
+// а не по счёту.
+//
+// Как проверка по числу подвела 08.09. Она сторожила «22 тега по числу
+// route.rule_set боевого профиля», профиль вырос до 23 (добавился
+// blocked-domains), и число разошлось молча. Цена: на машине человека не
+// скачались удалённые правила, подстраховка на встроенных отказалась
+// применяться («во встроенном комплекте нет правила blocked-domains»), и
+// связь поднялась СОВСЕМ БЕЗ ПРАВИЛ — весь трафик, включая российские сайты,
+// ушёл в туннель. Сайты начали отвечать «выключите VPN».
+//
+// Поимённый список ловит это сразу и говорит, какого именно набора не хватает.
+func TestKomplektPokryvaetBoevoyProfil(t *testing.T) {
+	// Теги боевого профиля (route.rule_set в rules.json на сервере).
+	// Добавили набор на сервере — добавьте файл сюда и в komplekt/.
+	nuzhny := []string{
+		"ads", "main-domains", "main-subnets", "russia_inside", "youtube",
+		"telegram", "discord", "meta", "twitter", "google_ai", "google_play",
+		"cloudflare", "cloudfront", "digitalocean", "hetzner", "ovh", "hodca",
+		"roblox", "anime", "hdrezka", "tiktok", "geoblock", "blocked-domains",
+	}
+	est := map[string]bool{}
+	for _, t := range Tegi() {
+		est[t] = true
+	}
+	var net []string
+	for _, n := range nuzhny {
+		if !est[n] {
+			net = append(net, n)
+		}
+	}
+	if len(net) > 0 {
+		t.Fatalf("во встроенном комплекте нет наборов %v — подстраховка не применится, "+
+			"и связь поднимется вовсе без правил (весь трафик в туннель)", net)
 	}
 }
 
