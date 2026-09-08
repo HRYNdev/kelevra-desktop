@@ -170,7 +170,12 @@ const (
 		"освободит его перезагрузка компьютера."
 	// ZametkaBezSetevyhPravil — Vybor.BezSetevyhPravil: список правил не
 	// скачался, включён упрощённый режим (весь трафик через VPN, без разбора).
-	ZametkaBezSetevyhPravil = "Список правил не скачался — весь трафик идёт через VPN."
+	// Текст нейтрален к режиму НАРОЧНО. Прежний говорил «весь трафик идёт
+	// через VPN» и врал, когда связь успевала откатиться в половинный режим:
+	// круг писал «Частично, мимо идут игры», а заметка под ним — обратное
+	// (замер 08.09, снимок экрана с машины человека). Два взаимоисключающих
+	// текста в двух сантиметрах друг от друга хуже, чем один неточный.
+	ZametkaBezSetevyhPravil = "Список правил не скачался — разбор трафика выключен."
 	// ZametkaPravilaIzKomplekta — Vybor.PravilaIzKomplekta: свежие правила не
 	// скачались, но вместо упрощённого режима включён встроенный в приложение
 	// комплект — умная маршрутизация (что через VPN, что напрямую) жива. %s —
@@ -1066,4 +1071,44 @@ func zapomnitVybor(d map[string]any) {
 		e["cache_file"] = c
 	}
 	c["enabled"] = true
+}
+
+// AdresaPravil — откуда качаются наборы правил: тег → адрес.
+//
+// Нужна кешу правил (internal/pravila): чтобы скачать их ЗАРАНЕЕ и подсунуть
+// ядру с диска, надо знать, что именно качать. Список живёт в профиле и
+// меняется на сервере без нашего участия — зашивать его в приложение нельзя,
+// разъедется молча (так уже вышло 08.09 со встроенным комплектом, где не
+// хватало одного набора из двадцати трёх).
+//
+// Берутся только type:"remote": локальные и вшитые качать неоткуда и незачем.
+func AdresaPravil(syroy []byte) map[string]string {
+	var d map[string]any
+	if err := json.Unmarshal(syroy, &d); err != nil {
+		return nil
+	}
+	r, ok := d["route"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	spisok, ok := r["rule_set"].([]any)
+	if !ok {
+		return nil
+	}
+	itog := map[string]string{}
+	for _, rs := range spisok {
+		m, ok := rs.(map[string]any)
+		if !ok {
+			continue
+		}
+		if tip, _ := m["type"].(string); tip != "remote" {
+			continue
+		}
+		teg, _ := m["tag"].(string)
+		adres, _ := m["url"].(string)
+		if teg != "" && adres != "" {
+			itog[teg] = adres
+		}
+	}
+	return itog
 }

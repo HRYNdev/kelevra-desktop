@@ -5,10 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
-
-	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
 
 // oshibkaSistemnogoProksi — то же самое, что напечатало настоящее ядро на
@@ -100,53 +97,16 @@ func TestSistemnyyProksiLovitsyaNaStupeniKomplekta(t *testing.T) {
 	}
 }
 
-// TestSistemnyyProksiLovitsyaNaStupeniBezPravil — тот же провал, но на самой
-// нижней ступени лестницы (BezSetevyhPravil): комплект не спас (не по
-// причине proxy — например, файлов комплекта на диске нет), и запасная
-// ступень «вовсе без правил» тоже упала на «system proxy». Подстраховка
-// обязана домешать BezSistemnogoProksi и туда — иначе человек без связи даже
-// после того, как отдал умную маршрутизацию целиком.
-func TestSistemnyyProksiLovitsyaNaStupeniBezPravil(t *testing.T) {
-	s := gotovStendLestnicy(t)
-	// На месте папки под встроенный комплект лежит ФАЙЛ — pravila.Razlozhit
-	// откажет на MkdirAll, лестница уйдёт сразу на BezSetevyhPravil, минуя
-	// ступень 2 (комплект).
-	pravilaPapka := filepath.Join(hranenie.PapkaYadra(), "pravila")
-	if err := os.MkdirAll(filepath.Dir(pravilaPapka), 0o755); err != nil {
-		t.Fatalf("подготовка папки: %v", err)
-	}
-	if err := os.WriteFile(pravilaPapka, []byte("не папка"), 0o644); err != nil {
-		t.Fatalf("подложить файл вместо папки комплекта: %v", err)
-	}
+// Ступени «вовсе без правил» больше нет, и проверка про системный прокси на
+// ней убрана вместе с ней (08.09).
+//
+// Она сторожила такое: комплект правил не спас, лестница докатилась до
+// BezSetevyhPravil, и уже там ядро упало на «system proxy» — подстраховка
+// обязана была домешать BezSistemnogoProksi и туда. Сама ступень признана
+// вредной: без разбора трафика в туннель уходят и российские сайты, и человек
+// получает связь, которой нельзя пользоваться (разбор — в
+// pravila_lestnitsa_test.go, TestBezPravilSvyazNePodnimaetsyaVovse).
+//
+// Подстраховка по системному прокси при этом жива и проверяется на других
+// ступенях — соседними проверками в этом же файле.
 
-	popytok := 0
-	var konfigPeredUspekhom map[string]any
-	s.zapustitYadro = func(ctx context.Context) error {
-		popytok++
-		switch popytok {
-		case 1:
-			return fmt.Errorf("%s", oshibkaIstochnikaPravil)
-		case 2:
-			return fmt.Errorf("%s", oshibkaSistemnogoProksi)
-		case 3:
-			konfigPeredUspekhom = razobratKonfig(t, s)
-			return nil
-		default:
-			t.Fatalf("ядро позвали в %d-й раз — подстраховка обязана хватить трёх вызовов", popytok)
-			return nil
-		}
-	}
-
-	if err := s.PodnyatZashchitu(context.Background()); err != nil {
-		t.Fatalf("PodnyatZashchitu вернул ошибку, хотя запасная ступень обязана была срастить обе беды: %v", err)
-	}
-	if popytok != 3 {
-		t.Fatalf("ядро звали %d раз, ждали ровно 3 (rule-set → komplekt недоступен → без правил упал на proxy → без правил без proxy)", popytok)
-	}
-	if konfigPeredUspekhom == nil {
-		t.Fatal("не поймали конфиг перед победным запуском")
-	}
-	if sp, ok := setSystemProxyVhoda(t, s); !ok || sp {
-		t.Fatalf("вход mixed всё ещё просит систему настроить прокси — set_system_proxy=%v (был=%v), ждали false (BezSistemnogoProksi обязан взвестись)", sp, ok)
-	}
-}
