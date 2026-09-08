@@ -17,7 +17,37 @@ on:
     tags: ["app-v*"]
 
 jobs:
+  # Гейт на НАСТОЯЩЕЙ Windows — до выпуска, а не после.
+  #
+  # 08.09 за вечер к человеку уехало семь версий подряд, и каждую ломало
+  # ровно то, чего линукс не видит: занятый адрес адаптера, скачивание правил
+  # в момент перестройки DNS, две живые копии разных версий. Проверял их
+  # человек на своей рабочей машине, потому что больше было некому: боевые
+  # проверки гонялись на линуксе, где весь windows-путь подменён заглушками.
+  #
+  # Теперь выпуск ждёт зелёной Windows. Красное к семье не уезжает.
+  windows:
+    name: Тесты на настоящей Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Тесты
+        run: go test ./...
+      - name: go vet
+        run: go vet ./...
+      - name: Сборка .exe
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = "0"
+          go build -ldflags "-H=windowsgui -s -w" -o Kelevra.exe ./cmd/kelevra
+          Get-Item Kelevra.exe | Select-Object Name, Length
+
   vypusk:
+    needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write

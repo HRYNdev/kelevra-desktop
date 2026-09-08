@@ -37,3 +37,32 @@ jobs:
           name: Kelevra-${{ github.ref_name }}
           path: build/Kelevra.exe
           retention-days: 14
+
+  # Тесты на НАСТОЯЩЕЙ Windows. До 08.09 их не было в бою вовсе: заготовка
+  # лежала в stend/ci/kelevra.yml и никогда не применялась, а боевая проверка
+  # гонялась на линуксе — там весь windows-путь подменён заглушками
+  # (trey_other.go, proksi_other.go, vinsluzhba_other.go).
+  #
+  # Чего это стоило. 08.09 за вечер вышло семь версий подряд, и каждую ломало
+  # на Windows то, чего линукс не видит: занятый адрес сетевого адаптера,
+  # скачивание правил в момент перестройки DNS, две живые копии разных версий.
+  # Проверял всё это человек на своей рабочей машине, версия за версией.
+  windows:
+    name: Тесты на настоящей Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Тесты
+        run: go test ./...
+      - name: go vet
+        run: go vet ./...
+      - name: Сборка .exe
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = "0"
+          go build -ldflags "-H=windowsgui -s -w" -o Kelevra.exe ./cmd/kelevra
+          Get-Item Kelevra.exe | Select-Object Name, Length
