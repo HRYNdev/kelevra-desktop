@@ -6,6 +6,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"log"
 	"os"
+	"runtime"
 	"syscall"
 	"time"
 	"unsafe"
@@ -97,6 +98,20 @@ func vklyuchitTemnyyZagolovok(hwnd syscall.Handle) {
 // pokazatOkno открывает окно приложения на встроенном WebView2 (он есть в
 // Windows 10/11 из коробки) и не возвращается, пока пользователь его не закроет.
 func pokazatOkno(url string) {
+	// ОКНО ЖИВЁТ В ОДНОМ ПОТОКЕ ОС, И ЭТО НЕ УКРАШЕНИЕ.
+	//
+	// Очередь сообщений Windows принадлежит ПОТОКУ, а не процессу: GetMessageW
+	// в w.Run() читает очередь того потока, где он вызван. go-webview2
+	// запоминает номер потока в момент создания (webview.go: mainthread) и
+	// шлёт туда PostThreadMessageW из Dispatch. Планировщик Go имеет полное
+	// право пересадить эту горутину на другой поток между NewWithOptions и
+	// Run — тогда сообщения уходят в очередь, которую никто не читает, и
+	// окно перестаёт слушаться кого бы то ни было. Прибиваем горутину к
+	// потоку на всё время жизни окна (тот же приём, что у значка в трее,
+	// trey_windows.go).
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,
@@ -129,9 +144,23 @@ func pokazatOkno(url string) {
 	vklyuchitTemnyyZagolovok(hwndOkna)
 	// Окно живёт ровно столько, сколько живёт его служба: без неё показывать
 	// нечего, а осиротевшее окно человек принимает за вторую копию приложения
-	// (см. storozh_okna.go). Terminate по документации go-webview2 можно звать
-	// из чужого потока, поэтому сторож работает своей горутиной.
-	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, w.Terminate)
+	// (см. storozh_okna.go).
+	//
+	// ЗАКРЫВАТЬ ТОЛЬКО ЧЕРЕЗ Dispatch. Интерфейс go-webview2 обещает, что
+	// Terminate безопасно звать из чужого потока (common.go), и обещание
+	// НЕВЕРНО: Terminate — это PostQuitMessage(0) (webview.go:381), а тот по
+	// устройству Windows кладёт WM_QUIT в очередь ВЫЗЫВАЮЩЕГО потока. Сторож
+	// работает своей горутиной, его очередь никто не читает — окно не
+	// закрывалось никогда. Ровно это человек видел 08.09: надпись «Kelevra
+	// перезапускается…» висела вечно, и обе выпущенные в тот вечер правки
+	// (0.6.60 и 0.6.61) не помогли, потому что чинили путь ДО закрытия.
+	// Крестик работал только потому, что там Terminate зовётся из оконной
+	// процедуры, то есть из потока окна.
+	//
+	// Dispatch кладёт функцию в очередь окна и будит его PostThreadMessageW
+	// (webview.go:443) — Terminate исполняется в правильном потоке.
+	zakrytOkno := func() { w.Dispatch(w.Terminate) }
+	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, zakrytOkno)
 	w.Navigate(url)
 	w.Run()
 }

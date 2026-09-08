@@ -261,9 +261,12 @@ func main() {
 		// на другом порту) — открываем его на новом адресе, а не бросаем
 		// человека с надписью «Kelevra перезапускается…» (замер 08.09,
 		// разбор в storozh_okna.go).
-		for novyyAdresSluzhby != "" {
-			adres = novyyAdresSluzhby
-			novyyAdresSluzhby = ""
+		for {
+			novyy := vzyatNovyyAdres()
+			if novyy == "" {
+				break
+			}
+			adres = novyy
 			log.Printf("окно открывается заново на новом адресе службы: %s", adres)
 			pokazatOkno(adres)
 		}
