@@ -2116,6 +2116,11 @@ func (s *Sluzhba) podobratImyaAdaptera(vybor konfig.Vybor) (konfig.Vybor, bool) 
 	case podbor.Vyshlo():
 		novyy := vybor
 		novyy.TunImya = podbor.Imya
+		// Адрес двигаем тем же сдвигом, что и имя. Остаток прошлой попытки
+		// держит их вместе: 06.09 подбор имени сработал, а ядро всё равно
+		// упало через полминуты на «set ipv4 address: The object already
+		// exists», и человек снова получил половинную защиту.
+		novyy.TunSdvigAdresa = tunnel.Sdvig(podbor.Ishodnoe, podbor.Imya)
 		if err := s.perestroit(novyy); err != nil {
 			// Конфиг со свободным именем не собрался — идём как шли. Пусть
 			// лучше ядро попробует занятое имя (вдруг всё-таки поднимется),

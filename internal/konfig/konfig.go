@@ -249,6 +249,15 @@ type Vybor struct {
 	// падает через 15 секунд и защита откатывается в половинную (замер с его
 	// машины 01.09, разбор в internal/tunnel/imya.go).
 	TunImya string
+	// TunSdvigAdresa — на сколько соседних блоков подвинуть адреса туннельного
+	// входа (поле address). Ноль — адреса из профиля, как было всегда.
+	//
+	// Едет вместе с TunImya и тем же числом: остаток прошлой попытки держит и
+	// имя, и адрес, а меняли мы до 08.09 только имя. Ядро тогда падало второй
+	// раз подряд, уже на «set ipv4 address: The object already exists», и
+	// человек всё равно получал половинную защиту (замер с машины 06.09,
+	// разбор в internal/tunnel/adres.go).
+	TunSdvigAdresa int
 	// BezSistemnogoProksi — не просить ядро прописывать себя системным прокси.
 	// Взводится после отказа системы: проверено живьём — ядро на такой отказ
 	// не жалуется, а ПАДАЕТ («initialize system proxy: unsupported desktop
@@ -308,6 +317,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// уже элемент списка, а не Vybor (имена совпали исторически), и обратиться
 	// к полю оттуда нельзя.
 	podmenaImeni := v.TunImya
+	sdvigAdresa := v.TunSdvigAdresa
 
 	// Сперва только СМОТРИМ, что за входы в профиле, ничего не выбрасывая.
 	// Раньше решение и выброс шли одним проходом, и это годилось, пока
@@ -367,6 +377,11 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 			if podmenaImeni != "" {
 				vh["interface_name"] = podmenaImeni
 				k.TunImya = podmenaImeni
+			}
+			// Адрес двигаем тем же сдвигом, что и имя: остаток прошлой
+			// попытки держит их вместе, и разъехаться им нельзя.
+			if sdvigAdresa > 0 {
+				podvinutAdresaTun(vh, sdvigAdresa)
 			}
 		case "mixed", "http", "socks":
 			// В режиме туннеля локальный прокси — лишняя дверь, и опасная.
