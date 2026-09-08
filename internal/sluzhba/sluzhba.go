@@ -198,6 +198,17 @@ type Sluzhba struct {
 	// разъяснением, и признак того, что показывать вообще надо. Гасится
 	// первым же опросом состояния (см. Sostoyanie): один раз, не навсегда.
 	posleObnovleniya string
+	// podyomIdet — прямо сейчас работает PodnyatZashchitu.
+	//
+	// Заведено 08.09 по замеру с живой машины. Хронология оттуда: полный
+	// режим упал на занятом адаптере, пошёл откат в половинный, ядро уже
+	// поднималось — и в эту же секунду авторежим решил «дома» и погасил его
+	// своей рукой. Подъём, разумеется, провалился, приложение записало
+	// «откат тоже не удался» и показало человеку красную беду. Беды при этом
+	// не было вовсе: дома связь и не нужна, авторежим сработал правильно.
+	// Плохо было то, что приложение сначала само себя погасило, а потом само
+	// на себя пожаловалось.
+	podyomIdet bool
 	// skachanoObnovleniya и vsegoObnovleniya — ход ИДУЩЕЙ прямо сейчас
 	// загрузки (obnovlenie.PostavitSHodom докладывает сюда). Живут под тем же
 	// zamok и ровно столько же, сколько idetUstanovkaObnovleniya: и удача, и
@@ -299,6 +310,15 @@ type Sluzhba struct {
 	// выше, и та же причина: занятое имя иначе не воспроизвести, не подняв на
 	// машине проверяющего настоящий туннель.
 	adapterZhivDlyaStenda tunnel.Adapter
+
+	// zashchitaPodnyataDlyaStenda — точка подмены zashchitaPodnyata(). nil в бою.
+	//
+	// Настоящая поднятость смотрит на живое ядро, а на стенде его нет и быть
+	// не должно (тот же запрет трогать сеть на машине человека, что у
+	// pravaDlyaStenda рядом). Без подмены нельзя проверить приведение
+	// авторежима вовсе: правило «дома опусти» срабатывает только при поднятой
+	// связи, и проверка молча проходила бы мимо самого случая.
+	zashchitaPodnyataDlyaStenda func() bool
 
 	// snyatProksiDlyaStenda — точка подмены proksi.Snyat(). nil в бою.
 	//
@@ -1702,6 +1722,9 @@ func (s *Sluzhba) tunnelPodnyat() bool {
 // нечего добавить — второй PodnyatZashchitu на том же круге только породил бы
 // второй процесс.
 func (s *Sluzhba) zashchitaPodnyata() bool {
+	if s.zashchitaPodnyataDlyaStenda != nil {
+		return s.zashchitaPodnyataDlyaStenda()
+	}
 	if s.Yadro == nil {
 		return false
 	}
@@ -1740,6 +1763,18 @@ func (s *Sluzhba) avtorezhimKolbek(ctx context.Context, sost avtorezhim.Sostoyan
 			log.Printf("авторежим: обстановка «дома» стоит, а защита поднята — опускаю (приведение)")
 		} else {
 			log.Printf("авторежим: обстановка «дома» — опускаю защиту")
+		}
+		s.zamok.Lock()
+		idet := s.podyomIdet
+		s.zamok.Unlock()
+		if idet {
+			// Подъём в работе — не дёргаем его на полпути. Обстановка никуда
+			// не денется: авторежим ходит по кругу и опустит защиту
+			// следующим же заходом, когда подъём кончится (ветка «приведение»
+			// выше как раз про это). А погасив ядро сейчас, мы получили бы
+			// провал подъёма и красную беду на ровном месте — замер 08.09.
+			log.Printf("авторежим: обстановка «дома», но связь сейчас поднимается — не мешаю, опущу следующим заходом")
+			return
 		}
 		if err := s.OpustitZashchitu(); err != nil {
 			log.Printf("авторежим: не опустил защиту: %v", err)
@@ -1808,6 +1843,17 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 // — так же, как было устроено до выноса метода, чтобы поведение ручки не
 // изменилось ни на йоту.
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
+	// Пока идём вверх, авторежиму нельзя гасить ядро из-под нас (см. поле
+	// podyomIdet и OpustitZashchitu).
+	s.zamok.Lock()
+	s.podyomIdet = true
+	s.zamok.Unlock()
+	defer func() {
+		s.zamok.Lock()
+		s.podyomIdet = false
+		s.zamok.Unlock()
+	}()
+
 	if !s.Yadro.EstBinar() {
 		s.zamok.Lock()
 		uzhe := s.kachaemBin
@@ -2045,7 +2091,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		log.Printf("полный режим не поднялся (%v) — убираю следы попытки и опускаюсь на ступень ниже", err)
 		_ = s.Yadro.Ostanovit()
 		tunnel.UbratMetku()
-		proksi.Snyat()
+		s.snyatProksi()
 		vyborProksi := vybor
 		vyborProksi.BezTunnelya = true
 		if e := s.perestroit(vyborProksi); e != nil {
@@ -2166,7 +2212,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		// в реестре остаётся висеть, а Ostanovit() её не снимает. Тот же баг,
 		// что был на «Отключить» и закрытии окна (беда 20.08), только на
 		// неудачном подключении.
-		proksi.Snyat()
+		s.snyatProksi()
 		// Тем же движением снимаем след туннеля: защита не поднялась, значит
 		// и туннеля нет, а оставленный след заставил бы СЛЕДУЮЩИЙ запуск
 		// искать несуществующий адаптер и тревожить человека впустую.
@@ -2284,6 +2330,8 @@ func (s *Sluzhba) podobratImyaAdaptera(vybor konfig.Vybor) (konfig.Vybor, bool) 
 // один defer, и следующий запуск должен узнать, что туннель поднимали мы, и
 // проверить приборно, не остался ли висеть адаптер (internal/tunnel).
 func zakrepitTunnel(tunImya string) {
+	// Прямой вызов, а не обёртка s.snyatProksi: у этой функции нет получателя
+	// (она не метод службы), и стенду подменять тут нечего.
 	proksi.Snyat()
 	tunnel.Otmetit(tunImya, os.Getpid())
 	log.Printf("поднят туннель (адаптер %q), системный прокси снят за ненадобностью", tunImya)
@@ -2477,7 +2525,7 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 // вызова, запись в реестре всё равно висит.
 func (s *Sluzhba) OpustitZashchitu() error {
 	err := s.Yadro.Ostanovit()
-	proksi.Snyat()
+	s.snyatProksi()
 	// След туннеля снимаем тем же безусловным движением и по той же причине:
 	// ядро могло умереть само ещё до вызова, а след на диске остался бы и
 	// заставил следующий запуск искать адаптер, которого давно нет.

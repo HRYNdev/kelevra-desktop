@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
@@ -373,5 +374,47 @@ func TestServerPoprosilZhurnalKlientOtpravlyaet(t *testing.T) {
 	case <-prishlo:
 	case <-time.After(5 * time.Second):
 		t.Fatal("сервер попросил журнал, а клиент его не прислал — разбор беды снова упрётся в человека")
+	}
+}
+
+// Авторежим не гасит связь, пока она поднимается.
+//
+// Замер с живой машины 08.09, хронология одной секунды: полный режим упал на
+// занятом адаптере, пошёл откат в половинный, ядро уже поднималось — и в эту
+// же секунду авторежим решил «дома» и погасил его. Подъём провалился,
+// приложение записало «откат тоже не удался» и показало красную беду. Беды не
+// было: дома связь не нужна, авторежим сработал верно. Плохо было то, что
+// приложение сначала само себя погасило, а потом само на себя пожаловалось.
+//
+// Проверяются ОБЕ стороны: во время подъёма не гасим, после подъёма гасим.
+// Половина этой проверки была бы хуже, чем ничего: правило «не трогать»
+// без правила «всё-таки опустить потом» оставило бы связь поднятой дома
+// навсегда.
+func TestAvtorezhimNeGasitPodyomNaPolputi(t *testing.T) {
+	s := stendSPravami(t)
+	snyatiy := 0
+	s.snyatProksiDlyaStenda = func() { snyatiy++ }
+	// Связь «поднята»: без этого правило «дома опусти» не сработает вовсе и
+	// проверка прошла бы мимо самого случая.
+	s.zashchitaPodnyataDlyaStenda = func() bool { return true }
+
+	// Имитируем ровно ту секунду с живой машины: подъём ещё идёт.
+	s.zamok.Lock()
+	s.podyomIdet = true
+	s.zamok.Unlock()
+
+	s.avtorezhimKolbek(context.Background(), avtorezhim.Doma, false)
+	if snyatiy != 0 {
+		t.Fatal("авторежим погасил связь посреди подъёма — подъём провалится, и человек увидит беду на ровном месте")
+	}
+
+	// Подъём кончился — теперь опустить дома положено, и это должно случиться.
+	s.zamok.Lock()
+	s.podyomIdet = false
+	s.zamok.Unlock()
+
+	s.avtorezhimKolbek(context.Background(), avtorezhim.Doma, true)
+	if snyatiy == 0 {
+		t.Fatal("подъём кончился, дома, а связь так и осталась поднятой — правило «не мешать» съело само действие")
 	}
 }
