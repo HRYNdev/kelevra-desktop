@@ -342,6 +342,12 @@ const PodryadDoPrichiny = 3
 // условием, а не просто фактом наблюдения.
 const prichinaAdapterNeNaiden = "физический сетевой адаптер не найден"
 
+// prichinaPodmenaOtPublichnogo — вторая причина слепоты, заведена 09.09.
+// Публичный резолвер не подменяет ответы на 198.18.0.0/15 никогда; если
+// подмена пришла от него, запрос перехватили по дороге — при поднятом
+// туннеле это наше собственное ядро.
+const prichinaPodmenaOtPublichnogo = "подмену прислал публичный резолвер — запрос перехвачен по дороге"
+
 func prichinaDnsNePrivaten(dnsAdres string) string {
 	return "DNS адаптера не приватный: " + dnsAdres
 }
@@ -367,7 +373,11 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	}
 
 	dns := a.Dns
-	if a.TunnelPodnyat != nil && a.TunnelPodnyat() {
+	// sprosili — кого в итоге спрашивали: адрес резолвера физического
+	// адаптера или пусто, если пошли системным путём.
+	sprosili := ""
+	tunnelStoit := a.TunnelPodnyat != nil && a.TunnelPodnyat()
+	if tunnelStoit {
 		dnsAdres, lokalnyIP, uznali, prichina := a.adresFizicheskogoAdaptera()
 		if !uznali {
 			// Задвижке не предлагаем НИЧЕГО, даже Neizvestno: слепой заход —
@@ -401,6 +411,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 			tvorec = novyyDnsZondPryamoy
 		}
 		dns = tvorec(dnsAdres, lokalnyIP)
+		sprosili = dnsAdres
 	} else {
 		a.sbrositSlepotu()
 	}
@@ -479,6 +490,23 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 		}
 	}
 
+	// ПОДМЕНА ОТ ПУБЛИЧНОГО РЕЗОЛВЕРА — ЭТО ПЕРЕХВАТ, А НЕ ДОМ.
+	//
+	// Подменять ответы на адреса из 198.18.0.0/15 умеет домашний обход, и он
+	// всегда живёт на приватном адресе. Публичный резолвер (оператор связи,
+	// 8.8.8.8 и подобные) такого не делает НИКОГДА — если подмена пришла от
+	// него, значит запрос до него не дошёл и его перехватило что-то по
+	// дороге. При поднятом туннеле это «что-то» — наше собственное ядро,
+	// замер на стенде 09.09: тот же nslookup к 8.8.8.8 при поднятом туннеле
+	// отдаёт 198.18.0.4, при опущенном — не отвечает вовсе.
+	//
+	// Такой заход — отсутствие наблюдения, а не наблюдение «дома»: решать по
+	// нему нельзя ни в одну сторону (см. ZondSlep).
+	if dnsDoma && tunnelStoit && !privatnyyAdres(sprosili) {
+		log.Printf("авторежим: подмену прислал публичный резолвер %s — это перехват, а не дом; заход слепой", sprosili)
+		a.otmetitSlepotu(prichinaPodmenaOtPublichnogo)
+		return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
+	}
 	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: dnsDoma, DnsMolchit: dnsMolchit, TrafikPryamoy: trafik}
 	izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 	return n, izm, a.Zadvizhka.Tekushcheye()
