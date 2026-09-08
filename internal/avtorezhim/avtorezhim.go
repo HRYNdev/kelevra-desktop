@@ -40,6 +40,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -381,6 +382,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 			// подряд идущих слепых заходов растёт, и после PodryadDoPrichiny
 			// причина становится видна человеку — до тех пор автоматический
 			// режим только выглядит работающим, а на деле ничего не решает.
+			log.Printf("авторежим: туннель поднят, а резолвер физического адаптера не узнать (%s) — заход слепой, защиту не трогаю", prichina)
 			a.otmetitSlepotu(prichina)
 			return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
 		}
@@ -390,6 +392,10 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 		// условие (см. adresFizicheskogoAdaptera) — публичный резолвер
 		// честно ответит «не дома», если это не наш роутер.
 		a.sbrositSlepotu()
+		// Кого именно выбрали в обход туннеля — в журнал: без этой строки
+		// нельзя отличить «спросили домашний роутер и он честно подменил»
+		// от «спросили кого попало» и от «запрос всё равно ушёл в туннель».
+		log.Printf("авторежим: туннель поднят, спрашиваю резолвер физического адаптера %s с адреса %s", dnsAdres, lokalnyIP)
 		tvorec := a.DnsPryamoy
 		if tvorec == nil {
 			tvorec = novyyDnsZondPryamoy
@@ -443,6 +449,20 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	} else {
 		log.Printf("авторежим: DNS-подэтап занял %dмс (общий бюджет захода не ограничен)", dnsZanyalo.Milliseconds())
 	}
+	// КОГО спросили и ЧТО ответили — в журнал.
+	//
+	// Разбор 09.09 упёрся ровно в это: у человека вне дома авторежим через
+	// две секунды после подъёма туннеля объявил «дома» и погасил защиту, а
+	// весь заход оставлял в журнале одну строку — сколько миллисекунд занял
+	// DNS-подэтап. Ни адреса резолвера, ни ответов доменов, ни признака
+	// того, что спрашивали своё же ядро, там не было, и причину пришлось
+	// доказывать по косвенным уликам.
+	if o, umeet := dns.(interface{ Otchet() OtchetZonda }); umeet {
+		otchet := o.Otchet()
+		log.Printf("авторежим: спрашивал %s%s — ответили %d из %d, подмен %d, контрольный домен %s [%s]",
+			otchet.Rezolver, cherez(otchet.Cherez), otchet.Otvetili, len(otchet.Otvety),
+			otchet.Podmen, otchet.Kontrolnyy, strings.Join(otchet.Otvety, " "))
+	}
 
 	var trafik *bool
 	if dnsDoma {
@@ -462,6 +482,14 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: dnsDoma, DnsMolchit: dnsMolchit, TrafikPryamoy: trafik}
 	izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 	return n, izm, a.Zadvizhka.Tekushcheye()
+}
+
+// cherez — приписка «с какого адреса спрашивали», если привязка была.
+func cherez(lokalny string) string {
+	if lokalny == "" {
+		return ""
+	}
+	return " (с адреса " + lokalny + ")"
 }
 
 // adresFizicheskogoAdaptera — DNS-адрес и локальный IP физического
