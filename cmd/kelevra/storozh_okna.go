@@ -90,7 +90,7 @@ func vzyatNovyyAdres() string {
 // Поэтому молчание — ещё не приговор: сперва спрашиваем метку на диске
 // (kopiya.Nayti), и если там живой адрес и он ДРУГОЙ, окно надо не хоронить,
 // а открыть заново на нём.
-func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, zakryt func()) {
+func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, srokZameny time.Duration, zakryt func()) {
 	promahov := 0
 	for {
 		time.Sleep(shag)
@@ -106,8 +106,8 @@ func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, zakryt 
 		// Служба молчит. Это ещё не приговор: ровно так выглядит и её
 		// перезапуск после обновления. Ждём замену, а не хороним с первого
 		// взгляда (см. srokOzhidaniyaZameny).
-		log.Printf("сторож окна: служба молчит %d проверки подряд, жду замену до %s", predel, srokOzhidaniyaZameny)
-		if adres, vernulas := zhdatZamenu(url, papka, shag, srokOzhidaniyaZameny); adres != "" {
+		log.Printf("сторож окна: служба молчит %d проверки подряд, жду замену до %s", predel, srokZameny)
+		if adres, vernulas := zhdatZamenu(url, papka, shag, srokZameny); adres != "" {
 			log.Printf("сторож окна: служба переехала на %s (была %s) — открываю окно заново", adres, url)
 			zapomnitNovyyAdres(adres)
 			zakryt()
@@ -117,7 +117,7 @@ func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, zakryt 
 			promahov = 0
 			continue
 		}
-		log.Printf("сторож окна: замены нет за %s, закрываю окно", srokOzhidaniyaZameny)
+		log.Printf("сторож окна: замены нет за %s, закрываю окно", srokZameny)
 		zakryt()
 		return
 	}

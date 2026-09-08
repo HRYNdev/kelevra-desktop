@@ -160,7 +160,7 @@ func pokazatOkno(url string) {
 	// Dispatch кладёт функцию в очередь окна и будит его PostThreadMessageW
 	// (webview.go:443) — Terminate исполняется в правильном потоке.
 	zakrytOkno := func() { w.Dispatch(w.Terminate) }
-	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, zakrytOkno)
+	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, srokOzhidaniyaZameny, zakrytOkno)
 	w.Navigate(url)
 	w.Run()
 }

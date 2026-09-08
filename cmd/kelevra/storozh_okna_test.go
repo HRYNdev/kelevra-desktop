@@ -18,7 +18,7 @@ func TestStorozhZakryvaetOknoKogdaSluzhbaUmerla(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	zakryto := make(chan struct{})
-	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, func() { close(zakryto) })
+	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, 200*time.Millisecond, func() { close(zakryto) })
 
 	// Фаза A: служба жива — окно закрывать не за что.
 	select {
@@ -50,7 +50,7 @@ func TestStorozhTerpitOdinochnyyPromah(t *testing.T) {
 	defer server.Close()
 
 	zakryto := make(chan struct{})
-	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, func() { close(zakryto) })
+	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, 200*time.Millisecond, func() { close(zakryto) })
 
 	select {
 	case <-zakryto:
@@ -83,7 +83,7 @@ func TestStorozhVidyaPereezdOtkryvaetOknoZanovo(t *testing.T) {
 	vzyatNovyyAdres() // сбрасываем след прошлого теста
 	zakryto := make(chan struct{})
 	// Старый адрес мёртв: сервера на нём нет вовсе.
-	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, func() { close(zakryto) })
+	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) })
 
 	select {
 	case <-zakryto:
@@ -115,7 +115,7 @@ func TestStorozhZhdyotSluzhbuKotorayaVernulasPozzhe(t *testing.T) {
 	vzyatNovyyAdres()
 	zakryto := make(chan struct{})
 	// Метки нет вовсе: старая служба ушла, новая ещё не поднялась.
-	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, func() { close(zakryto) })
+	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) })
 
 	// Замена появляется заметно позже порога молчания (3 × 20 мс).
 	time.Sleep(300 * time.Millisecond)
@@ -159,7 +159,7 @@ func TestStorozhNeZakryvaetOknoKogdaSluzhbaOzhilaNaTomZheAdrese(t *testing.T) {
 
 	vzyatNovyyAdres()
 	zakryto := make(chan struct{})
-	go storozhitSluzhbu(server.URL, papka, 20*time.Millisecond, 3, func() { close(zakryto) })
+	go storozhitSluzhbu(server.URL, papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) })
 
 	// Даём сторожу разувериться, потом оживляем службу на том же адресе.
 	time.Sleep(200 * time.Millisecond)
