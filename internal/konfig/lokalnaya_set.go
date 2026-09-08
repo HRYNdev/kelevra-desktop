@@ -1,5 +1,7 @@
 package konfig
 
+import "github.com/HRYNdev/kelevra-desktop/internal/tunnel"
+
 // Локальная сеть мимо туннеля — всегда, чем бы ни был профиль с сервера.
 //
 // Беда 31.08 на стенде: с поднятым туннелем машина теряет локальную сеть.
@@ -259,4 +261,31 @@ func strokiVSpisokAny(s []string) []any {
 		out = append(out, v)
 	}
 	return out
+}
+
+// podvinutAdresaTun двигает адреса туннельного входа на shag соседних блоков.
+//
+// Зовётся только когда подобрано другое имя адаптера (см. Vybor.TunSdvigAdresa
+// и internal/tunnel/adres.go): остаток прошлой попытки держит имя и адрес
+// вместе, и менять одно без другого — это второе падение ядра подряд вместо
+// защиты.
+//
+// Старые профили писали inet4_address / inet6_address отдельными полями,
+// нынешние — общий список address. Двигаем всё, что нашли: лишнего тут нет,
+// а пропустить поле значит оставить ту самую беду, ради которой правка.
+func podvinutAdresaTun(vh map[string]any, shag int) {
+	for _, pole := range []string{"address", "inet4_address", "inet6_address"} {
+		byli := spisokStrok(vh[pole])
+		if len(byli) == 0 {
+			continue
+		}
+		stali := tunnel.SdvinutAdresa(byli, shag)
+		// Строка была одна — возвращаем строкой: старые профили читает не
+		// только наше ядро, и превращать их поля в списки без нужды незачем.
+		if _, odna := vh[pole].(string); odna && len(stali) == 1 {
+			vh[pole] = stali[0]
+			continue
+		}
+		vh[pole] = strokiVSpisokAny(stali)
+	}
 }
