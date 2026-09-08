@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
@@ -28,15 +29,51 @@ const (
 	// это не смерть: служба могла быть занята, а на слабой машине запрос и
 	// вовсе не успел за таймаут. Три подряд (≈6 с) — это уже не занятость.
 	molchaniyDoZakrytiya = 3
+	// srokOzhidaniyaZameny — сколько ждём службу, поднявшуюся ВЗАМЕН.
+	//
+	// Замолчавшая служба и умершая служба выглядят одинаково, а разница для
+	// человека огромная: в первом случае окно должно дождаться и открыться
+	// заново, во втором — закрыться. Раньше выбор делался ОДНИМ взглядом на
+	// метку на шестой секунде — и всегда попадал мимо: диспетчер служб
+	// поднимает упавшую службу через 5 секунд, а метку новый процесс пишет
+	// ещё позже (замер 08.09: возвращение занимало 5-11 секунд). Метка в тот
+	// миг держит адрес мёртвой копии, kopiya.Nayti честно отвечает «никого»,
+	// и окно уходило по ветке «закрываю насовсем».
+	//
+	// Минута покрывает первую попытку диспетчера (5 с) и вторую (15 с) с
+	// запасом на медленный диск. Дольше держать окно бессмысленно: если за
+	// минуту служба не вернулась, это отказ, а не перезапуск.
+	srokOzhidaniyaZameny = 60 * time.Second
 )
 
 // novyyAdresSluzhby — адрес службы, поднявшейся ВЗАМЕН молчащей. Пусто, если
 // замены нет и окно закрылось насовсем.
 //
-// Пакетная переменная, а не возврат: сторож крутится в своей горутине и
-// закрывает окно чужой рукой (w.Terminate), а решение «открыть заново»
-// принимает main после того, как pokazatOkno вернётся.
-var novyyAdresSluzhby string
+// Пакетная переменная, а не возврат: сторож крутится в своей горутине, а
+// решение «открыть заново» принимает main после того, как pokazatOkno
+// вернётся. Пишет её горутина сторожа, читает главная — поэтому под замком,
+// а не голым присваиванием: без него это гонка данных, и go test -race прав.
+var (
+	zamokAdresa sync.Mutex
+	adresZameny string
+)
+
+// zapomnitNovyyAdres и vzyatNovyyAdres — единственный путь к этой переменной.
+func zapomnitNovyyAdres(adres string) {
+	zamokAdresa.Lock()
+	adresZameny = adres
+	zamokAdresa.Unlock()
+}
+
+// vzyatNovyyAdres отдаёт адрес замены и сразу забывает его: второй раз то же
+// самое окно открывать не надо.
+func vzyatNovyyAdres() string {
+	zamokAdresa.Lock()
+	defer zamokAdresa.Unlock()
+	adres := adresZameny
+	adresZameny = ""
+	return adres
+}
 
 // storozhitSluzhbu закрывает окно, когда служба, ради которой оно открыто,
 // перестала отвечать. zakryt зовётся ровно один раз и только по этой причине.
@@ -66,14 +103,45 @@ func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, zakryt 
 			log.Printf("сторож окна: служба не ответила (%d из %d)", promahov, predel)
 			continue
 		}
-		if adres, est := kopiya.Nayti(papka); est && adres != url {
+		// Служба молчит. Это ещё не приговор: ровно так выглядит и её
+		// перезапуск после обновления. Ждём замену, а не хороним с первого
+		// взгляда (см. srokOzhidaniyaZameny).
+		log.Printf("сторож окна: служба молчит %d проверки подряд, жду замену до %s", predel, srokOzhidaniyaZameny)
+		if adres, vernulas := zhdatZamenu(url, papka, shag, srokOzhidaniyaZameny); adres != "" {
 			log.Printf("сторож окна: служба переехала на %s (была %s) — открываю окно заново", adres, url)
-			novyyAdresSluzhby = adres
+			zapomnitNovyyAdres(adres)
 			zakryt()
 			return
+		} else if vernulas {
+			log.Printf("сторож окна: служба ответила по прежнему адресу, продолжаю дозор")
+			promahov = 0
+			continue
 		}
-		log.Printf("сторож окна: служба молчит %d проверки подряд, закрываю окно", predel)
+		log.Printf("сторож окна: замены нет за %s, закрываю окно", srokOzhidaniyaZameny)
 		zakryt()
 		return
 	}
+}
+
+// zhdatZamenu ждёт, пока служба вернётся — на прежнем адресе или на новом.
+//
+// Отдаёт: адрес новой службы (если переехала) и признак «ожила на прежнем».
+// Пусто и false — за отведённый срок не вернулась никак.
+//
+// Почему смотрим ОБА исхода. Диспетчер служб поднимает упавшую службу заново,
+// и порт она берёт случайный (net.Listen на :0) — обычно новый, но может
+// достаться и прежний. В первом случае окно надо открыть заново на новом
+// адресе, во втором — просто продолжить работу, ничего не закрывая.
+func zhdatZamenu(url, papka string, shag, srok time.Duration) (string, bool) {
+	konec := time.Now().Add(srok)
+	for time.Now().Before(konec) {
+		time.Sleep(shag)
+		if kopiya.Otvechaet(url) {
+			return "", true
+		}
+		if adres, est := kopiya.Nayti(papka); est && adres != url {
+			return adres, false
+		}
+	}
+	return "", false
 }
