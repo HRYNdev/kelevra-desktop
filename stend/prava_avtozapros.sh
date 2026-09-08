@@ -176,6 +176,11 @@ kod=$(printf '%s' "$otvet" | tail -1)
 telo=$(printf '%s' "$otvet" | sed '$d')
 dlitelnost=$(python3 -c "print(f'{$posle_otveta - $do_zaprosa:.2f}')" 2>/dev/null || echo "?")
 echo "  http_code=$kod, тело: $telo, ответ за ${dlitelnost}с"
+if printf '%s' "$telo" | grep -q '"beda"' && ploshchadka_ne_tyanet "$ZHURNAL"; then
+  echo "ПЛОЩАДКА: wine не отдаёт список сетевых адаптеров, вердикт по продукту не выношу"
+  pkill -f "Kelevra.exe" 2>/dev/null
+  exit 7
+fi
 if [ "$kod" != "200" ] || ! printf '%s' "$telo" | grep -q '"gotovo":true' || printf '%s' "$telo" | grep -q '"beda"'; then
   echo "  (б) КРАСНЫЙ: «Подключить» не ответил честным gotovo=true (код $kod, тело $telo)"
   bed=1

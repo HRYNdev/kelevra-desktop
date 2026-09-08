@@ -961,12 +961,17 @@
   .beda.vidno { display:block; }
   .beda.spokoyno { background:rgba(139,148,164,.08); border-color:var(--gran); color:var(--tihiy); }
   .beda.vnimanie { background:rgba(224,163,74,.09); border-color:rgba(224,163,74,.3); color:var(--zhdem); }
-  .beda-zagolovok { font-weight:600; font-size:13.5px; margin-bottom:3px; }
+  /* .beda-glava держит заголовок и кнопку «подробности» в ОДНОЙ строке:
+     раньше кнопка стояла отдельным блоком ПОД советом, и длинный совет от
+     ядра отодвигал её вниз, за обрезанный край #tab-set (5_slomalos,
+     13_beda_konfig). Теперь её позиция зависит от заголовка, а не от совета. */
+  .beda-glava { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:3px; }
+  .beda-zagolovok { font-weight:600; font-size:13.5px; min-width:0; word-break:break-word; }
   .beda-sovet { color:var(--tihiy); }
   .beda-podrobnosti {
-    display:block; margin-top:6px; padding:0; border:0; background:none;
+    display:block; flex:0 0 auto; padding:0; border:0; background:none;
     color:var(--tihiy); font:inherit; font-size:11.5px; text-decoration:underline;
-    text-underline-offset:2px; cursor:pointer;
+    text-underline-offset:2px; cursor:pointer; white-space:nowrap;
   }
   .beda-syroe {
     margin-top:8px; font-family:ui-monospace, Consolas, monospace;
@@ -1676,7 +1681,11 @@ function pokazatBeduSvyazi(syroe, spokoyno) {
     syr.hidden = !syr.hidden;
     knopka.textContent = syr.hidden ? "подробности" : "скрыть подробности";
   });
-  uzel.append(zag, sovet, knopka, syr);
+  // Заголовок и кнопка — одна строка (.beda-glava, см. CSS выше), совет —
+  // отдельным блоком под ней: длина совета больше не решает, видна ли кнопка.
+  const glava = document.createElement("div");
+  glava.className = "beda-glava"; glava.append(zag, knopka);
+  uzel.append(glava, sovet, syr);
 }
 
 function pokazatBedu(uzel, tekst, spokoyno) {
@@ -2263,7 +2272,12 @@ async function obnovit() {
   // первый же день, когда правило «на исходе» сменится.
   narisovatPodpisku(s);
   const knopkaPolnaya = $("knopka-polnaya");
-  knopkaPolnaya.hidden = !s.mozhno_tun;
+  // Кнопка прячется и когда стоит служба Windows: полный режим держит она,
+  // причём с загрузки компьютера и без единого подтверждения. Кнопка же —
+  // старый способ: она просит права окном Windows и живёт до перезапуска.
+  // Оставлять её при живой службе значит предлагать человеку сделать хуже то,
+  // что уже сделано лучше.
+  knopkaPolnaya.hidden = !s.mozhno_tun || !!s.sluzhba_est;
   // Причина половинчатости (konfig.PrichinaBezPrav) — подсказкой при наведении,
   // а не ещё одной строкой на экране: словами о том, что идёт мимо, уже
   // сказала заметка над кнопкой, и повторять её третий раз незачем. Но сама
