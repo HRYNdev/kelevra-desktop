@@ -942,6 +942,16 @@
      оставалось 19px — меньше высоты одного узла (44.3px). Экономия ложится
      на карточку беды, а не на карточку подписки / .rezhim-perekl ниже: их уже ужимали
      раньше, и здесь была резервная высота больше всего. */
+  /* Карточка разъяснения после обновления: спокойная, не тревожная —
+     это не беда, а рассказ о том, что изменилось. */
+  .karta-rasskaz {
+    margin:10px 14px 0; padding:12px 14px;
+    background:var(--karta); border-radius:12px;
+  }
+  .rasskaz-zagolovok { font-weight:600; margin-bottom:6px; }
+  .rasskaz-tekst { color:var(--tihiy); line-height:1.42; margin-bottom:10px; }
+  .karta-rasskaz .tihaya { width:100%; }
+
   .beda {
     display:none; margin-top:6px; padding:7px 13px; border-radius:var(--r-m);
     background:rgba(240,131,121,.08); border:1px solid rgba(240,131,121,.28);
@@ -1085,6 +1095,17 @@
       <button class="glavnaya" id="knopka-koda">Сохранить</button>
       <div class="beda" id="beda-koda"></div>
     </div>
+  </div>
+
+  <!-- Разъяснение после обновления. Показывается ОДИН раз, сразу после
+       установки новой версии: тихая подсказка в значке до человека не
+       доходит — у второго человека семьи она провисела неделю, а версия
+       так и осталась старой. Закрывается кнопкой и больше не возвращается:
+       служба гасит признак первым же опросом состояния. -->
+  <div id="posle-obnovleniya" class="karta-rasskaz" hidden>
+    <div class="rasskaz-zagolovok" id="rasskaz-zagolovok">Kelevra обновилась</div>
+    <div class="rasskaz-tekst" id="rasskaz-tekst"></div>
+    <button class="tihaya" id="rasskaz-ponyatno">Понятно</button>
   </div>
 
   <div id="karta-svyazi" hidden>
@@ -2065,6 +2086,23 @@ function narisovatPodpisku(s) {
   $("podp-karta-kod").hidden = !maska;
 }
 
+// pokazatRasskazObObnovlenii — карточка «что изменилось», один раз после
+// установки новой версии. Поле posle_obnovleniya служба отдаёт ровно одному
+// опросу и тут же гасит, поэтому карточку держим на экране сами, пока
+// человек не нажмёт «Понятно».
+function pokazatRasskazObObnovlenii(s) {
+  if (!s.posle_obnovleniya) return;
+  const karta = $("posle-obnovleniya");
+  if (!karta.hidden) return; // уже висит, второй раз не переписываем
+  $("rasskaz-zagolovok").textContent = "Kelevra обновилась до " + s.posle_obnovleniya;
+  $("rasskaz-tekst").textContent = s.sluzhba_est
+    ? "Kelevra включается вместе с компьютером и работает, даже когда это окно закрыто. Ничего нажимать не нужно."
+    : "Теперь Kelevra включается вместе с компьютером и работает, даже когда это окно закрыто. Система один раз спросит разрешение — согласитесь, и подтверждения больше не понадобятся.";
+  karta.hidden = false;
+}
+
+$("rasskaz-ponyatno").onclick = () => { $("posle-obnovleniya").hidden = true; };
+
 async function obnovit() {
   let s;
   // okno=1 — не украшение адреса, а единственный способ службы узнать, что
@@ -2084,6 +2122,7 @@ async function obnovit() {
   $("lenta").classList.toggle("bez-nizhney", nuzhenKod);
   primenitVkladku();
   obnovitStrokuSluzhby(s);
+  pokazatRasskazObObnovlenii(s);
 
   // Ожидание дома — класс ДОПОЛНИТЕЛЬНЫЙ к s.sost (обычно "stoit"), а не
   // замена: .krug-blok.ozhidanie CSS-правило (см. выше .stoit) стоит позже в

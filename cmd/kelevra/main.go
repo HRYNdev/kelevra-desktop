@@ -212,11 +212,18 @@ func main() {
 	if smenaPID > 0 && !tiho && !priStarte {
 		vosstanovitPolnuyuZashchitu(adres)
 	}
+	// Обновление (--tiho --smena, см. zapustitSmenuPosleObnovleniya) — тот
+	// самый и единственный момент, когда служба Windows может прийти к
+	// человеку сама. Решение Вовы 08.09; разбор — sluzhba_pri_obnovlenii.go.
+	if smenaPID > 0 && tiho && !priStarte {
+		postavitSluzhbuPosleObnovleniya()
+		rasskazatChtoObnovilis(adres)
+	}
 	// pokazatLiOkno, а не голое !tiho: смена после обновления приходит с --tiho
 	// (obnovlenie.go: zapustitSmenuPosleObnovleniya), и до 02.09 этого хватало,
 	// чтобы человек, нажавший «Обновить» в открытом окне, остался вовсе без
 	// окна — вся жалоба 02.09 целиком (разбор в шапке smena_okna.go).
-	if pokazatLiOkno(tiho, smenaPID, itogOkna) {
+	if pokazatLiOkno(tiho, smenaPID, priStarte, itogOkna) {
 		// Беда 23.08: adresKopii уже отличает «нашёл чужую копию» от «поднял
 		// свою службу», но раньше main звал pokazatOkno одинаково в обоих
 		// случаях — второе окно создавалось поверх уже открытого первого, оба

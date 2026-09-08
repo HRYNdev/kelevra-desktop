@@ -143,3 +143,35 @@ func perezapustitSluzhbuPosleObnovleniya(put string, pid int) error {
 	log.Printf("обновление поставлено, ухожу с отказом — диспетчер служб поднимет новую версию")
 	return nil
 }
+
+// srokRasskazaPoslObnovleniya — локальный HTTP, ждать долго нечего: не
+// ответила служба за это время, значит человек просто не увидит карточку, а
+// приложение работает.
+const srokRasskazaPoslObnovleniya = 3 * time.Second
+
+// rasskazatChtoObnovilis просит службу показать в окне разъяснение: что
+// изменилось в этой версии и что делать дальше.
+//
+// Зачем вообще. Тихой подсказки в значке человеку не хватает: у второго
+// человека семьи она висела неделю словами «вышла версия 0.6.49 — правый
+// клик, Обновить», а версия так и осталась старой (замер 08.09 по журналу
+// с его машины). Решение Вовы 08.09: после обновления окно открывается
+// всегда (pokazatLiOkno) и один раз объясняет, что произошло.
+//
+// Фоном и без ожидания: окно не имеет права ждать локального запроса, чтобы
+// появиться. Не дошло — не беда, человек увидит обычное окно.
+func rasskazatChtoObnovilis(adres string) {
+	go func() {
+		klient := &http.Client{Timeout: srokRasskazaPoslObnovleniya}
+		req, err := http.NewRequest(http.MethodPost, adres+"api/posle_obnovleniya", nil)
+		if err != nil {
+			return
+		}
+		otvet, err := klient.Do(req)
+		if err != nil {
+			log.Printf("рассказ об обновлении до службы не дошёл (%v) — окно откроется обычным", err)
+			return
+		}
+		otvet.Body.Close()
+	}()
+}

@@ -194,6 +194,10 @@ type Sluzhba struct {
 	// выше: второй тычок в пузырь, пока первый ещё качает найденную сборку, не
 	// должен звать obnovlenie.Postavit второй раз (см. PostavitNaydennoe).
 	idetUstanovkaObnovleniya bool
+	// posleObnovleniya — номер версии, которую человеку надо показать в окне
+	// разъяснением, и признак того, что показывать вообще надо. Гасится
+	// первым же опросом состояния (см. Sostoyanie): один раз, не навсегда.
+	posleObnovleniya string
 	// skachanoObnovleniya и vsegoObnovleniya — ход ИДУЩЕЙ прямо сейчас
 	// загрузки (obnovlenie.PostavitSHodom докладывает сюда). Живут под тем же
 	// zamok и ровно столько же, сколько idetUstanovkaObnovleniya: и удача, и
@@ -428,6 +432,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/avtozapusk", s.avtozapuskRuchka)
 	m.HandleFunc(pref+"/api/avtorezhim", s.avtorezhimRuchka)
 	m.HandleFunc(pref+"/api/sluzhba_postavit", s.sluzhbaPostavit)
+	m.HandleFunc(pref+"/api/posle_obnovleniya", s.posleObnovleniyaRuchka)
 	m.HandleFunc(pref+"/api/uzly", s.uzly)
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
@@ -1137,6 +1142,12 @@ type otvetSostoyaniya struct {
 	MozhnoTun  bool   `json:"mozhno_tun,omitempty"` // туннель в профиле есть, а прав нет
 	Prava      bool   `json:"prava"`                // запущены ли мы администратором
 	SluzhbaEst bool   `json:"sluzhba_est"`          // установлена ли служба Windows: с ней подтверждение прав спрашивается один раз
+	// PosleObnovleniya — окно открыто сразу после установки новой версии.
+	// Окно по нему один раз показывает, что изменилось и что делать дальше:
+	// тихая подсказка в значке этого не делает — у второго человека семьи
+	// она провисела неделю, а версия так и осталась старой (замер 08.09).
+	// Значение — номер свежей версии, чтобы окно могло её назвать.
+	PosleObnovleniya string `json:"posle_obnovleniya,omitempty"`
 	// RuchnoyProksi — система отказалась настроить прокси сама, адрес придётся вписать руками.
 	RuchnoyProksi bool `json:"ruchnoy_proksi,omitempty"`
 	// Chastichnaya — защита ПОЛОВИННАЯ: ядро стоит системным прокси, и мимо
@@ -1435,6 +1446,14 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	if s.SluzhbaWindowsEst != nil {
 		o.SluzhbaEst = s.SluzhbaWindowsEst()
 	}
+	// Разъяснение после обновления показывается ОДИН раз: первый же опрос
+	// состояния его забирает и гасит. Окно спрашивает состояние раз в две
+	// секунды, и карточка, висящая до конца сеанса, стала бы не объяснением,
+	// а помехой.
+	s.zamok.Lock()
+	o.PosleObnovleniya = s.posleObnovleniya
+	s.posleObnovleniya = ""
+	s.zamok.Unlock()
 	o.MozhnoTun = k.EstTunnel && !o.Prava
 	o.PravaUzheSprosheny = s.Nastroyki.UzheSprosiliPrava()
 	o.RuchnoyProksi = k.RuchnoyProksi
@@ -2726,3 +2745,36 @@ func sluchaynyy() string {
 
 // fsPodpapki отдаёт встроенные страницы так, будто они лежат в корне.
 func fsPodpapki() (fs.FS, error) { return fs.Sub(oblik, "oblik") }
+
+// SkazatChtoPosleObnovleniya помечает, что окно этой копии открыто сразу после
+// установки новой версии, и один раз показывает человеку разъяснение.
+//
+// Зачем метод, а не поле в конструкторе: копию после обновления поднимает
+// main (cmd/kelevra: zapustitSmenuPosleObnovleniya → --tiho --smena), а
+// служба к этому моменту уже собрана. Пусто — обычный запуск, ничего не
+// показываем.
+func (s *Sluzhba) SkazatChtoPosleObnovleniya(versiya string) {
+	s.zamok.Lock()
+	s.posleObnovleniya = versiya
+	s.zamok.Unlock()
+}
+
+// posleObnovleniyaRuchka — окно новой копии говорит службе: этот запуск сразу
+// после установки версии, покажи человеку разъяснение.
+//
+// Ручкой, а не полем при сборке: окно и служба — РАЗНЫЕ процессы (замер с
+// машины человека: «окно 13924» и «служба 13664» пишут в один журнал), и
+// узнаёт про обновление именно окно — оно поднято сменой с --tiho --smena.
+// Служба к этому моменту уже работает и своей версии смены не видела.
+//
+// Версия берётся своя, а не из запроса: врать про чужой номер тут нечему, а
+// принимать его снаружи значит пускать в окно человека чужую строку.
+func (s *Sluzhba) posleObnovleniyaRuchka(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "только POST", http.StatusMethodNotAllowed)
+		return
+	}
+	s.SkazatChtoPosleObnovleniya(podpiska.Versiya)
+	log.Printf("окно сообщило: запуск после обновления — покажу разъяснение один раз")
+	w.WriteHeader(http.StatusOK)
+}

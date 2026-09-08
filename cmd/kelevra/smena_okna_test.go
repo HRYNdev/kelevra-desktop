@@ -17,12 +17,13 @@ func TestPokazatLiOkno(t *testing.T) {
 	nikakogo := itogSmenyOkna{}
 
 	sluchai := []struct {
-		imya     string
-		tiho     bool
-		smenaPID int
-		itog     itogSmenyOkna
-		hochet   bool
-		pochemu  string
+		imya      string
+		tiho      bool
+		smenaPID  int
+		priStarte bool
+		itog      itogSmenyOkna
+		hochet    bool
+		pochemu   string
 	}{
 		{
 			imya: "обновление нажали в открытом окне", tiho: true, smenaPID: 1234,
@@ -31,8 +32,14 @@ func TestPokazatLiOkno(t *testing.T) {
 		},
 		{
 			imya: "обновление нажали в трее, окна не было", tiho: true, smenaPID: 1234,
+			itog: nikakogo, hochet: true,
+			pochemu: "решение Вовы 08.09: новая версия меняет жизнь приложения на машине " +
+				"(ставит службу), и человек узнаёт об этом от нас, а не сам",
+		},
+		{
+			imya: "запрос прав при старте", tiho: true, smenaPID: 1234, priStarte: true,
 			itog: nikakogo, hochet: false,
-			pochemu: "тычок в пузырь при закрытом окне: окна не было — открывать его не просили",
+			pochemu: "это не обновление, а поднятие прав на обычном старте: окна тут не просили",
 		},
 		{
 			imya: "старое окно не закрылось", tiho: true, smenaPID: 1234,
@@ -57,10 +64,10 @@ func TestPokazatLiOkno(t *testing.T) {
 	}
 	for _, s := range sluchai {
 		t.Run(s.imya, func(t *testing.T) {
-			got := pokazatLiOkno(s.tiho, s.smenaPID, s.itog)
+			got := pokazatLiOkno(s.tiho, s.smenaPID, s.priStarte, s.itog)
 			if got != s.hochet {
-				t.Errorf("pokazatLiOkno(tiho=%v, smenaPID=%d, %+v) = %v, ждали %v: %s",
-					s.tiho, s.smenaPID, s.itog, got, s.hochet, s.pochemu)
+				t.Errorf("pokazatLiOkno(tiho=%v, smenaPID=%d, priStarte=%v, %+v) = %v, ждали %v: %s",
+					s.tiho, s.smenaPID, s.priStarte, s.itog, got, s.hochet, s.pochemu)
 			}
 		})
 	}
@@ -73,8 +80,8 @@ func TestPokazatLiOkno(t *testing.T) {
 // человека вовсе без работающего приложения — ровно с тем, на что он и
 // жаловался.
 func TestPokazatLiOknoNeZavisitOtUshlo(t *testing.T) {
-	ushlo := pokazatLiOkno(true, 1234, itogSmenyOkna{BylOkno: true, Ushlo: true})
-	neUshlo := pokazatLiOkno(true, 1234, itogSmenyOkna{BylOkno: true})
+	ushlo := pokazatLiOkno(true, 1234, false, itogSmenyOkna{BylOkno: true, Ushlo: true})
+	neUshlo := pokazatLiOkno(true, 1234, false, itogSmenyOkna{BylOkno: true})
 	if ushlo != neUshlo {
 		t.Fatalf("решение про своё окно зависит от чужого: ушло=%v, не ушло=%v", ushlo, neUshlo)
 	}
