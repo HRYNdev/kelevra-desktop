@@ -1744,13 +1744,38 @@ func (s *Sluzhba) avtorezhimPrimenit(ctx context.Context, pokolenie uint64, sost
 // Зачем признак нужен — см. avtorezhim.Nablyudeniye.ZondSlep: в туннеле
 // зонды видят подмену нашего же fakeip и решают «дома» где угодно.
 func (s *Sluzhba) tunnelPodnyat() bool {
-	if s.Yadro == nil || s.Yadro.Sost() != yadro.Rabotaet {
+	// «Поднимается» СЧИТАЕТСЯ поднятым, и это главная правка 09.09.
+	//
+	// Раньше здесь стояло Sost() == Rabotaet, то есть «ядро доложило, что
+	// связь работает». Но зондам важно не самочувствие ядра, а лежит ли его
+	// туннель у них на пути, — а он ложится РАНЬШЕ доклада. Замер на стенде
+	// 09.09: маршруты туннеля и подмена ответов публичного резолвера на
+	// 198.18.0.x живут уже на 3.7-й секунде после запуска ядра, тогда как
+	// адаптер к этому мигу ещё даже не виден в списке сетевых устройств, а
+	// состояние Rabotaet ставится и вовсе на 7-й.
+	//
+	// В это окно заход авторежима шёл СИСТЕМНЫМ резолвером — то есть прямо в
+	// перехват собственного ядра — и получал признак «дома» в любой точке
+	// мира. Ровно это видно в журнале живой машины 08.09: «поднят туннель» в
+	// 21:31:07, «обстановка сменилась на дома» в 21:31:09, защита опущена
+	// вне дома.
+	if s.Yadro == nil {
 		return false
 	}
 	s.zamok.Lock()
 	rezhim := s.kartina.Rezhim
 	s.zamok.Unlock()
-	return rezhim == konfig.Tunnel
+	return tunnelNaPutiZondov(s.Yadro.Sost(), rezhim)
+}
+
+// tunnelNaPutiZondov — вся суть решения выше, вынесенная отдельно, чтобы её
+// проверял тест, а не пересказ: в каком состоянии ядра его туннель уже (или
+// ещё) стоит на пути зондов авторежима.
+func tunnelNaPutiZondov(sost yadro.Sostoyanie, rezhim konfig.Rezhim) bool {
+	if rezhim != konfig.Tunnel {
+		return false
+	}
+	return sost == yadro.Rabotaet || sost == yadro.Podnimaem
 }
 
 // zashchitaPodnyata — работает ли прямо сейчас ядро. Именно «работает», а не
