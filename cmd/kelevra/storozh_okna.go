@@ -30,10 +30,30 @@ const (
 	molchaniyDoZakrytiya = 3
 )
 
+// novyyAdresSluzhby — адрес службы, поднявшейся ВЗАМЕН молчащей. Пусто, если
+// замены нет и окно закрылось насовсем.
+//
+// Пакетная переменная, а не возврат: сторож крутится в своей горутине и
+// закрывает окно чужой рукой (w.Terminate), а решение «открыть заново»
+// принимает main после того, как pokazatOkno вернётся.
+var novyyAdresSluzhby string
+
 // storozhitSluzhbu закрывает окно, когда служба, ради которой оно открыто,
 // перестала отвечать. zakryt зовётся ровно один раз и только по этой причине.
 // Отказ безопасный: пока служба отвечает — окно не трогаем вообще.
-func storozhitSluzhbu(url string, shag time.Duration, predel int, zakryt func()) {
+//
+// Перед закрытием смотрим, не поднялась ли служба ЗАНОВО по другому адресу.
+//
+// Замер 08.09 с живой машины. Человек нажал «Обновить», служба поставила
+// новую версию, ушла с отказом, диспетчер поднял её за пять секунд — но с
+// НОВЫМ случайным портом (было 61680, стало 54520). Окно держало старый
+// адрес, стучалось в мёртвый порт и осталось с надписью «Kelevra
+// перезапускается…» навсегда. Само обновление при этом прошло полностью.
+//
+// Поэтому молчание — ещё не приговор: сперва спрашиваем метку на диске
+// (kopiya.Nayti), и если там живой адрес и он ДРУГОЙ, окно надо не хоронить,
+// а открыть заново на нём.
+func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, zakryt func()) {
 	promahov := 0
 	for {
 		time.Sleep(shag)
@@ -45,6 +65,12 @@ func storozhitSluzhbu(url string, shag time.Duration, predel int, zakryt func())
 		if promahov < predel {
 			log.Printf("сторож окна: служба не ответила (%d из %d)", promahov, predel)
 			continue
+		}
+		if adres, est := kopiya.Nayti(papka); est && adres != url {
+			log.Printf("сторож окна: служба переехала на %s (была %s) — открываю окно заново", adres, url)
+			novyyAdresSluzhby = adres
+			zakryt()
+			return
 		}
 		log.Printf("сторож окна: служба молчит %d проверки подряд, закрываю окно", predel)
 		zakryt()
