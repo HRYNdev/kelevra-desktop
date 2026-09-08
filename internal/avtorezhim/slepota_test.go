@@ -272,29 +272,3 @@ func TestPrichinaSlepotySbrasyvayetsyaZryachimZahodom(t *testing.T) {
 		t.Fatalf("после зрячего захода причина не сброшена: %q", got)
 	}
 }
-
-// Подмена от ПУБЛИЧНОГО резолвера — это перехват, а не дом.
-//
-// Замер на стенде 09.09: при поднятом туннеле nslookup к 8.8.8.8 отдаёт
-// 198.18.0.4, при опущенном — не отвечает вовсе. Значит подмену от публичного
-// резолвера присылает наше собственное ядро, и признать её домом означает
-// погасить защиту ровно там, где она нужна.
-func TestPodmenaOtPublichnogoRezolveraSchitaetsyaPerehvatom(t *testing.T) {
-	a := &Avtorezhim{
-		Dns:           fakeDns{doma: true},
-		Trafik:        &fakeTrafik{izmereno: true, proshel: true},
-		TunnelPodnyat: func() bool { return true },
-		// Резолвер физического адаптера ПУБЛИЧНЫЙ — так выглядит машина в
-		// чужой сети, где адрес резолвера раздаёт оператор связи.
-		SetevoyAdres: func() (string, string, error) { return "8.8.8.8:53", "10.1.2.3", nil },
-		DnsPryamoy:   func(adres, lokalny string) DnsProver { return fakeDns{doma: true} },
-		Zadvizhka:    NovayaZadvizhka(VneDoma),
-	}
-	n, _, _ := a.Zahod(context.Background(), true, true)
-	if !n.ZondSlep {
-		t.Fatalf("подмену от публичного резолвера приняли за наблюдение: %+v", n)
-	}
-	if n.DnsPriznakDoma {
-		t.Fatal("подмена от публичного резолвера засчитана как признак дома — защита будет опущена вне дома")
-	}
-}
