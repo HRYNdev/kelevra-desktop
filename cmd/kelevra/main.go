@@ -191,6 +191,15 @@ func main() {
 	// Окно — ВНЕ замка (см. adresKopii): pokazatOkno не возвращается, пока
 	// человек не закроет окно.
 	adres, chuzhaya, itogOkna := adresKopii(papka, putZhurnala, smenaPID)
+	// Место занято живой копией СТАРЕЕ нас — просим её уйти и занимаем сами.
+	//
+	// Иначе человек, запустивший новый файл руками, остаётся со старой
+	// версией и уверенностью, что обновился (замер 08.09, разбор — в шапке
+	// mesto_novoy_kopii.go). Обычное обновление уходит само, но запуск
+	// установщика руками этого пути не знает.
+	if chuzhaya && smenaPID == 0 && zanyatMestoEsliMyNovee(adres) {
+		adres, chuzhaya, itogOkna = adresKopii(papka, putZhurnala, smenaPID)
+	}
 	if smenaPID > 0 {
 		// Второй заход уборки — и он-то и убирает хвост по-настоящему. Первый
 		// (ubratHvostProshlogoObnovleniya выше по main) звучит ещё ДО zhdatSmenu,
