@@ -3,6 +3,7 @@
 package avtozapusk
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -28,6 +29,13 @@ func vernutPosle(t *testing.T) {
 	if err != nil {
 		if _, kustErr := registry.OpenKey(registry.CURRENT_USER, kustVetki, registry.QUERY_VALUE); kustErr != nil {
 			t.Skipf("нет куста %s, машина не похожа на Windows: %v", kustVetki, kustErr)
+		}
+		// На раннере GitHub профиль пользователя искусственный: куст есть, а
+		// ветки автозагрузки в нём нет — там никто никогда ничего не
+		// запускал. У ЖИВОГО человека она есть всегда, и её отсутствие —
+		// настоящая беда, поэтому вне CI проверка по-прежнему падает.
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Skipf("ветки автозагрузки нет на раннере (профиль пустой): %v", err)
 		}
 		t.Fatalf("куст %s на месте, а ветка автозагрузки %s недоступна (%v) — автозапуск у человека работать не будет", kustVetki, vetka, err)
 	}
