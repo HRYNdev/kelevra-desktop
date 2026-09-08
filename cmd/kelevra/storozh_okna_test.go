@@ -18,7 +18,7 @@ func TestStorozhZakryvaetOknoKogdaSluzhbaUmerla(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	zakryto := make(chan struct{})
-	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, 200*time.Millisecond, func() { close(zakryto) })
+	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, 200*time.Millisecond, func() { close(zakryto) }, func(string) {})
 
 	// Фаза A: служба жива — окно закрывать не за что.
 	select {
@@ -50,7 +50,7 @@ func TestStorozhTerpitOdinochnyyPromah(t *testing.T) {
 	defer server.Close()
 
 	zakryto := make(chan struct{})
-	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, 200*time.Millisecond, func() { close(zakryto) })
+	go storozhitSluzhbu(server.URL, t.TempDir(), 20*time.Millisecond, 3, 200*time.Millisecond, func() { close(zakryto) }, func(string) {})
 
 	select {
 	case <-zakryto:
@@ -80,19 +80,20 @@ func TestStorozhVidyaPereezdOtkryvaetOknoZanovo(t *testing.T) {
 		t.Fatalf("не записал метку службы: %v", err)
 	}
 
-	vzyatNovyyAdres() // сбрасываем след прошлого теста
 	zakryto := make(chan struct{})
+	pereshli := make(chan string, 4)
 	// Старый адрес мёртв: сервера на нём нет вовсе.
-	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) })
+	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) }, func(a string) { pereshli <- a })
 
 	select {
+	case adres := <-pereshli:
+		if adres != novaya.URL {
+			t.Fatalf("окно переведено на %q, а служба живёт на %q", adres, novaya.URL)
+		}
 	case <-zakryto:
+		t.Fatal("сторож закрыл окно вместо перевода на новый адрес — второе окно в этом процессе создать нельзя")
 	case <-time.After(3 * time.Second):
-		t.Fatal("сторож не закрыл окно, хотя старая служба молчит")
-	}
-	if adres := vzyatNovyyAdres(); adres != novaya.URL {
-		t.Fatalf("новый адрес службы %q, а служба живёт на %q — окно откроется в пустоту или не откроется вовсе",
-			adres, novaya.URL)
+		t.Fatal("сторож не заметил переезда службы")
 	}
 }
 
@@ -112,10 +113,10 @@ func TestStorozhZhdyotSluzhbuKotorayaVernulasPozzhe(t *testing.T) {
 	}))
 	defer novaya.Close()
 
-	vzyatNovyyAdres()
 	zakryto := make(chan struct{})
+	pereshli := make(chan string, 4)
 	// Метки нет вовсе: старая служба ушла, новая ещё не поднялась.
-	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) })
+	go storozhitSluzhbu("http://127.0.0.1:1/", papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) }, func(a string) { pereshli <- a })
 
 	// Замена появляется заметно позже порога молчания (3 × 20 мс).
 	time.Sleep(300 * time.Millisecond)
@@ -124,12 +125,14 @@ func TestStorozhZhdyotSluzhbuKotorayaVernulasPozzhe(t *testing.T) {
 	}
 
 	select {
+	case adres := <-pereshli:
+		if adres != novaya.URL {
+			t.Fatalf("сторож перевёл окно на %q, а служба живёт на %q", adres, novaya.URL)
+		}
 	case <-zakryto:
+		t.Fatal("сторож закрыл окно вместо перевода: новое окно в этом процессе не создастся")
 	case <-time.After(3 * time.Second):
-		t.Fatal("сторож не закрыл окно, хотя служба переехала")
-	}
-	if adres := vzyatNovyyAdres(); adres != novaya.URL {
-		t.Fatalf("сторож не дождался замены: адрес %q, а служба живёт на %q", adres, novaya.URL)
+		t.Fatal("сторож не дождался замены")
 	}
 }
 
@@ -157,9 +160,9 @@ func TestStorozhNeZakryvaetOknoKogdaSluzhbaOzhilaNaTomZheAdrese(t *testing.T) {
 	}))
 	defer server.Close()
 
-	vzyatNovyyAdres()
 	zakryto := make(chan struct{})
-	go storozhitSluzhbu(server.URL, papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) })
+	pereshli := make(chan string, 4)
+	go storozhitSluzhbu(server.URL, papka, 20*time.Millisecond, 3, time.Second, func() { close(zakryto) }, func(a string) { pereshli <- a })
 
 	// Даём сторожу разувериться, потом оживляем службу на том же адресе.
 	time.Sleep(200 * time.Millisecond)

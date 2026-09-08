@@ -160,7 +160,13 @@ func pokazatOkno(url string) {
 	// Dispatch кладёт функцию в очередь окна и будит его PostThreadMessageW
 	// (webview.go:443) — Terminate исполняется в правильном потоке.
 	zakrytOkno := func() { w.Dispatch(w.Terminate) }
-	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, srokOzhidaniyaZameny, zakrytOkno)
+	// Переезд службы окно переживает переходом на новый адрес, не закрываясь:
+	// второе окно в этом же процессе создать нельзя, go-webview2 падает
+	// внутри себя (проверено на живом стенде 09.09, авария в
+	// edge.Chromium.Init). Navigate — тоже через нить окна, по той же
+	// причине, что и Terminate.
+	perejtiNaAdres := func(adres string) { w.Dispatch(func() { w.Navigate(adres) }) }
+	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, srokOzhidaniyaZameny, zakrytOkno, perejtiNaAdres)
 	w.Navigate(url)
 	w.Run()
 }

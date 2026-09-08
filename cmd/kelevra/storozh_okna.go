@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"sync"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
@@ -46,35 +45,6 @@ const (
 	srokOzhidaniyaZameny = 60 * time.Second
 )
 
-// novyyAdresSluzhby — адрес службы, поднявшейся ВЗАМЕН молчащей. Пусто, если
-// замены нет и окно закрылось насовсем.
-//
-// Пакетная переменная, а не возврат: сторож крутится в своей горутине, а
-// решение «открыть заново» принимает main после того, как pokazatOkno
-// вернётся. Пишет её горутина сторожа, читает главная — поэтому под замком,
-// а не голым присваиванием: без него это гонка данных, и go test -race прав.
-var (
-	zamokAdresa sync.Mutex
-	adresZameny string
-)
-
-// zapomnitNovyyAdres и vzyatNovyyAdres — единственный путь к этой переменной.
-func zapomnitNovyyAdres(adres string) {
-	zamokAdresa.Lock()
-	adresZameny = adres
-	zamokAdresa.Unlock()
-}
-
-// vzyatNovyyAdres отдаёт адрес замены и сразу забывает его: второй раз то же
-// самое окно открывать не надо.
-func vzyatNovyyAdres() string {
-	zamokAdresa.Lock()
-	defer zamokAdresa.Unlock()
-	adres := adresZameny
-	adresZameny = ""
-	return adres
-}
-
 // storozhitSluzhbu закрывает окно, когда служба, ради которой оно открыто,
 // перестала отвечать. zakryt зовётся ровно один раз и только по этой причине.
 // Отказ безопасный: пока служба отвечает — окно не трогаем вообще.
@@ -90,7 +60,7 @@ func vzyatNovyyAdres() string {
 // Поэтому молчание — ещё не приговор: сперва спрашиваем метку на диске
 // (kopiya.Nayti), и если там живой адрес и он ДРУГОЙ, окно надо не хоронить,
 // а открыть заново на нём.
-func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, srokZameny time.Duration, zakryt func()) {
+func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, srokZameny time.Duration, zakryt func(), perejti func(string)) {
 	promahov := 0
 	for {
 		time.Sleep(shag)
@@ -108,10 +78,24 @@ func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, srokZam
 		// взгляда (см. srokOzhidaniyaZameny).
 		log.Printf("сторож окна: служба молчит %d проверки подряд, жду замену до %s", predel, srokZameny)
 		if adres, vernulas := zhdatZamenu(url, papka, shag, srokZameny); adres != "" {
-			log.Printf("сторож окна: служба переехала на %s (была %s) — открываю окно заново", adres, url)
-			zapomnitNovyyAdres(adres)
-			zakryt()
-			return
+			// ОКНО НЕ ЗАКРЫВАЕМ, А ПЕРЕВОДИМ НА НОВЫЙ АДРЕС.
+			//
+			// Раньше здесь окно закрывалось, а main открывал новое. Проверка
+			// на живом стенде 09.09 показала, чем это кончается: второе окно
+			// в том же процессе создать нельзя — go-webview2 падает внутри
+			// себя (nil pointer в edge.Chromium.Init), ещё до возврата, так
+			// что никакая проверка «окно не создалось» не спасает. Человек
+			// получал белое окно и сообщение об аварии — ту же беду с другого
+			// конца.
+			//
+			// А закрывать и незачем: окно живое, поменялся только адрес
+			// службы. Переход на него дешевле, быстрее и без единого нового
+			// окна на экране.
+			log.Printf("сторож окна: служба переехала на %s (была %s) — перевожу окно на новый адрес", adres, url)
+			perejti(adres)
+			url = adres
+			promahov = 0
+			continue
 		} else if vernulas {
 			log.Printf("сторож окна: служба ответила по прежнему адресу, продолжаю дозор")
 			promahov = 0
