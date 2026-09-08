@@ -59,7 +59,23 @@ func PoprositPriStarte(smenaPID int) error {
 	return poprosit(smenaPID, true)
 }
 
+// PoprositDlya просит права ради одного конкретного дела и передаёт новой
+// копии ровно те аргументы, которые для него нужны.
+//
+// Появилась вместе со службой Windows: её установка — не «смена режима» и не
+// «запрос при старте», это разовое действие, после которого копия уходит.
+// Пропускать его через smenaPID было бы враньём: никакой смены копий тут нет.
+func PoprositDlya(argumenty string) error { return zapustitSPravami(argumenty) }
+
 func poprosit(smenaPID int, priStarte bool) error {
+	arg := fmt.Sprintf("--smena %d", smenaPID)
+	if priStarte {
+		arg += " --pri-starte"
+	}
+	return zapustitSPravami(arg)
+}
+
+func zapustitSPravami(arg string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -70,10 +86,6 @@ func poprosit(smenaPID int, priStarte bool) error {
 	verb, _ := syscall.UTF16PtrFromString("runas")
 	fayl, _ := syscall.UTF16PtrFromString(exe)
 	papka, _ := syscall.UTF16PtrFromString(katalog(exe))
-	arg := fmt.Sprintf("--smena %d", smenaPID)
-	if priStarte {
-		arg += " --pri-starte"
-	}
 	argy, _ := syscall.UTF16PtrFromString(arg)
 
 	const swShowNormal = 1

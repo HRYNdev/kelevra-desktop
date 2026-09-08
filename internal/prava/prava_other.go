@@ -3,6 +3,7 @@
 package prava
 
 import (
+	"errors"
 	"fmt"
 	"os"
 )
@@ -31,4 +32,10 @@ func Poprosit(smenaPID int) error {
 // prava_windows.go), нужна только чтобы cmd/kelevra собирался и на не-Windows.
 func PoprositPriStarte(smenaPID int) error {
 	return fmt.Errorf("запросить права можно только на Windows")
+}
+
+// PoprositDlya — на не-Windows правами так не управляют: там либо запущено от
+// root, либо нет, и окна с подтверждением не существует.
+func PoprositDlya(argumenty string) error {
+	return errors.New("запрос прав есть только в Windows")
 }
