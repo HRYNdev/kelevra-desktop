@@ -1882,6 +1882,19 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// Права могли появиться (человек перезапустил приложение администратором) —
 	// пересобираем конфиг перед стартом, иначе режим останется вчерашним.
 	vybor := konfig.Vybor{}
+	// Правила берём С ДИСКА, если кеш полон, — и ядро на старте в сеть за ними
+	// не ходит вовсе.
+	//
+	// Ради этого кеш и заведён (разбор — в шапке internal/pravila/kesh.go).
+	// Замер 08.09: домен правил был жив и файл качался за секунду, но ИМЕННО
+	// в момент старта ядра резолв не работал — Windows перестраивает DNS под
+	// туннель, старый резолвер уже молчит, новый ещё не поднялся, потому что
+	// ядро и не стартовало. Человек в этой петле оставался без связи.
+	if kesh := pravila.IzKesha(hranenie.PapkaYadra(), s.tegiPravil()); kesh != nil {
+		vybor.PravilaIzKomplekta = kesh
+		vybor.PravilaKomplektData = "" // не комплект, а свежие с диска — заметку не показываем
+		log.Printf("правила беру из кеша на диске (%d наборов) — ядру не придётся качать их на старте", len(kesh))
+	}
 	if err := s.perestroit(vybor); err != nil {
 		log.Printf("не подготовил конфиг: %v", err)
 		return fmt.Errorf("не подготовил конфиг: %w", err)
@@ -2062,14 +2075,20 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			}
 		}
 		if !podnyalsyaKomplektom {
-			log.Printf("встроенный комплект не помог, поднимаю ядро совсем без правил (весь трафик через VPN)")
-			vybor.BezSetevyhPravil = true
-			if e := s.perestroit(vybor); e == nil {
-				zctx4, otmena4 := context.WithTimeout(ctx, 70*time.Second)
-				defer otmena4()
-				err = zapustit(zctx4)
-				err = bezProksiEsliNado(&vybor, err)
-			}
+			// Ступени «поднять совсем без правил» больше нет, и вот почему.
+			//
+			// Без правил в туннель уходит ВЕСЬ трафик, включая российские
+			// сайты. В нашей стране это не запасной вариант, а поломка:
+			// человек получает зарубежный адрес там, где нужен домашний, и
+			// сайты начинают отвечать «выключите VPN». Замер 08.09 с живой
+			// машины — ровно этот экран человек и увидел.
+			//
+			// Честнее не поднимать связь и сказать причину: без разбора
+			// трафика она приносит больше вреда, чем пользы. Комплект правил
+			// возится в самом приложении и покрывает боевой профиль поимённо
+			// (internal/pravila), так что сюда мы попадаем, только если и он
+			// не подошёл — это уже беда, а не обычный день.
+			log.Printf("ни свежих правил, ни встроенного комплекта — связь не поднимаю: без разбора трафика весь он уйдёт в туннель, включая российские сайты")
 		}
 	}
 	// Последняя ступень лестницы деградации: туннель не поднялся ВООБЩЕ.
@@ -2180,6 +2199,10 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		if tunnelRezhim {
 			zakrepitTunnel(tunImya)
 		}
+		// Связь есть — самое время обновить кеш правил на диске. Фоном: он
+		// нужен СЛЕДУЮЩЕМУ подъёму, а этому уже ничем не поможет, и держать
+		// человека на «Подключаюсь» ради закачки полумегабайта незачем.
+		go s.ObnovitKeshPravil(context.WithoutCancel(ctx))
 		if proksiRezhim {
 			stoit := proksi.Stoit(adres)
 			if !stoit {
@@ -2929,4 +2952,51 @@ func (s *Sluzhba) OtpravitZhurnalySrochno(ctx context.Context) {
 	log.Printf("срочная отправка журнала после неудачи связи: кусков %d, сырых %d Б, сжато %d Б",
 		len(otchet.Kuski), otchet.SyrykhBayt, otchet.SzhatoBayt)
 	s.Nastroyki.OtmetitOtpravkuZhurnalov(time.Now().Unix())
+}
+
+// tegiPravil — теги наборов правил боевого профиля, взятые из него самого.
+//
+// Из профиля, а не из зашитого списка: наборы добавляют на сервере, и любой
+// список в приложении разъедется молча. Ровно так 08.09 и вышло со встроенным
+// комплектом — в профиле стало 23 набора, в комплекте осталось 22, и вся
+// подстраховка отказалась применяться целиком.
+func (s *Sluzhba) tegiPravil() []string {
+	syroy, err := os.ReadFile(hranenie.PutProfilya())
+	if err != nil {
+		return nil
+	}
+	adresa := konfig.AdresaPravil(syroy)
+	tegi := make([]string, 0, len(adresa))
+	for teg := range adresa {
+		tegi = append(tegi, teg)
+	}
+	return tegi
+}
+
+// ObnovitKeshPravil качает свежие наборы правил на диск. Зовётся ФОНОМ и
+// только когда связь уже поднята: на старте ядра сеть занята собой, и именно
+// поэтому кеш вообще понадобился (шапка internal/pravila/kesh.go).
+func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) {
+	syroy, err := os.ReadFile(hranenie.PutProfilya())
+	if err != nil {
+		return
+	}
+	adresa := konfig.AdresaPravil(syroy)
+	if len(adresa) == 0 {
+		return
+	}
+	tegi := make([]string, 0, len(adresa))
+	for teg := range adresa {
+		tegi = append(tegi, teg)
+	}
+	if !pravila.Ustarel(hranenie.PapkaYadra(), tegi) {
+		return
+	}
+	log.Printf("обновляю кеш правил фоном (%d наборов)", len(adresa))
+	skachano, err := pravila.Obnovit(ctx, &http.Client{Timeout: 2 * time.Minute}, adresa, hranenie.PapkaYadra())
+	if err != nil {
+		log.Printf("кеш правил обновлён не полностью: %d из %d (%v) — на старте возьмётся то, что есть", skachano, len(adresa), err)
+		return
+	}
+	log.Printf("кеш правил обновлён: %d наборов", skachano)
 }
