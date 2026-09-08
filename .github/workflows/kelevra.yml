@@ -7,7 +7,18 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Проверочная сборка с ЗАДАННЫМ номером версии.
+  #
+  # Нужна, чтобы проверять обновление на стенде, не выпуская ничего семье:
+  # тег app-vX.Y.Z уезжает всем автообновлением, а здесь файл просто лежит
+  # артефактом. Без номера сборка носит внутри «0.1.0-rabota» и считает себя
+  # старше любого релиза — обновление на такой проверить нельзя.
   workflow_dispatch:
+    inputs:
+      versiya:
+        description: "Номер версии внутри exe (например 0.6.63-stend). Пусто — как обычно"
+        required: false
+        default: ""
 
 jobs:
   build-and-test:
@@ -27,7 +38,20 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 0
-        run: go build -o build/Kelevra.exe ./cmd/kelevra
+          VERSIYA: ${{ github.event.inputs.versiya }}
+        run: |
+          if [ -n "$VERSIYA" ]; then
+            go build -ldflags "-H=windowsgui -s -w -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$VERSIYA" -o build/Kelevra.exe ./cmd/kelevra
+            # Пустой -X молча оставляет заводскую строку, и стенд будет
+            # проверять не то, что думает: сверяем глазами (та же проверка,
+            # что в vypusk.yml).
+            if ! grep -q "$VERSIYA" build/Kelevra.exe; then
+              echo "✗ в собранном exe нет строки $VERSIYA: ldflags не сработали"; exit 1
+            fi
+            echo "✓ проверочная сборка с версией $VERSIYA"
+          else
+            go build -o build/Kelevra.exe ./cmd/kelevra
+          fi
       # Готовый файл из ветки: нужен, чтобы проверить сборку на живой машине,
       # не выпуская её всем. Тег сразу уезжает семье автообновлением, а тут
       # человек скачивает и ставит руками только себе.
