@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"log"
 	"os"
 	"syscall"
@@ -130,7 +131,7 @@ func pokazatOkno(url string) {
 	// нечего, а осиротевшее окно человек принимает за вторую копию приложения
 	// (см. storozh_okna.go). Terminate по документации go-webview2 можно звать
 	// из чужого потока, поэтому сторож работает своей горутиной.
-	go storozhitSluzhbu(url, shagStorozha, molchaniyDoZakrytiya, w.Terminate)
+	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, w.Terminate)
 	w.Navigate(url)
 	w.Run()
 }

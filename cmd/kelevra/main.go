@@ -257,6 +257,16 @@ func main() {
 			log.Printf("чужое окно не нашлось, открываю своё")
 		}
 		pokazatOkno(adres)
+		// Окно закрылось из-за ПЕРЕЕЗДА службы (обновление подняло её заново
+		// на другом порту) — открываем его на новом адресе, а не бросаем
+		// человека с надписью «Kelevra перезапускается…» (замер 08.09,
+		// разбор в storozh_okna.go).
+		for novyyAdresSluzhby != "" {
+			adres = novyyAdresSluzhby
+			novyyAdresSluzhby = ""
+			log.Printf("окно открывается заново на новом адресе службы: %s", adres)
+			pokazatOkno(adres)
+		}
 	}
 }
 
