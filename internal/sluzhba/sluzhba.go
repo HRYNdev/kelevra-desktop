@@ -464,6 +464,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/avtorezhim", s.avtorezhimRuchka)
 	m.HandleFunc(pref+"/api/sluzhba_postavit", s.sluzhbaPostavit)
 	m.HandleFunc(pref+"/api/posle_obnovleniya", s.posleObnovleniyaRuchka)
+	m.HandleFunc(pref+"/api/ustupit_mesto", s.ustupitMestoRuchka)
 	m.HandleFunc(pref+"/api/uzly", s.uzly)
 	m.HandleFunc(pref+"/api/vybrat", s.vybrat)
 	m.HandleFunc(pref+"/api/zamerit", s.zamerit)
@@ -2999,4 +3000,48 @@ func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) {
 		return
 	}
 	log.Printf("кеш правил обновлён: %d наборов", skachano)
+}
+
+// ustupitMestoRuchka — «на машине запустили копию новее, уходи».
+//
+// Зачем. Замер 08.09 с живой машины: человек обновился, файл на диске стал
+// новым, новая копия запустилась — и замолчала, потому что место занято
+// живой старой. Связью продолжала рулить прежняя версия, а человек был
+// уверен, что работает свежая. Все правки того дня до него просто не
+// доезжали, и выглядело это как «ничего не чинится».
+//
+// Само по себе занятое место — правильная защита (две копии дерутся за один
+// сетевой адаптер, разбор в internal/kopiya). Не хватало одного: способа
+// сказать старой копии, что пришла новее. Теперь он есть.
+//
+// Версию проверяем ЗДЕСЬ, а не доверяем вызывающему: уступать место копии
+// старее себя нельзя ни при каких словах — так одно случайное нажатие на
+// прошлогодний файл в Загрузках откатило бы человека назад.
+func (s *Sluzhba) ustupitMestoRuchka(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "только POST", http.StatusMethodNotAllowed)
+		return
+	}
+	chuzhaya := strings.TrimSpace(r.URL.Query().Get("versiya"))
+	if chuzhaya == "" {
+		http.Error(w, "не сказана версия", http.StatusBadRequest)
+		return
+	}
+	if obnovlenie.Sravnit(chuzhaya, podpiska.Versiya) <= 0 {
+		log.Printf("копия версии %s просит место, а работает %s — не уступаю", chuzhaya, podpiska.Versiya)
+		http.Error(w, "пришедшая копия не новее", http.StatusConflict)
+		return
+	}
+	log.Printf("на машине запущена версия %s (работает %s) — гашу ядро и ухожу, место за ней", chuzhaya, podpiska.Versiya)
+	w.WriteHeader(http.StatusOK)
+	go func() {
+		// Пауза — чтобы ответ успел уйти: тот же приём, что в PostavitNaydennoe.
+		time.Sleep(300 * time.Millisecond)
+		_ = s.OpustitZashchitu()
+		if s.vyhod != nil {
+			s.vyhod()
+			return
+		}
+		os.Exit(0)
+	}()
 }
