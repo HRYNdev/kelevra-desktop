@@ -26,3 +26,5 @@ func Zapustit() error { return neZdes }
 func Ostanovit() error { return neZdes }
 
 func Krutit(rabota func(ctx context.Context)) error { return neZdes }
+
+func PopravitSamopodyom() {}
