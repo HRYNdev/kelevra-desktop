@@ -115,6 +115,7 @@ func isklyuchaemyeIzMarshrutov(estIPv6 bool) []string {
 // конфиге его видно глазами при разборе аварии.
 func nastroitTunPodLokalnuyuSet(vh map[string]any) {
 	vh["strict_route"] = false
+	sbitMtuPodInternet(vh)
 
 	uzhe := spisokStrok(vh["route_exclude_address"])
 	est := map[string]bool{}
@@ -287,5 +288,48 @@ func podvinutAdresaTun(vh map[string]any, shag int) {
 			continue
 		}
 		vh[pole] = strokiVSpisokAny(stali)
+	}
+}
+
+
+// MtuDlyaOkna — размер пакета туннеля на компьютере.
+//
+// 1420 = 1500 (обычный кадр интернета) минус запас на обёртки: заголовки IP и
+// TCP, TLS и сам VLESS. Точное число тут не критично, важно НЕ БОЛЬШЕ 1500:
+// всё, что больше, приходится дробить по дороге.
+const MtuDlyaOkna = 1420
+
+// sbitMtuPodInternet ставит туннелю размер пакета, пригодный для интернета.
+//
+// Профиль присылает mtu 9000 — это заводское значение sing-box, рассчитанное
+// на телефон, и НА ТЕЛЕФОНЕ ОНО РАБОТАЕТ. Трогать его на сервере нельзя:
+// конфиг общий для всей семьи, и правка ради одной машины сломала бы то, что
+// у остальных не ломалось (сказано прямо 08.09, и справедливо).
+//
+// А на Windows те же 9000 стоят человеку секунд. Замер с живой машины 08.09,
+// разбивка curl по этапам: соединение устанавливалось мгновенно, а TLS-
+// рукопожатие занимало от 3.6 до 6.5 секунд — приложения отдавали в туннель
+// огромные пакеты, и каждый дробился по дороге. После смены на 1420 те же
+// сайты: ya.ru 7.7 → 1.1 с, github 4.0 → 1.4 с, google 5.5 → 1.3 с.
+//
+// Поэтому правка живёт ЗДЕСЬ, рядом с остальными правками профиля под
+// Windows (strict_route, локальные подсети): сервер отдаёт всем одно и то же,
+// а каждая платформа доводит под себя.
+func sbitMtuPodInternet(vh map[string]any) {
+	byloBolshe := true
+	switch m := vh["mtu"].(type) {
+	case float64:
+		byloBolshe = m > MtuDlyaOkna
+	case int:
+		byloBolshe = m > MtuDlyaOkna
+	case nil:
+		// Профиль про mtu молчит — ядро возьмёт своё заводское (те же 9000),
+		// поэтому ставим своё явно.
+	default:
+		// Чужая форма записи: не трогаем, чтобы не испортить непонятое.
+		return
+	}
+	if byloBolshe {
+		vh["mtu"] = MtuDlyaOkna
 	}
 }
