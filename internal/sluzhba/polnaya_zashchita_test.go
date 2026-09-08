@@ -18,6 +18,7 @@ import (
 // Этот тест проверяет обе половины: метка не трогается ДО и ВО ВРЕМЯ окна
 // UAC, а свой pid действительно уходит в poprositPrava.
 func TestMetkaZhivetVoVremyaUACIPidPeredan(t *testing.T) {
+	nuzhenChelovekBezPrav(t)
 	papka := t.TempDir()
 	t.Setenv("KELEVRA_DIR", papka)
 	t.Setenv("KELEVRA_PRAVA", "net") // штатный рычаг стенда: под root права «уже есть»
@@ -53,6 +54,7 @@ func TestMetkaZhivetVoVremyaUACIPidPeredan(t *testing.T) {
 // Отказ в правах не должен стоить приложению метки: копия продолжает
 // работать, а метку никто не трогал — она просто остаётся на месте.
 func TestOtkazVPravahOstavlyaetMetkuNaMeste(t *testing.T) {
+	nuzhenChelovekBezPrav(t)
 	papka := t.TempDir()
 	t.Setenv("KELEVRA_DIR", papka)
 	t.Setenv("KELEVRA_PRAVA", "net") // штатный рычаг стенда: под root права «уже есть»
@@ -81,6 +83,7 @@ func TestOtkazVPravahOstavlyaetMetkuNaMeste(t *testing.T) {
 // гонка: os.Exit ниже пропускает defer'ы zapustitSluzhbu, и метка либо
 // пропадала бы раньше времени, либо не пропадала вовсе.
 func TestSoglasieNeTrogaetMetkuSama(t *testing.T) {
+	nuzhenChelovekBezPrav(t)
 	papka := t.TempDir()
 	t.Setenv("KELEVRA_DIR", papka)
 	t.Setenv("KELEVRA_PRAVA", "net") // штатный рычаг стенда: под root права «уже есть»
