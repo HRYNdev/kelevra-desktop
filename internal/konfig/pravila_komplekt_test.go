@@ -150,3 +150,49 @@ func TestPravilaIzKomplektaGlavneeBezSetevyhPravil(t *testing.T) {
 		t.Fatalf("route.final = %q — BezSetevyhPravil переставил final, хотя комплект должен был главенствовать", final)
 	}
 }
+
+// Правила из КЕША — не встроенный комплект, и заметки про комплект быть не должно.
+//
+// Беда, замеченная владельцем 08.09: в окне висело «Свежие правила не
+// скачались — работают встроенные (от )» — с пустой скобкой вместо даты и,
+// главное, неправдой по сути. Правила у него были не встроенные, а свежий
+// кеш, скачанный этой же машиной. Пустая дата и была признаком кеша:
+// служба ставит PravilaKomplektData = "" именно в этой ветке.
+func TestPravilaIzKeshaNeVydayutsyaZaVstroennyyKomplekt(t *testing.T) {
+	komplekt, err := pravila.Razlozhit(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, k, err := Prigotovit(profil(t), Vybor{
+		PravilaIzKomplekta: komplekt,
+		// Даты нет: так служба помечает наборы, взятые из кеша на диске.
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(k.Zametka, "встроенные") {
+		t.Fatalf("заметка про встроенный комплект при правилах из кеша: %q", k.Zametka)
+	}
+	if k.PravilaOtkuda != "кеш" {
+		t.Fatalf("источник правил %q, а наборы взяты из кеша", k.PravilaOtkuda)
+	}
+	if k.PravilNaborov != len(komplekt) {
+		t.Fatalf("наборов в картине %d, а подставлено %d", k.PravilNaborov, len(komplekt))
+	}
+}
+
+// Размер пакета туннеля виден в картине, а значит и в журнале.
+//
+// От него прямо зависит скорость: профиль присылает 9000, клиент сбивает до
+// 1420, и разница на живой машине была 7.7 с против 1.1 с на открытие ya.ru.
+// При этом слова «mtu» не было ни в одной строке журналов десктопа за всю их
+// историю, и жалобу «сайты по 10 секунд» проверить было нечем.
+func TestRazmerPaketaVidenVKartine(t *testing.T) {
+	_, k, err := Prigotovit(profil(t), Vybor{Prava: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.MtuTun != MtuDlyaOkna {
+		t.Fatalf("в картине размер пакета %d, а туннель собран с %d", k.MtuTun, MtuDlyaOkna)
+	}
+}
