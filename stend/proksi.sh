@@ -320,6 +320,11 @@ else
   sleep 2
   posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
   echo "  после: ProxyEnable=$posle ProxyServer=$server_posle ruchnoy_proksi=$ruchnoy"
+  if printf '%s' "$otvet" | grep -q '"beda"' && ploshchadka_ne_tyanet "$ZHURNAL"; then
+    echo "ПЛОЩАДКА: wine не отдаёт список сетевых адаптеров, вердикт по продукту не выношу"
+    ostanovit
+    exit 7
+  fi
   if printf '%s' "$otvet" | grep -q '"beda"'; then
     echo "  КРАСНЫЙ: подключение не удалось — постановку прокси проверить не на чем"
     tail -12 "$YADRO_PAPKA/yadro.log" 2>/dev/null; bed=1
@@ -420,6 +425,11 @@ else
   sleep 2
   posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
   echo "  после «Подключить»: ProxyEnable=$posle ProxyServer=$server_posle, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+  if printf '%s' "$otvet" | grep -q '"beda"' && ploshchadka_ne_tyanet "$ZHURNAL"; then
+    echo "ПЛОЩАДКА: wine не отдаёт список сетевых адаптеров, вердикт по продукту не выношу"
+    ostanovit
+    exit 7
+  fi
   if printf '%s' "$otvet" | grep -q '"beda"'; then
     echo "  КРАСНЫЙ: подключение не удалось — сценарий нечем ставить"; bed=1
   elif [ "$posle" != "0x1" ] || ! printf '%s' "$server_posle" | grep -qF "$ADRES_OZHIDAEMYY"; then
