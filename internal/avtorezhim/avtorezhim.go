@@ -133,6 +133,22 @@ type Nablyudeniye struct {
 	// или проверить не вышло (имя не резолвится — это тоже «не узнали», а не отказ).
 	// *false — проверили, наружу не прошло. *true — проверили, прошло.
 	TrafikPryamoy *bool
+
+	// ShlyuzOpoznan — аппаратный номер шлюза физической сети прочитан.
+	//
+	// Это ГЛАВНЫЙ признак, и он старше всех DNS-полей выше: номер шлюза
+	// берётся с канального уровня, куда наш туннель не дотягивается, тогда
+	// как DNS-отпечаток меряет поведение сети и ломается и от туннеля, и от
+	// роуминга (см. MakShlyuza — там оба замера). Прочитали номер — вопрос
+	// «дома ли» закрыт, и DNS в этот заход не спрашивается вовсе.
+	//
+	// false значит «прочитать не вышло» (сеть только что сменилась, ARP ещё
+	// пуст, шлюза нет вовсе) — тогда решают прежние DNS-поля.
+	ShlyuzOpoznan bool
+
+	// ShlyuzDoma — прочитанный номер шлюза совпал с домашним
+	// ([EtoDomashniyShlyuz]). Осмысленно, только пока ShlyuzOpoznan.
+	ShlyuzDoma bool
 }
 
 // Reshit — вердикт «дома ли» по одному заходу. Вынесена без единого
@@ -143,6 +159,13 @@ func Reshit(n Nablyudeniye) Sostoyanie {
 	switch {
 	case !n.EstSet:
 		return Neizvestno
+	case n.ShlyuzOpoznan:
+		// Шлюз опознан — этого достаточно, и спорить с ним нечему: DNS-поля
+		// ниже отвечают на тот же вопрос менее надёжным способом.
+		if n.ShlyuzDoma {
+			return Doma
+		}
+		return VneDoma
 	case n.ZondSlep:
 		// Мерили собственный туннель. Неизвестность здесь честнее любой
 		// догадки: молчим и не трогаем защиту, которая уже поднята.
@@ -205,6 +228,15 @@ type Avtorezhim struct {
 	// зонды не уважают (net.Dialer и net.Resolver идут мимо него), так что
 	// там они честны.
 	TunnelPodnyat func() bool
+
+	// DomashnieShlyuzy — аппаратные номера домашних шлюзов. Пусто — берётся
+	// [DomashnieShlyuzyPoUmolchaniyu].
+	DomashnieShlyuzy []string
+
+	// MakShlyuzaFunc — номер шлюза физической сети. nil — берётся
+	// [MakShlyuza]. Поле ради теста: настоящего шлюза на машине проверяющего
+	// нет, а оба исхода (совпал, не совпал) обязаны проверяться.
+	MakShlyuzaFunc func() (string, error)
 
 	// SetevoyAdres — DNS-сервер и локальный IP физического адаптера (см.
 	// [SetevoyAdapter]). nil — берётся SetevoyAdapter. Поле — ради теста:
@@ -276,6 +308,10 @@ func Novyy() *Avtorezhim {
 		Zadvizhka:    NovayaZadvizhka(Neizvestno),
 		SetevoyAdres: SetevoyAdapter,
 		DnsPryamoy:   novyyDnsZondPryamoy,
+		// Главный признак дома. Ставится ТОЛЬКО здесь, как и SetevoyAdres:
+		// тесты собирают Avtorezhim литералом и остаются на прежнем
+		// DNS-пути, а боевой заход спрашивает шлюз первым.
+		MakShlyuzaFunc: MakShlyuza,
 	}
 }
 
@@ -343,6 +379,14 @@ const PodryadDoPrichiny = 3
 const prichinaAdapterNeNaiden = "физический сетевой адаптер не найден"
 
 
+// domaSlovami — как назвать вердикт по шлюзу в журнале.
+func domaSlovami(doma bool) string {
+	if doma {
+		return "домашний"
+	}
+	return "не домашний"
+}
+
 func prichinaDnsNePrivaten(dnsAdres string) string {
 	return "DNS адаптера не приватный: " + dnsAdres
 }
@@ -365,6 +409,23 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 		n := Nablyudeniye{EstSet: false}
 		izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 		return n, izm, a.Zadvizhka.Tekushcheye()
+	}
+
+	// Шлюз спрашивается ПЕРВЫМ и, когда он прочитан, закрывает вопрос: ни
+	// один DNS-запрос в этот заход не уходит. Так убирается целый класс бед,
+	// в котором зонд мерил наш собственный туннель вместо сети вокруг.
+	if mak, err := a.makShlyuza(); err == nil {
+		doma := EtoDomashniyShlyuz(mak, a.domashnieShlyuzy())
+		a.sbrositSlepotu()
+		log.Printf("авторежим: шлюз %s — %s", mak, domaSlovami(doma))
+		n := Nablyudeniye{EstSet: true, ShlyuzOpoznan: true, ShlyuzDoma: doma}
+		izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
+		return n, izm, a.Zadvizhka.Tekushcheye()
+	} else {
+		// Не беда и не редкость: сразу после смены сети ARP ещё пуст. Дальше
+		// работают прежние DNS-зонды, но причину пишем — без неё непонятно,
+		// почему заход пошёл длинным путём.
+		log.Printf("авторежим: номер шлюза не прочитать (%v) — решаю по DNS", err)
 	}
 
 	dns := a.Dns
