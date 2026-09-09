@@ -406,8 +406,11 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	// не поднимутся. Поэтому занятое имя не повод сдаваться: берём соседнее
 	// свободное, а уборка (hvosty) знает про оба вида и подберёт хвост,
 	// когда та копия наконец умрёт.
+	// udalit, а не голый os.Remove: занятый файл на линуксе не разыграть вовсе
+	// (os.Remove сносит даже работающий бинарь), а проверять эту ветку надо
+	// там, где гоняются проверки. Та же причина, что у UbratHvost.
 	staryy := putExe + ".old"
-	if err := os.Remove(staryy); err != nil && !os.IsNotExist(err) {
+	if err := udalit(staryy); err != nil && !os.IsNotExist(err) {
 		zanyatoye := staryy
 		staryy = svobodnoyeImyaHvosta(putExe)
 		log.Printf("хвост %s занят (%v) — отодвигаю прежнюю сборку в %s", zanyatoye, err, staryy)

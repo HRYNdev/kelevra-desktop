@@ -952,3 +952,83 @@ func TestHvostEstVidyatVseTriVida(t *testing.T) {
 		t.Fatalf("уборка тронула само приложение: %v", err)
 	}
 }
+
+// Беда 09.09.2026: обновления встали НАВСЕГДА, а не один раз.
+//
+// У человека рядом жила копия прошлой версии (значок трея, ключ --trey),
+// поднятая до предыдущего обновления. После той замены её собственный образ
+// на диске стал называться Kelevra.exe.old, и Windows отказывалась и удалять
+// его, и переименовывать поверх:
+//
+//	не могу отодвинуть текущее приложение: rename ...\Kelevra.exe
+//	...\Kelevra.exe.old: Access is denied.
+//
+// Пока та копия жива, привычное имя занято — то есть не встала бы ни одна
+// следующая версия, сколько ни выпускай. Занятость разыгрывается подменой
+// udalit: на линуксе os.Remove сносит и работающий бинарь.
+func TestPostavitBeryotSvobodnoeImyaKogdaHvostZanyat(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("STARYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Хвост прошлого обновления, который держит живая копия.
+	zanyatyy := put + ".old"
+	if err := os.WriteFile(zanyatyy, []byte("POZAPROSHLYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	podmenitUdalenie(t, func(p string) error {
+		if p == zanyatyy {
+			return errors.New("файл занят другим процессом")
+		}
+		return os.Remove(p)
+	})
+
+	novoe := "NOVYY-KELEVRA"
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, novoe)
+	}))
+	defer s.Close()
+
+	err := Postavit(context.Background(), s.Client(),
+		Novaya{Versiya: "0.6.66", Ssylka: s.URL, Razmer: int64(len(novoe))}, put)
+	if err != nil {
+		t.Fatalf("занятый хвост сорвал установку: %v", err)
+	}
+	if b, _ := os.ReadFile(put); string(b) != novoe {
+		t.Fatalf("на месте приложения %q, хочу новую сборку", b)
+	}
+	// Занятый файл не тронут: его держит живая копия, и трогать его нельзя.
+	if b, _ := os.ReadFile(zanyatyy); string(b) != "POZAPROSHLYY" {
+		t.Fatalf("занятый хвост подменён на %q — его держит живой процесс", b)
+	}
+	// Прежняя сборка обязана сохраниться: на неё откатываются при беде.
+	if b, _ := os.ReadFile(put + ".old1"); string(b) != "STARYY" {
+		t.Fatalf("прежняя сборка не сохранена в свободное имя, там %q", b)
+	}
+}
+
+// Свободное имя должно попадать под уборку — иначе такой хвост не убрал бы
+// никто и никогда, и человек увидел бы рядом с приложением мусор.
+func TestUborkaVidytHvostSoSvobodnymImenem(t *testing.T) {
+	papka := t.TempDir()
+	put := filepath.Join(papka, "Kelevra.exe")
+	if err := os.WriteFile(put, []byte("NOVYY"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{put + ".old1", put + ".old2"} {
+		if err := os.WriteFile(h, []byte("HVOST"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !HvostEst(put) {
+		t.Fatal("хвост со свободным именем не считается хвостом — уборка его не заметит")
+	}
+	UbratHvost(put)
+	if HvostEst(put) {
+		t.Fatal("хвосты со свободными именами не убраны")
+	}
+	if _, err := os.Stat(put); err != nil {
+		t.Fatalf("уборка снесла само приложение: %v", err)
+	}
+}
