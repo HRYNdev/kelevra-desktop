@@ -34,18 +34,58 @@ import (
 // 80:af:ca:82:17:91 совпал с тем, что видит ноутбук). У мобильной точки шлюз
 // — сам телефон, и номер у него другой.
 //
-// Возвращается нижним регистром с двоеточиями («80:af:ca:82:17:91»).
-// Сравнивать напрямую не нужно — для этого есть [EtoDomashniyShlyuz].
-func MakShlyuza() (string, error) {
-	adres, indeks, err := shlyuzFizicheskogoAdaptera()
+// Возвращаются ВСЕ найденные, нижним регистром с двоеточиями
+// («80:af:ca:82:17:91»). Сравнивать напрямую не нужно — для этого есть
+// [EstDomashniyShlyuz].
+//
+// ПОЧЕМУ СПИСОК, А НЕ ОДИН. Маршрут по умолчанию на машине не один. Замер
+// с машины человека 09.09.2026, сразу после выхода 0.6.65:
+//
+//	ifIndex 13  Беспроводная сеть  192.168.1.1  метрика 0     80-AF-CA-82-17-91
+//	ifIndex 21  Radmin VPN         26.0.0.1     метрика 9256  02-00-00-00-51-00
+//
+// Прежний код брал ПЕРВЫЙ адаптер со шлюзом и на том останавливался. Radmin
+// VPN проходит все отсевы: тип у него Ethernet, а не туннель, и в описании
+// «Famatech Radmin VPN Ethernet Adapter» нет ни одного слова из
+// slovaSvoegoAdaptera. В списке Windows он оказался раньше Wi-Fi — и человек,
+// сидя дома, получил «вне дома» и поднятый туннель.
+//
+// Чинить это пополнением списка слов бесполезно: Hamachi, ZeroTier и любой
+// следующий такой адаптер сломают его снова, а узнаём мы об этом только когда
+// у человека уже всё поднялось не вовремя. Отбор по метрике тоже не спасает:
+// он опирается на то, что домашний маршрут окажется лучшим, а это как раз то,
+// что виртуальные адаптеры и ломают. Поэтому вопрос ставится иначе: не «какой
+// шлюз главный», а «видим ли мы домашний роутер рядом». Хоть один домашний
+// среди всех — значит дома.
+func MakiShlyuzov() ([]string, error) {
+	shlyuzy, err := shlyuzyFizicheskihAdapterov()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	mak, err := makSoseda(adres, indeks)
-	if err != nil {
-		return "", fmt.Errorf("шлюз %s: %w", adres, err)
+	var maki []string
+	var bedy []string
+	for _, sh := range shlyuzy {
+		mak, err := makSoseda(sh.adres, sh.indeks)
+		if err != nil {
+			// Один недоступный сосед не повод хоронить заход: у виртуального
+			// адаптера ARP-записи может не быть вовсе, а домашний роутер рядом
+			// и отвечает. Причины копим и рассказываем, только если не вышло
+			// НИ С ОДНИМ.
+			bedy = append(bedy, fmt.Sprintf("шлюз %s: %v", sh.adres, err))
+			continue
+		}
+		maki = append(maki, mak)
 	}
-	return mak, nil
+	if len(maki) == 0 {
+		return nil, fmt.Errorf("ни один шлюз не опознан: %s", strings.Join(bedy, "; "))
+	}
+	return maki, nil
+}
+
+// shlyuzIntrfeysa — шлюз и индекс интерфейса, на котором он найден.
+type shlyuzIntrfeysa struct {
+	adres  string
+	indeks uint32
 }
 
 // shlyuzFizicheskogoAdaptera — IPv4 шлюза и индекс интерфейса физического
@@ -59,11 +99,12 @@ func MakShlyuza() (string, error) {
 // раскладку чужой структуры в своей голове. Отбор «что считать физическим»
 // повторяет [SetevoyAdapter] по смыслу: не loopback, не туннель, не наш
 // собственный TUN.
-func shlyuzFizicheskogoAdaptera() (adres string, indeks uint32, err error) {
+func shlyuzyFizicheskihAdapterov() ([]shlyuzIntrfeysa, error) {
 	adaptery, err := poluchitSvedeniyaAdapterov()
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
+	var nayden []shlyuzIntrfeysa
 	for a := adaptery; a != nil; a = a.Next {
 		if a.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK || a.Type == windows.IF_TYPE_TUNNEL || a.Type == propVirtual {
 			continue
@@ -75,9 +116,14 @@ func shlyuzFizicheskogoAdaptera() (adres string, indeks uint32, err error) {
 		if gw == "" {
 			continue
 		}
-		return gw, a.Index, nil
+		// Не return: перебор идёт до конца списка. Ровно на раннем выходе
+		// отсюда и сломалось опознание дома 09.09 (см. MakiShlyuzov).
+		nayden = append(nayden, shlyuzIntrfeysa{adres: gw, indeks: a.Index})
 	}
-	return "", 0, fmt.Errorf("не нашёл физический адаптер со шлюзом IPv4")
+	if len(nayden) == 0 {
+		return nil, fmt.Errorf("не нашёл физический адаптер со шлюзом IPv4")
+	}
+	return nayden, nil
 }
 
 // svoyPoOpisaniyu — тот же фильтр, что и svoyAdapter, но по ANSI-описанию

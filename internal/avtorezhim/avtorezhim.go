@@ -139,7 +139,7 @@ type Nablyudeniye struct {
 	// Это ГЛАВНЫЙ признак, и он старше всех DNS-полей выше: номер шлюза
 	// берётся с канального уровня, куда наш туннель не дотягивается, тогда
 	// как DNS-отпечаток меряет поведение сети и ломается и от туннеля, и от
-	// роуминга (см. MakShlyuza — там оба замера). Прочитали номер — вопрос
+	// роуминга (см. MakiShlyuzov — там оба замера). Прочитали номер — вопрос
 	// «дома ли» закрыт, и DNS в этот заход не спрашивается вовсе.
 	//
 	// false значит «прочитать не вышло» (сеть только что сменилась, ARP ещё
@@ -147,7 +147,7 @@ type Nablyudeniye struct {
 	ShlyuzOpoznan bool
 
 	// ShlyuzDoma — прочитанный номер шлюза совпал с домашним
-	// ([EtoDomashniyShlyuz]). Осмысленно, только пока ShlyuzOpoznan.
+	// ([EstDomashniyShlyuz]). Осмысленно, только пока ShlyuzOpoznan.
 	ShlyuzDoma bool
 }
 
@@ -233,10 +233,11 @@ type Avtorezhim struct {
 	// [DomashnieShlyuzyPoUmolchaniyu].
 	DomashnieShlyuzy []string
 
-	// MakShlyuzaFunc — номер шлюза физической сети. nil — берётся
-	// [MakShlyuza]. Поле ради теста: настоящего шлюза на машине проверяющего
-	// нет, а оба исхода (совпал, не совпал) обязаны проверяться.
-	MakShlyuzaFunc func() (string, error)
+	// MakiShlyuzovFunc — номера шлюзов физической сети, ВСЕ. nil — берётся
+	// [MakiShlyuzov]. Поле ради теста: настоящих шлюзов на машине
+	// проверяющего нет, а все исходы (совпал, не совпал, домашний вторым в
+	// списке) обязаны проверяться.
+	MakiShlyuzovFunc func() ([]string, error)
 
 	// SetevoyAdres — DNS-сервер и локальный IP физического адаптера (см.
 	// [SetevoyAdapter]). nil — берётся SetevoyAdapter. Поле — ради теста:
@@ -311,7 +312,7 @@ func Novyy() *Avtorezhim {
 		// Главный признак дома. Ставится ТОЛЬКО здесь, как и SetevoyAdres:
 		// тесты собирают Avtorezhim литералом и остаются на прежнем
 		// DNS-пути, а боевой заход спрашивает шлюз первым.
-		MakShlyuzaFunc: MakShlyuza,
+		MakiShlyuzovFunc: MakiShlyuzov,
 	}
 }
 
@@ -414,10 +415,14 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	// Шлюз спрашивается ПЕРВЫМ и, когда он прочитан, закрывает вопрос: ни
 	// один DNS-запрос в этот заход не уходит. Так убирается целый класс бед,
 	// в котором зонд мерил наш собственный туннель вместо сети вокруг.
-	if mak, err := a.makShlyuza(); err == nil {
-		doma := EtoDomashniyShlyuz(mak, a.domashnieShlyuzy())
+	if maki, err := a.makiShlyuzov(); err == nil {
+		doma := EstDomashniyShlyuz(maki, a.domashnieShlyuzy())
 		a.sbrositSlepotu()
-		log.Printf("авторежим: шлюз %s — %s", mak, domaSlovami(doma))
+		// В журнал идут ВСЕ прочитанные номера, а не тот, что решил вопрос.
+		// 09.09 разбор беды с Radmin VPN упёрся ровно в это: строка называла
+		// один номер, и по ней нельзя было понять, видел ли авторежим
+		// домашний роутер вообще. Теперь видно, из чего сделан вердикт.
+		log.Printf("авторежим: шлюзы %s — %s", strings.Join(maki, ", "), domaSlovami(doma))
 		n := Nablyudeniye{EstSet: true, ShlyuzOpoznan: true, ShlyuzDoma: doma}
 		izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 		return n, izm, a.Zadvizhka.Tekushcheye()
@@ -425,7 +430,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 		// Не беда и не редкость: сразу после смены сети ARP ещё пуст. Дальше
 		// работают прежние DNS-зонды, но причину пишем — без неё непонятно,
 		// почему заход пошёл длинным путём.
-		log.Printf("авторежим: номер шлюза не прочитать (%v) — решаю по DNS", err)
+		log.Printf("авторежим: номера шлюзов не прочитать (%v) — решаю по DNS", err)
 	}
 
 	dns := a.Dns
