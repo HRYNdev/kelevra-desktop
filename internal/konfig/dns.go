@@ -168,6 +168,48 @@ func pryamoyResolverCherezSistemu(d map[string]any) {
 	}
 }
 
+// okrepitPryamoyResolverVTunnele — режим туннеля, вторая половина беды 31.08
+// (см. шапку файла), которую pryamoyResolverCherezSistemu тут чинить нельзя:
+// строки 138-140 объясняют почему (системный резолвер в туннеле — петля на
+// себя). Сам резолвер и его маршрут не трогаем ни на бит — тег, detour,
+// dns.final остаются как в профиле, — меняем только протокол: tcp на udp.
+//
+// Почему это чинит именно ту фрагильность, что убила резолв на боевой
+// машине. В журнале ядра резолвер умирал одной строкой: «lookup
+// www.bing.com: exchange4: use of closed network connection» — то есть
+// ломалась ОДНА TCP-сессия к 1.1.1.1, и с ней вставал резолв всего, что не
+// попало в fakeip (два десятка rule_set не покрывают, например, yandex.ru —
+// разбор 09.09). Держащаяся сессия — узнаваемая цель: провайдер рубит
+// именно такие, длинные и отличимые от обычного трафика. У UDP держать
+// нечего: каждый запрос — новый пакет, состояния между ними нет. На
+// усечённый ответ (>512 байт без EDNS0) сам sing-box открывает отдельное
+// разовое TCP-соединение (dns/transport/udp.go: exchangeTCP) — не тот
+// долгоживущий канал, что умирал в журнале, а одноразовый запрос-ответ.
+func okrepitPryamoyResolverVTunnele(d map[string]any) {
+	teg := pryamoyResolverTeg(d)
+	if teg == "" {
+		return
+	}
+	dns, ok := d["dns"].(map[string]any)
+	if !ok {
+		return
+	}
+	servery, _ := dns["servers"].([]any)
+	for _, sv := range servery {
+		m, ok := sv.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := m["tag"].(string); t != teg {
+			continue
+		}
+		if tip, _ := m["type"].(string); tip == "tcp" {
+			m["type"] = "udp"
+		}
+		return
+	}
+}
+
 // tegFakeip — тег DNS-сервера типа fakeip, "" если такого нет.
 func tegFakeip(d map[string]any) string {
 	dns, ok := d["dns"].(map[string]any)

@@ -339,9 +339,12 @@ func TestVRezhimeProksiPryamoyResolverCherezSistemu(t *testing.T) {
 	}
 }
 
-// В туннельном режиме подменять резолвер прямого выхода на системный НЕЛЬЗЯ:
-// с поднятым tun системный резолвер сам завёрнут в ядро, и спрашивать его —
-// замкнуть петлю на себя.
+// В туннельном режиме подменять резолвер прямого выхода на СИСТЕМНЫЙ (тип
+// "local") нельзя: с поднятым tun системный резолвер сам завёрнут в ядро, и
+// спрашивать его — замкнуть петлю на себя. Какой именно протокол (tcp/udp)
+// стоит у резолвера 1.1.1.1 — предмет другой правки, см.
+// TestVRezhimeTunnelyaPryamoyResolverStanovitsyaUdpNeTcp ниже; этот тест
+// сторожит только то, что это никогда не "local".
 func TestVRezhimeTunnelyaPryamoyResolverNeTrogaem(t *testing.T) {
 	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
 	if err != nil {
@@ -351,7 +354,36 @@ func TestVRezhimeTunnelyaPryamoyResolverNeTrogaem(t *testing.T) {
 	if local == nil {
 		t.Fatal("резолвер прямого выхода исчез из туннельного конфига")
 	}
-	if tip, _ := local["type"].(string); tip != "tcp" {
-		t.Fatalf("в туннельном режиме резолвер прямого выхода стал %q — с поднятым tun это петля на себя", tip)
+	if tip, _ := local["type"].(string); tip == "local" {
+		t.Fatal("в туннельном режиме резолвер прямого выхода стал системным (type local) — с поднятым tun это петля на себя")
+	}
+}
+
+// TestVRezhimeTunnelyaPryamoyResolverStanovitsyaUdpNeTcp — вторая половина
+// беды 31.08 (см. шапку dns.go), которую pryamoyResolverCherezSistemu тут
+// чинить нельзя (петля на себя, тест выше). В журнале ядра боевой машины
+// зашитый tcp://1.1.1.1 умирал одной строкой («lookup www.bing.com:
+// exchange4: use of closed network connection»), и с ним вставал резолв
+// всего, что не попало в fakeip — например yandex.ru, которого нет ни в
+// одном из rule_set (разбор 09.09). Протокол меняется на udp: держать
+// нечего, каждый запрос — новый пакет; адрес и маршрут резолвера остаются
+// прежними.
+func TestVRezhimeTunnelyaPryamoyResolverStanovitsyaUdpNeTcp(t *testing.T) {
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := serveryDns(t, razobrat(t, gotovyy))["local"]
+	if local == nil {
+		t.Fatal("резолвер прямого выхода исчез из туннельного конфига")
+	}
+	if tip, _ := local["type"].(string); tip != "udp" {
+		t.Fatalf("резолвер прямого выхода в туннеле = %q, ждали \"udp\": зашитый tcp держит "+
+			"единственную сессию на всех запросах, и её смерть в журнале боевой машины "+
+			"(exchange4: use of closed network connection) останавливала резолв всего, что "+
+			"не попало в fakeip", tip)
+	}
+	if srv, _ := local["server"].(string); srv != "1.1.1.1" {
+		t.Fatalf("адрес резолвера прямого выхода изменился на %q — правка обязана трогать только протокол, не маршрут", srv)
 	}
 }
