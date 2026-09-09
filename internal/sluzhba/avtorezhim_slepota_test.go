@@ -32,8 +32,8 @@ func TestSostoyanieNesyotPrichinuSlepotyDoUI(t *testing.T) {
 	// прочитать не вышло. Novyy() ставит боевое чтение, и на машине, где
 	// гоняются проверки, шлюз есть — заход закрылся бы раньше и слепоты не
 	// случилось бы вовсе.
-	a.MakShlyuzaFunc = func() (string, error) {
-		return "", errors.New("шлюза нет: проверяем DNS-путь")
+	a.MakiShlyuzovFunc = func() ([]string, error) {
+		return nil, errors.New("шлюза нет: проверяем DNS-путь")
 	}
 	s.avtorezhimZamok.Lock()
 	s.avtorezhimEkz = a

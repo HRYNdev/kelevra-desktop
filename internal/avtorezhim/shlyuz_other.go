@@ -13,27 +13,46 @@ import (
 	"strings"
 )
 
-// MakShlyuza — версия для стенда (продукт живёт только на Windows, та же
-// граница, что и у [SetevoyAdapter]). Шлюз берётся из /proc/net/route, его
-// аппаратный номер — из /proc/net/arp. Не второй боевой механизм, а честный
+// MakiShlyuzov — версия для стенда (продукт живёт только на Windows, та же
+// граница, что и у [SetevoyAdapter]). Шлюзы берутся из /proc/net/route, их
+// аппаратные номера — из /proc/net/arp. Не второй боевой механизм, а честный
 // способ мерить живьём на линуксе.
-func MakShlyuza() (string, error) {
-	shlyuz, err := shlyuzIzTablicyMarshrutov("/proc/net/route")
+//
+// Список, а не один: причина та же, что на Windows (см. MakiShlyuzov там) —
+// маршрутов по умолчанию на машине бывает несколько, и домашний среди них не
+// обязан быть первым.
+func MakiShlyuzov() ([]string, error) {
+	shlyuzy, err := shlyuzyIzTablicyMarshrutov("/proc/net/route")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return makIzArp("/proc/net/arp", shlyuz)
+	var maki []string
+	var bedy []string
+	for _, sh := range shlyuzy {
+		mak, err := makIzArp("/proc/net/arp", sh)
+		if err != nil {
+			bedy = append(bedy, fmt.Sprintf("шлюз %s: %v", sh, err))
+			continue
+		}
+		maki = append(maki, mak)
+	}
+	if len(maki) == 0 {
+		return nil, fmt.Errorf("ни один шлюз не опознан: %s", strings.Join(bedy, "; "))
+	}
+	return maki, nil
 }
 
-// shlyuzIzTablicyMarshrutov — первый маршрут по умолчанию (Destination 0) не
-// на туннельном интерфейсе.
-func shlyuzIzTablicyMarshrutov(put string) (string, error) {
+// shlyuzyIzTablicyMarshrutov — ВСЕ маршруты по умолчанию (Destination 0) не
+// на туннельном интерфейсе. Перебор идёт до конца таблицы: ранний выход на
+// первом найденном и был бедой 09.09.2026.
+func shlyuzyIzTablicyMarshrutov(put string) ([]string, error) {
 	f, err := os.Open(put)
 	if err != nil {
-		return "", fmt.Errorf("не открыть %s: %w", put, err)
+		return nil, fmt.Errorf("не открыть %s: %w", put, err)
 	}
 	defer f.Close()
 
+	var nayden []string
 	skaner := bufio.NewScanner(f)
 	skaner.Scan() // шапка
 	for skaner.Scan() {
@@ -52,9 +71,12 @@ func shlyuzIzTablicyMarshrutov(put string) (string, error) {
 		if err != nil || ip.IsUnspecified() {
 			continue
 		}
-		return ip.String(), nil
+		nayden = append(nayden, ip.String())
 	}
-	return "", fmt.Errorf("в %s нет маршрута по умолчанию на физическом интерфейсе", put)
+	if len(nayden) == 0 {
+		return nil, fmt.Errorf("в %s нет маршрута по умолчанию на физическом интерфейсе", put)
+	}
+	return nayden, nil
 }
 
 func svoyPoImeni(imya string) bool {

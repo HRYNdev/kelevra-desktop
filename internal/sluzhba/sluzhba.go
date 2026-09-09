@@ -82,7 +82,8 @@ type Sluzhba struct {
 
 	// avtorezhimShlyuz — из KELEVRA_AVTOREZHIM_SHLYUZ (Novaya): чем
 	// подменить чтение номера шлюза, по которому авторежим узнаёт дом
-	// (см. avtorezhim.MakShlyuza). Пусто в бою — читается настоящий шлюз.
+	// (см. avtorezhim.MakiShlyuzov). Пусто в бою — читаются настоящие шлюзы.
+	// Несколько задаётся через запятую (см. avtorezhimBoevoy).
 	//
 	// Нужно ровно затем же, зачем и avtorezhimDnsAdres рядом: у площадки, на
 	// которой гоняются проверки, свой шлюз, и его номер не совпадает ни с
@@ -2524,11 +2525,23 @@ func (s *Sluzhba) avtorezhimBoevoy() *avtorezhim.Avtorezhim {
 	a.TunnelPodnyat = s.tunnelPodnyat
 	if s.avtorezhimShlyuz != "" {
 		podmena := s.avtorezhimShlyuz
-		a.MakShlyuzaFunc = func() (string, error) {
+		a.MakiShlyuzovFunc = func() ([]string, error) {
 			if podmena == "нет" {
-				return "", fmt.Errorf("номер шлюза подменён на «нет» (KELEVRA_AVTOREZHIM_SHLYUZ)")
+				return nil, fmt.Errorf("номера шлюзов подменены на «нет» (KELEVRA_AVTOREZHIM_SHLYUZ)")
 			}
-			return podmena, nil
+			// Через запятую задаётся НЕСКОЛЬКО шлюзов — иначе на стенде не
+			// разыграть ту самую беду 09.09, где домашний роутер был в
+			// списке вторым, за Radmin VPN, и вердикт выносил не он.
+			var maki []string
+			for _, ch := range strings.Split(podmena, ",") {
+				if ch = strings.TrimSpace(ch); ch != "" {
+					maki = append(maki, ch)
+				}
+			}
+			if len(maki) == 0 {
+				return nil, fmt.Errorf("KELEVRA_AVTOREZHIM_SHLYUZ задан, но пуст")
+			}
+			return maki, nil
 		}
 	}
 	if s.avtorezhimDnsAdres != "" {
