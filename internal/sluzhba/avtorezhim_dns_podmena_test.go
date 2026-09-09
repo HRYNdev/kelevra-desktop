@@ -30,6 +30,7 @@ import (
 //     (тот же путь для фонового авторежима в TUN) уходят именно на него.
 func TestAvtorezhimBoevoyBezPodmenyIspolzuetSistemnyPut(t *testing.T) {
 	t.Setenv("KELEVRA_DIR", t.TempDir())
+	t.Setenv("KELEVRA_AVTOREZHIM_SHLYUZ", "нет") // шлюз площадки к делу не относится, см. stend()
 	s, err := Novaya()
 	if err != nil {
 		t.Fatalf("не поднял службу: %v", err)
@@ -46,6 +47,7 @@ func TestAvtorezhimBoevoyBezPodmenyIspolzuetSistemnyPut(t *testing.T) {
 
 func TestAvtorezhimBoevoySPodmenoyUhoditNaZadannyResolver(t *testing.T) {
 	t.Setenv("KELEVRA_DIR", t.TempDir())
+	t.Setenv("KELEVRA_AVTOREZHIM_SHLYUZ", "нет") // шлюз площадки к делу не относится, см. stend()
 	t.Setenv("KELEVRA_AVTOREZHIM_DNS", "127.0.0.1:1")
 	s, err := Novaya()
 	if err != nil {

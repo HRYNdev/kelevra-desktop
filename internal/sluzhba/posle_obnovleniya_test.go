@@ -22,6 +22,7 @@ import (
 func sluzhbaDlyaProverki(t *testing.T) *Sluzhba {
 	t.Helper()
 	t.Setenv("KELEVRA_DIR", t.TempDir())
+	t.Setenv("KELEVRA_AVTOREZHIM_SHLYUZ", "нет") // шлюз площадки к делу не относится, см. stend()
 	s, err := Novaya()
 	if err != nil {
 		t.Fatalf("не поднял службу: %v", err)

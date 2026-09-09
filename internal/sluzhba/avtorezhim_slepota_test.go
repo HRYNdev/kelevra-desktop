@@ -28,6 +28,13 @@ func TestSostoyanieNesyotPrichinuSlepotyDoUI(t *testing.T) {
 	a.SetevoyAdres = func() (string, string, error) {
 		return "", "", errors.New("не нашёл подходящий физический адаптер")
 	}
+	// Слепота — это про DNS-путь, а он включается, только когда номер шлюза
+	// прочитать не вышло. Novyy() ставит боевое чтение, и на машине, где
+	// гоняются проверки, шлюз есть — заход закрылся бы раньше и слепоты не
+	// случилось бы вовсе.
+	a.MakShlyuzaFunc = func() (string, error) {
+		return "", errors.New("шлюза нет: проверяем DNS-путь")
+	}
 	s.avtorezhimZamok.Lock()
 	s.avtorezhimEkz = a
 	s.avtorezhimZamok.Unlock()
