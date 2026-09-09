@@ -102,7 +102,7 @@ func TestZahodSoShlyuzomNeSprashivaetDns(t *testing.T) {
 		Dns:            zondDns{doma: true, sprosili: &sprosili},
 		Trafik:         zondTrafika{proshel: true},
 		Zadvizhka:      NovayaZadvizhka(Neizvestno),
-		MakShlyuzaFunc: func() (string, error) { return "80:af:ca:82:17:91", nil },
+		MakiShlyuzovFunc: func() ([]string, error) { return []string{"80:af:ca:82:17:91"}, nil },
 	}
 	n, _, sost := a.Zahod(context.Background(), true, true)
 	if !n.ShlyuzOpoznan || !n.ShlyuzDoma {
@@ -121,7 +121,7 @@ func TestZahodBezShlyuzaPadaetNaDns(t *testing.T) {
 	a := &Avtorezhim{
 		Dns:            zondDns{doma: false, sprosili: &sprosili},
 		Zadvizhka:      NovayaZadvizhka(Neizvestno),
-		MakShlyuzaFunc: func() (string, error) { return "", errors.New("ARP пуст") },
+		MakiShlyuzovFunc: func() ([]string, error) { return nil, errors.New("ARP пуст") },
 	}
 	n, _, sost := a.Zahod(context.Background(), true, true)
 	if n.ShlyuzOpoznan {
@@ -139,7 +139,7 @@ func TestZahodBezShlyuzaPadaetNaDns(t *testing.T) {
 // литералом и остаются на DNS-пути, поэтому забытая строчка в Novyy() не
 // уронила бы ни одной проверки, кроме этой.
 func TestNovyyBeryotShlyuz(t *testing.T) {
-	if Novyy().MakShlyuzaFunc == nil {
+	if Novyy().MakiShlyuzovFunc == nil {
 		t.Fatal("боевой авторежим не читает номер шлюза — главный признак дома выключен")
 	}
 }
@@ -160,3 +160,58 @@ func (z zondDns) DomaPoDns(context.Context) (bool, error) {
 type zondTrafika struct{ proshel bool }
 
 func (z zondTrafika) Proshel(context.Context) (bool, bool) { return true, z.proshel }
+
+// Беда 09.09.2026 живьём: человек сидит дома, домашний роутер в списке
+// шлюзов ВТОРОЙ (первым идёт виртуальный адаптер Radmin VPN), и авторежим
+// объявляет «вне дома» и поднимает туннель посреди квартиры.
+//
+// Проверка идёт по обоим порядкам нарочно: беда была именно в том, что
+// вердикт выносил ПЕРВЫЙ найденный шлюз, поэтому «домашний первым» проходил
+// и раньше, а «домашний вторым» — нет. Проверять только удобный порядок
+// значило бы повторить ту же слепоту в тесте.
+func TestDomashniyShlyuzOpoznayotsyaNaLyubomMeste(t *testing.T) {
+	domashnie := []string{"80:af:ca:82:17:91"}
+	radmin := "02:00:00:00:51:00" // Famatech Radmin VPN, замер с машины человека
+	dom := "80:af:ca:82:17:91"
+
+	for _, sluchay := range []struct {
+		imya string
+		maki []string
+		hochu bool
+	}{
+		{"домашний первым", []string{dom, radmin}, true},
+		{"домашний вторым", []string{radmin, dom}, true},
+		{"домашний третьим", []string{radmin, "02:1a:11:f0:00:01", dom}, true},
+		{"один домашний", []string{dom}, true},
+		{"домашнего нет", []string{radmin, "02:1a:11:f0:00:01"}, false},
+		{"список пуст", nil, false},
+	} {
+		if got := EstDomashniyShlyuz(sluchay.maki, domashnie); got != sluchay.hochu {
+			t.Errorf("%s: %v — вердикт «дома» %v, хочу %v", sluchay.imya, sluchay.maki, got, sluchay.hochu)
+		}
+	}
+}
+
+// Тот же случай, но целым заходом: важно не только правило, но и то, что
+// Zahod до него доносит ВЕСЬ список, а не первый номер.
+func TestZahodVidytDomashniyShlyuzZaChuzhim(t *testing.T) {
+	sprosili := false
+	a := &Avtorezhim{
+		Dns:       zondDns{doma: false, sprosili: &sprosili},
+		Zadvizhka: NovayaZadvizhka(Neizvestno),
+		MakiShlyuzovFunc: func() ([]string, error) {
+			// Порядок ровно как у Windows на машине человека 09.09.
+			return []string{"02:00:00:00:51:00", "80:af:ca:82:17:91"}, nil
+		},
+	}
+	n, _, sost := a.Zahod(context.Background(), true, true)
+	if !n.ShlyuzOpoznan || !n.ShlyuzDoma {
+		t.Fatalf("наблюдение %+v — домашний шлюз есть в списке, он обязан быть опознан", n)
+	}
+	if sost != Doma {
+		t.Fatalf("обстановка %v, хочу %v: человек дома, туннель поднимать не за чем", sost, Doma)
+	}
+	if sprosili {
+		t.Fatal("шлюз ответил на вопрос, а заход всё равно сходил в DNS")
+	}
+}

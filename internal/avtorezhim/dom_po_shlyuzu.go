@@ -50,6 +50,27 @@ func EtoDomashniyShlyuz(mak string, domashnie []string) bool {
 	return false
 }
 
+// EstDomashniyShlyuz — есть ли домашний хоть среди одного из прочитанных
+// шлюзов.
+//
+// Вопрос ставится именно так, а не «какой шлюз главный». Маршрутов по
+// умолчанию на машине бывает несколько (Radmin VPN, Hamachi, ZeroTier,
+// корпоративный клиент), и который из них окажется первым или лучшим по
+// метрике — их дело, не наше. Нам нужно знать одно: виден ли рядом домашний
+// роутер. Если виден — человек дома, чем бы ни был занят остальной список.
+//
+// Замер, из которого это правило родилось, — в MakiShlyuzov: 09.09.2026
+// человек сидел дома, Wi-Fi отдавал домашний шлюз, а вердикт вынес Radmin
+// VPN, стоявший в списке первым.
+func EstDomashniyShlyuz(maki []string, domashnie []string) bool {
+	for _, m := range maki {
+		if EtoDomashniyShlyuz(m, domashnie) {
+			return true
+		}
+	}
+	return false
+}
+
 // golyyMak — только шестнадцатеричные цифры, нижним регистром: разделители
 // у разных источников разные, а значение одно.
 func golyyMak(mak string) string {
@@ -74,18 +95,18 @@ func (a *Avtorezhim) domashnieShlyuzy() []string {
 	return DomashnieShlyuzyPoUmolchaniyu
 }
 
-// makShlyuza — номер шлюза физической сети.
+// makiShlyuzov — номера шлюзов физической сети.
 //
-// Пустое поле значит «читать шлюз некому», а НЕ «взять боевое чтение»: так
+// Пустое поле значит «читать шлюзы некому», а НЕ «взять боевое чтение»: так
 // же устроены TunnelPodnyat и SetevoyAdres. Боевое чтение ставит только
 // [Novyy] — иначе каждый тест, собирающий Avtorezhim литералом, молча ушёл
-// бы на настоящий шлюз машины, где его гоняют, и проверял бы не своё
+// бы на настоящие шлюзы машины, где его гоняют, и проверял бы не своё
 // правило, а сеть сборщика (так и вышло на Windows-раннере 09.09).
-func (a *Avtorezhim) makShlyuza() (string, error) {
-	if a.MakShlyuzaFunc == nil {
-		return "", errShlyuzNeChitaetsya
+func (a *Avtorezhim) makiShlyuzov() ([]string, error) {
+	if a.MakiShlyuzovFunc == nil {
+		return nil, errShlyuzNeChitaetsya
 	}
-	return a.MakShlyuzaFunc()
+	return a.MakiShlyuzovFunc()
 }
 
 // errShlyuzNeChitaetsya — «читать шлюз некому». Отдельная ошибка, чтобы её
