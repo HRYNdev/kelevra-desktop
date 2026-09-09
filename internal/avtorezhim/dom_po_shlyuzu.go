@@ -1,6 +1,7 @@
 package avtorezhim
 
 import (
+	"errors"
 	"strings"
 )
 
@@ -73,10 +74,20 @@ func (a *Avtorezhim) domashnieShlyuzy() []string {
 	return DomashnieShlyuzyPoUmolchaniyu
 }
 
-// makShlyuza — номер шлюза физической сети (подменяемо для теста).
+// makShlyuza — номер шлюза физической сети.
+//
+// Пустое поле значит «читать шлюз некому», а НЕ «взять боевое чтение»: так
+// же устроены TunnelPodnyat и SetevoyAdres. Боевое чтение ставит только
+// [Novyy] — иначе каждый тест, собирающий Avtorezhim литералом, молча ушёл
+// бы на настоящий шлюз машины, где его гоняют, и проверял бы не своё
+// правило, а сеть сборщика (так и вышло на Windows-раннере 09.09).
 func (a *Avtorezhim) makShlyuza() (string, error) {
-	if a.MakShlyuzaFunc != nil {
-		return a.MakShlyuzaFunc()
+	if a.MakShlyuzaFunc == nil {
+		return "", errShlyuzNeChitaetsya
 	}
-	return MakShlyuza()
+	return a.MakShlyuzaFunc()
 }
+
+// errShlyuzNeChitaetsya — «читать шлюз некому». Отдельная ошибка, чтобы её
+// было видно в журнале как настройку, а не как сбой сети.
+var errShlyuzNeChitaetsya = errors.New("чтение шлюза не подключено")
