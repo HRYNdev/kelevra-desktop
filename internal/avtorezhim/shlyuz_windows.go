@@ -150,15 +150,27 @@ var (
 	procResolveIpNetEntry = modiphlpapiSosedi.NewProc("ResolveIpNetEntry2")
 )
 
-// mibIPNetRow2 — MIB_IPNET_ROW2 (netioapi.h).
+// mibIPNetRow2 — MIB_IPNET_ROW2 (netioapi.h), поле в поле. Лишние для нас
+// State/Flags/ReachabilityTime объявлены нарочно: размер строки задаёт шаг
+// перебора таблицы, и «сократить» структуру значит читать чужую память.
 type mibIPNetRow2 struct {
 	Address          sockaddrInet
 	InterfaceIndex   uint32
 	InterfaceLuid    uint64
 	PhysicalAddress  [32]byte
 	PhysicalAddrLen  uint32
-	Flags            uint32
+	State            int32
+	Flags            uint8
+	_                [3]byte
 	ReachabilityTime uint32
+}
+
+// mibIPNetTable2 — MIB_IPNET_TABLE2: число строк и сами строки. Table
+// объявлена массивом из одного элемента, как ANY_SIZE в заголовке; настоящая
+// длина берётся из NumEntries через unsafe.Slice.
+type mibIPNetTable2 struct {
+	NumEntries uint32
+	Table      [1]mibIPNetRow2
 }
 
 // sockaddrInet — SOCKADDR_INET: объединение IPv4/IPv6, различаются семейством
@@ -202,21 +214,22 @@ func iskatSoseda(adres string, indeks uint32) (string, error) {
 	if iskomyy == nil {
 		return "", fmt.Errorf("адрес шлюза %q не IPv4", adres)
 	}
-	var tablica uintptr
+	// Указатель на таблицу — типизированный, а не uintptr: приведение
+	// uintptr обратно в unsafe.Pointer запрещено (go vet ловит это как
+	// «possible misuse of unsafe.Pointer»), и запрет по делу — между двумя
+	// строками сборщик мусора вправе переставить память.
+	var tablica *mibIPNetTable2
 	// Только AF_INET: лишние строки IPv6 удлиняют перебор и нам не нужны.
 	r, _, _ := procGetIpNetTable2.Call(uintptr(windows.AF_INET), uintptr(unsafe.Pointer(&tablica)))
 	if r != 0 {
 		return "", fmt.Errorf("GetIpNetTable2: код %d", r)
 	}
-	defer procFreeMibTable.Call(tablica)
+	defer procFreeMibTable.Call(uintptr(unsafe.Pointer(tablica)))
 
-	// MIB_IPNET_TABLE2: uint32 NumEntries, дальше выравнивание до размера
-	// строки, дальше сами строки (Table[ANY_SIZE]).
-	kolichestvo := *(*uint32)(unsafe.Pointer(tablica))
-	razmerStroki := unsafe.Sizeof(mibIPNetRow2{})
-	nachalo := tablica + razmerStroki
-	for i := uint32(0); i < kolichestvo; i++ {
-		stroka := (*mibIPNetRow2)(unsafe.Pointer(nachalo + uintptr(i)*razmerStroki))
+	if tablica == nil || tablica.NumEntries == 0 {
+		return "", fmt.Errorf("таблица соседей пуста")
+	}
+	for _, stroka := range unsafe.Slice(&tablica.Table[0], tablica.NumEntries) {
 		if stroka.InterfaceIndex != indeks {
 			continue
 		}
