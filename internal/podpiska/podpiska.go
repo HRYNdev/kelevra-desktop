@@ -36,6 +36,13 @@ type Klient struct {
 	Shema    string // "https" в бою; "http" оставлен только для проверок на своём стенде
 	HTTP     *http.Client
 	DeviceID string
+	// Pasport — чем устройство описывает себя сверх имени и версии: права,
+	// режим, возраст профиля, суммы файлов. Функцией по той же причине, что и
+	// Trafik: клиент живёт всё время работы приложения, а режим человек может
+	// переключить в любую минуту, и снимок, сделанный при сборке, уехал бы
+	// врать. nil — законно, заголовок тогда не ставится.
+	Pasport func() string
+
 	// Trafik — сколько байт эта машина прогнала через ядро за всё время.
 	// Функцией, а не числом: клиент живёт всё время работы приложения, а
 	// расход растёт каждую минуту — записанное при сборке число уехало бы на
@@ -95,7 +102,17 @@ func (k *Klient) zapros(ctx context.Context, url string) (*http.Request, error) 
 	// трафик по ключу доступа целиком и различить телефон с компьютером не
 	// может — цифру даёт устройство.
 	ustroystvo.ZagolovkiSTrafikom(r.Header, k.DeviceID, Versiya, k.trafik())
+	// Шестой заголовок: паспорт устройства одной строкой (см. ZagolovokPasporta).
+	ustroystvo.ZagolovokPasporta(r.Header, k.pasport())
 	return r, nil
+}
+
+// pasport — описание себя, если его есть кому назвать. Тот же приём, что trafik.
+func (k *Klient) pasport() string {
+	if k.Pasport == nil {
+		return ""
+	}
+	return k.Pasport()
 }
 
 // OshibkaKoda — сервер ответил, но код доступа он не знает.

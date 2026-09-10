@@ -299,6 +299,37 @@ func TestPustoeNeShlyom(t *testing.T) {
 // Istochniki обязаны накрывать и запасной путь (%TEMP%\Kelevra): именно туда
 // уезжает журнал, когда своя папка недоступна — то есть ровно в том случае,
 // который и надо разбирать.
+// Журнал ядра должен попадать в отправку вместе со своим предшественником:
+// без него сетевую жалобу с компьютера разобрать нечем (см. Istochniki).
+func TestIstochnikiBerutZhurnalYadra(t *testing.T) {
+	puti := Istochniki(
+		`C:\Users\x\AppData\Local\Kelevra\kelevra.log`,
+		`C:\Temp\Kelevra`,
+		`C:\Users\x\AppData\Local\Kelevra\yadro\yadro.log`,
+	)
+	if len(puti) != 6 {
+		t.Fatalf("путей %d, ждали 6: %v", len(puti), puti)
+	}
+	var yadrovyh int
+	for _, p := range puti {
+		if strings.Contains(p, "yadro.log") {
+			yadrovyh++
+		}
+	}
+	if yadrovyh != 2 {
+		t.Errorf("путей ядра %d, ждали 2 (сам и .proshlyy): %v", yadrovyh, puti)
+	}
+}
+
+// Пустая строка в дополнительных путях не должна превращаться в мусорный путь:
+// иначе отправка каждый вечер спотыкалась бы о файл с именем ".proshlyy".
+func TestIstochnikiPropuskayutPustoye(t *testing.T) {
+	puti := Istochniki(`C:\Kelevra\kelevra.log`, "", "")
+	if len(puti) != 2 {
+		t.Fatalf("путей %d, ждали 2: %v", len(puti), puti)
+	}
+}
+
 func TestIstochnikiNakryvayutZapasnoyPut(t *testing.T) {
 	puti := Istochniki(`C:\Users\x\AppData\Local\Kelevra\kelevra.log`, `C:\Temp\Kelevra`)
 	if len(puti) != 4 {

@@ -17,6 +17,14 @@ const (
 // PutZhurnala — журнал ядра этого экземпляра.
 func (y *Yadro) PutZhurnala() string { return filepath.Join(y.Papka, imyaZhurnala) }
 
+// PutZhurnalaVPapke — где лежал бы журнал ядра, работающего в этой папке.
+//
+// Нужна там, где экземпляра ядра под рукой нет, а путь знать надо: суточная
+// отправка журналов (internal/zhurnaly) собирает список файлов до и независимо
+// от того, поднято ли ядро вообще. Имя файла живёт здесь в одном месте, чтобы
+// отправка и запись не разъехались молча.
+func PutZhurnalaVPapke(papka string) string { return filepath.Join(papka, imyaZhurnala) }
+
 // PutProshlogoZhurnala — журнал ядра ПРОШЛОГО запуска.
 func (y *Yadro) PutProshlogoZhurnala() string { return y.PutZhurnala() + hvostProshlogo }
 
