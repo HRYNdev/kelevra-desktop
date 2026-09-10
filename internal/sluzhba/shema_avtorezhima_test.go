@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -236,8 +237,14 @@ func TestSostoyanieOtdayotVyborVyhoda(t *testing.T) {
 func TestSlovoChelovekaByotResheniyeAvtomataNachatoyeRanshe(t *testing.T) {
 	s := gotovStendLestnicy(t)
 	t.Cleanup(s.OstanovitAvtorezhim)
-	podyomov := 0
-	s.zapustitYadro = func(ctx context.Context) error { podyomov++; return nil }
+	// atomic: zapustitYadro зовётся из горутины служителя (go sluzh.Krutit),
+	// а читается и сбрасывается прямо здесь, в главной горутине теста —
+	// обычный int тут гоняла бы гонка счётчика, а не боевого кода (см.
+	// диагноз падения на настоящей Windows 10.09). Корень нестабильности лечит
+	// gotovStendLestnicy (KELEVRA_AVTOREZHIM_DNS выше), это — сопутствующая
+	// починка счётчика.
+	var podyomov atomic.Int32
+	s.zapustitYadro = func(ctx context.Context) error { podyomov.Add(1); return nil }
 
 	// Человек включил автомат — служитель заведён на своём поколении.
 	if err := s.vklyuchitAvtorezhim(avtorezhim.VneDoma); err != nil {
@@ -249,12 +256,12 @@ func TestSlovoChelovekaByotResheniyeAvtomataNachatoyeRanshe(t *testing.T) {
 
 	// ...и тут же передумал.
 	s.OstanovitAvtorezhim()
-	podyomov = 0
+	podyomov.Store(0)
 
 	// Заход, начатый ДО нажатия, добрался до защиты только сейчас.
 	s.avtorezhimPrimenit(context.Background(), stroePokolenie, avtorezhim.VneDoma, false)
-	if podyomov != 0 {
-		t.Fatalf("заход старого поколения поднял защиту %d раз(а) после того, как человек выключил автомат", podyomov)
+	if got := podyomov.Load(); got != 0 {
+		t.Fatalf("заход старого поколения поднял защиту %d раз(а) после того, как человек выключил автомат", got)
 	}
 
 	// Никакого залипания: человек снова включил автомат — свежее поколение
@@ -268,22 +275,22 @@ func TestSlovoChelovekaByotResheniyeAvtomataNachatoyeRanshe(t *testing.T) {
 	if svezheePokolenie == stroePokolenie {
 		t.Fatal("поколение не выросло — сверять будет нечего")
 	}
-	podyomov = 0
+	podyomov.Store(0)
 	s.avtorezhimPrimenit(context.Background(), svezheePokolenie, avtorezhim.VneDoma, false)
-	if podyomov != 1 {
-		t.Fatalf("свежее поколение подняло защиту %d раз(а), хочу 1 — появилось залипание", podyomov)
+	if got := podyomov.Load(); got != 1 {
+		t.Fatalf("свежее поколение подняло защиту %d раз(а), хочу 1 — появилось залипание", got)
 	}
 
 	// Отменённый ctx служителя бьёт так же, как выросшее поколение: гасить
 	// служителя и оставлять его решения в силе нельзя.
 	otmenyonnyy, otmena := context.WithCancel(context.Background())
 	otmena()
-	podyomov = 0
+	podyomov.Store(0)
 	if err := s.OpustitZashchitu(); err != nil {
 		t.Logf("опускание защиты стенда: %v", err)
 	}
 	s.avtorezhimPrimenit(otmenyonnyy, svezheePokolenie, avtorezhim.VneDoma, false)
-	if podyomov != 0 {
-		t.Fatalf("заход с отменённым ctx поднял защиту %d раз(а)", podyomov)
+	if got := podyomov.Load(); got != 0 {
+		t.Fatalf("заход с отменённым ctx поднял защиту %d раз(а)", got)
 	}
 }
