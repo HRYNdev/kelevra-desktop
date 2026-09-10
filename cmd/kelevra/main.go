@@ -804,6 +804,8 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// otmena() гасит всех троих разом. Тумблер человека проверяется внутри,
 	// на каждом тике: выключил — следующий же тик промолчит.
 	go s.SleditZaZhurnalami(ctx, sluzhba.ShagSlezhkiZaZhurnalami)
+	// Записи с полями из журнала ядра: тем же ctx, что и остальная слежка.
+	go s.SleditZaYadrom(ctx, sluzhba.ShagChteniyaYadra)
 	// Раз в минуту копия спрашивает у ядра его счётчики и копит СВОЙ расход:
 	// сервер считает трафик по ключу доступа, а под ключом ходит ещё и
 	// телефон — сколько прогнал именно этот компьютер, знает только он сам.
