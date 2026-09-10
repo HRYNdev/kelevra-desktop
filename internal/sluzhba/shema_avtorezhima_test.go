@@ -67,8 +67,8 @@ func TestPodklyuchitBezVyboraChelovekaSamVklyuchaetAvtomat(t *testing.T) {
 	if !o.OzhidanieDoma {
 		t.Fatalf("окну не сказано про режим ожидания: %+v", o)
 	}
-	if o.AvtorezhimPolozhenie != "дома — режим ожидания" {
-		t.Fatalf("положение авторежима = %q, хочу «дома — режим ожидания»", o.AvtorezhimPolozhenie)
+	if o.AvtorezhimPolozhenie != "домашняя сеть — подключение не требуется" {
+		t.Fatalf("положение авторежима = %q, хочу «домашняя сеть — подключение не требуется»", o.AvtorezhimPolozhenie)
 	}
 	if o.AvtorezhimRuchnoy {
 		t.Fatal("человек тумблера не касался — ручным выбором это считать нельзя")

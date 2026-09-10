@@ -55,10 +55,15 @@ jobs:
       # Готовый файл из ветки: нужен, чтобы проверить сборку на живой машине,
       # не выпуская её всем. Тег сразу уезжает семье автообновлением, а тут
       # человек скачивает и ставит руками только себе.
+      # Имя артефакта: у PR github.ref_name — это «110/merge», а слэш в имени
+      # артефакта запрещён, и шаг падает КРАСНЫМ на зелёных тестах. Так и
+      # вышло 09.09.2026 на PR #110: тесты, vet и сборка прошли, а проверка
+      # значилась проваленной из-за имени файла. Красный по такому поводу
+      # хуже бесполезного: он приучает не верить гейту.
       - name: Забрать Kelevra.exe
         uses: actions/upload-artifact@v4
         with:
-          name: Kelevra-${{ github.ref_name }}
+          name: Kelevra-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || github.ref_name }}
           path: build/Kelevra.exe
           retention-days: 14
 
