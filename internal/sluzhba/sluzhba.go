@@ -79,6 +79,18 @@ type Sluzhba struct {
 	// нашего ядра) — без этой настройки зонд честно, но ложно решает «дома»
 	// и «Подключиться» молча не поднимает защиту (см. stend/zond_doma.sh).
 	avtorezhimDnsAdres string
+
+	// avtorezhimShlyuz — из KELEVRA_AVTOREZHIM_SHLYUZ (Novaya): чем
+	// подменить чтение номера шлюза, по которому авторежим узнаёт дом
+	// (см. avtorezhim.MakiShlyuzov). Пусто в бою — читаются настоящие шлюзы.
+	// Несколько задаётся через запятую (см. avtorezhimBoevoy).
+	//
+	// Нужно ровно затем же, зачем и avtorezhimDnsAdres рядом: у площадки, на
+	// которой гоняются проверки, свой шлюз, и его номер не совпадает ни с
+	// домашним, ни с чужим осмысленно. Значение «нет» означает «прочитать не
+	// вышло» — так проверяется запасной путь через DNS; любое другое
+	// значение отдаётся как номер шлюза.
+	avtorezhimShlyuz string
 	// avtorezhimKnopkaTaimaut — таймаут одиночного захода кнопки
 	// «Подключиться» (domaSeychas). <=0 значит KnopkaTaimautPoUmolchaniyu
 	// (8с, см. там же, почему именно столько) — своё поле только ради
@@ -388,6 +400,7 @@ func Novaya() (*Sluzhba, error) {
 		Podpiska:           &podpiska.Klient{DeviceID: n.DeviceID, Host: os.Getenv("KELEVRA_PODPISKA"), Shema: os.Getenv("KELEVRA_SHEMA"), Trafik: n.TrafikUstroystva},
 		klyuch:             sluchaynyy(),
 		avtorezhimDnsAdres: os.Getenv("KELEVRA_AVTOREZHIM_DNS"),
+		avtorezhimShlyuz:   os.Getenv("KELEVRA_AVTOREZHIM_SHLYUZ"),
 	}
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
@@ -1402,16 +1415,21 @@ func vyhodDlyaOkna(uzly map[string]string) (avto bool, imya string) {
 // автомат из этого делает и что человек сейчас увидит.
 //
 // Строка пишется для ЧЕЛОВЕКА, поэтому называет и обстановку, и следствие:
-// «дома — режим ожидания» вместо голого «дома». Переход обязан быть заметен
-// (требование 27.08, повторено 28.08 и 29.08), а заметен ровно в тот момент,
-// когда обстановка уже сменилась, а ядро ещё не догнало — отсюда отдельные
-// «опускаю защиту» и «поднимаю защиту».
+// «домашняя сеть — подключение не требуется» вместо голого «дома». Переход
+// обязан быть заметен (требование 27.08, повторено 28.08 и 29.08), а заметен
+// ровно в тот момент, когда обстановка уже сменилась, а ядро ещё не догнало, —
+// отсюда отдельные «подключаюсь» и «отключаюсь».
+//
+// Слова «защита» и «защищено» тут не употребляются вовсе: 09.09 владелец
+// продукта прямо сказал, что Kelevra ничего не защищает и это слово его злит.
+// Прежняя запись в коде («слово защита второй раз режет глаз», 24.08) описывала
+// только повтор и увела правку не туда.
 //
 // Чистая функция от четырёх фактов, а не сборка внутри обработчика: правило
 // проверяется таблицей случаев.
 func polozhenieAvtorezhima(vklyuchen, ruchnoy bool, obstanovka, sost, slepPrichina string) string {
 	if ruchnoy {
-		return "решаете вы: автомат выключен"
+		return "автоматический режим выключен, переключение вручную"
 	}
 	if !vklyuchen {
 		return ""
@@ -1421,21 +1439,21 @@ func polozhenieAvtorezhima(vklyuchen, ruchnoy bool, obstanovka, sost, slepPrichi
 		// Слепота дольше avtorezhim.PodryadDoPrichiny заходов: автомат
 		// честно признаётся, что не решает ничего, вместо того чтобы
 		// изображать работу молча.
-		return "не понимаю, где вы: " + slepPrichina
+		return "тип сети не определён: " + slepPrichina
 	}
 	switch obstanovka {
 	case avtorezhim.Doma.String():
 		if rabotaet {
-			return "дома — опускаю защиту"
+			return "домашняя сеть — отключаюсь"
 		}
-		return "дома — режим ожидания"
+		return "домашняя сеть — подключение не требуется"
 	case avtorezhim.VneDoma.String():
 		if rabotaet {
-			return "вне дома — защита включена"
+			return "сеть не домашняя — подключено"
 		}
-		return "вне дома — поднимаю защиту"
+		return "сеть не домашняя — подключаюсь"
 	default:
-		return "определяю, где вы"
+		return "идёт определение типа сети"
 	}
 }
 
@@ -2505,6 +2523,27 @@ const KnopkaTaimautPoUmolchaniyu = 8 * time.Second
 func (s *Sluzhba) avtorezhimBoevoy() *avtorezhim.Avtorezhim {
 	a := avtorezhim.Novyy()
 	a.TunnelPodnyat = s.tunnelPodnyat
+	if s.avtorezhimShlyuz != "" {
+		podmena := s.avtorezhimShlyuz
+		a.MakiShlyuzovFunc = func() ([]string, error) {
+			if podmena == "нет" {
+				return nil, fmt.Errorf("номера шлюзов подменены на «нет» (KELEVRA_AVTOREZHIM_SHLYUZ)")
+			}
+			// Через запятую задаётся НЕСКОЛЬКО шлюзов — иначе на стенде не
+			// разыграть ту самую беду 09.09, где домашний роутер был в
+			// списке вторым, за Radmin VPN, и вердикт выносил не он.
+			var maki []string
+			for _, ch := range strings.Split(podmena, ",") {
+				if ch = strings.TrimSpace(ch); ch != "" {
+					maki = append(maki, ch)
+				}
+			}
+			if len(maki) == 0 {
+				return nil, fmt.Errorf("KELEVRA_AVTOREZHIM_SHLYUZ задан, но пуст")
+			}
+			return maki, nil
+		}
+	}
 	if s.avtorezhimDnsAdres != "" {
 		podmena := func() avtorezhim.DnsProver {
 			return &avtorezhim.DnsZond{AdresResolvera: s.avtorezhimDnsAdres}

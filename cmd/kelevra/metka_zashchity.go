@@ -70,11 +70,11 @@ const podskazkaBezObnovleniya = "Kelevra: отключено"
 // переименование ничего человеку не добавит.
 const (
 	// podskazkaPolnayaZashchita — режим туннеля.
-	podskazkaPolnayaZashchita = "Kelevra: работает — любая программа идёт через Kelevra"
+	podskazkaPolnayaZashchita = "Kelevra: подключено, весь трафик идёт через Kelevra"
 	// podskazkaChastichnayaZashchita — режим системного прокси. Слово
 	// «частично» стоит до тире: подсказка обрезается по ширине всплывающего
 	// окошка, и главное не должно уехать в обрезанный хвост.
-	podskazkaChastichnayaZashchita = "Kelevra: работает частично — только браузеры, игры и видео мимо"
+	podskazkaChastichnayaZashchita = "Kelevra: подключено не полностью, идут только браузеры"
 )
 
 // pometitZashchitu — хук sluzhba.MetkaZashchity: защиту подняли или опустили.
