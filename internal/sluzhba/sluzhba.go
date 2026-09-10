@@ -38,6 +38,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+	"github.com/HRYNdev/kelevra-desktop/internal/zapisi"
 	"github.com/HRYNdev/kelevra-desktop/internal/zhurnaly"
 )
 
@@ -746,11 +747,10 @@ func (s *Sluzhba) otpechatokFayla(put string, kesh *string) string {
 // postavitTiho доводит найденное обновление до конца САМО, не дожидаясь человека.
 //
 // Зачем. До 10.09.2026 установку запускал только тычок в пузырь трея. Замер по
-// реестру устройств на сервере: у мамы стояла 0.6.50 от 05.09, у Вики 0.6.45 от
-// 31.08 при живой 0.6.66 — они пузырь не нажимают вовсе, и любая наша правка до
+// реестру устройств на сервере: на двух машинах стояли версии от 5 и от
+// 31 августа при живой 0.6.66 — пузырь там не нажимают вовсе, и любая наша правка до
 // них не доезжает НИКОГДА. Обновление, которое ждёт щелчка, для семьи равно
-// отсутствию обновления. Слова хозяина продукта 09.09: «пока не починено —
-// выпуски для них бессмысленны».
+// отсутствию обновления. Без этого выпуск для них не имеет смысла вовсе.
 //
 // Почему это безопасно. Установка меняет файл и поднимает смену тихо (см.
 // PostavitNaydennoe и zapustitSmenuPosleObnovleniya): окно не всплывает, связь
@@ -1052,6 +1052,11 @@ var ShagSlezhkiZaZhurnalami = 5 * time.Minute
 // мегабайт — это не настойчивость, а трата чужого трафика.
 const PovtorPosleOtkaza = time.Hour
 
+// PeriodOtpravkiZhurnalov — как часто посылка уходит при удачах.
+//
+// var, а не const: стенду нужно двигать период, чтобы не ждать час.
+var PeriodOtpravkiZhurnalov = time.Hour
+
 // vecherOtpravki — момент «конца дня» для суток, в которые попадает t.
 func vecherOtpravki(t time.Time) time.Time {
 	den := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
@@ -1059,23 +1064,23 @@ func vecherOtpravki(t time.Time) time.Time {
 }
 
 // poraOtpravlyatZhurnaly — всё расписание одной чистой функцией, чтобы оно
-// проверялось таблицей случаев, а не ожиданием настоящего вечера.
+// проверялось таблицей случаев, а не ожиданием настоящего часа.
 //
-// Правило: у каждого НАСТУПИВШЕГО вечера есть свои сутки, чтобы посылка ушла.
-// Пока за последний наступивший вечер не отчитались — пробуем, но не чаще
-// раза в час. Наступил следующий вечер — прошлый долг сгорел сам собой
-// (srok уехал вперёд), гнаться за ним не надо.
+// Правило: раз в час, считая от последней УДАЧНОЙ отправки. Отказ не ускоряет
+// и не замедляет: он лишь запрещает лезть снова раньше PovtorPosleOtkaza.
 //
-// Отдельно это ловит машину, которая в 23:30 была выключена: утром srok — это
-// ВЧЕРАШНИЙ вечер, удачи за ним не было, и посылка уходит сразу, не дожидаясь
-// следующей ночи.
+// Почему больше не «раз в вечер». До 10.09.2026 посылка уходила по вечернему
+// расписанию, и это разбилось об очевидное: ноутбуки вечером выключены, и у
+// половины машин журнал не уезжал вовсе. Час — это ещё и то, что обещано планом
+// телеметрии: сводки едут часто и мелко, и к моменту жалобы данные уже здесь,
+// а не ждут ночи, которая может не наступить.
+//
+// Дорого это не стоит: отправка ведёт отметки по каждому файлу и посылает
+// ТОЛЬКО новое (internal/zhurnaly, Metka.Otpravleno). Часовая посылка — это
+// килобайты, а не те десятки мегабайт, которыми пугало суточное накопление.
 func poraOtpravlyatZhurnaly(seychas, uspeh, popytka time.Time) bool {
-	srok := vecherOtpravki(seychas)
-	if seychas.Before(srok) {
-		srok = vecherOtpravki(seychas.AddDate(0, 0, -1))
-	}
-	if !uspeh.Before(srok) {
-		return false // за этот вечер уже отчитались
+	if !uspeh.IsZero() && seychas.Sub(uspeh) < PeriodOtpravkiZhurnalov {
+		return false // час с удачной посылки ещё не прошёл
 	}
 	if !popytka.IsZero() && seychas.Sub(popytka) < PovtorPosleOtkaza {
 		return false // недавно пробовали и не вышло — ждём час
@@ -1182,6 +1187,7 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 			hranenie.PutZhurnala(),
 			hranenie.ZapasnayaPapkaZhurnala(),
 			yadro.PutZhurnalaVPapke(hranenie.PapkaYadra()),
+			filepath.Join(hranenie.Papka(), zapisi.ImyaFayla),
 		),
 		PutMetok:  hranenie.PutOtmetokZhurnalov(),
 		Zagolovki: ustroystvo.Zagolovki,
