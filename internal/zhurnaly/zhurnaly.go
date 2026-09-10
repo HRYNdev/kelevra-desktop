@@ -185,13 +185,28 @@ func predshestvennik(put string) string {
 // Istochniki — все места, где приложение когда-либо держит свой журнал:
 // рабочий файл, его ротация, и то же самое в запасной папке (%TEMP%\Kelevra),
 // куда журнал уезжает, когда своя папка недоступна.
-func Istochniki(putZhurnala, zapasnayaPapka string) []string {
+func Istochniki(putZhurnala, zapasnayaPapka string, dopolnitelnye ...string) []string {
 	puti := []string{putZhurnala, putZhurnala + ".proshlyy"}
 	if zapasnayaPapka != "" {
 		zapasnyy := filepath.Join(zapasnayaPapka, filepath.Base(putZhurnala))
 		if zapasnyy != putZhurnala {
 			puti = append(puti, zapasnyy, zapasnyy+".proshlyy")
 		}
+	}
+	// Всё остальное, что тоже надо возить, вместе с его предшественником.
+	//
+	// Зачем это понадобилось. Журнал ЯДРА (`internal/yadro`: yadro.log и
+	// yadro.log.proshlyy) пишется с 31.08, но в отправку не входил, и на
+	// коллектор с компьютеров приезжал только журнал приложения. А диагноз
+	// сетевой жалобы ставится строками ядра: какое имя в какой выход пошло и
+	// чем кончилось. Разбор 10.09.2026: жалобу Вики «не грузится Яндекс» на её
+	// ноутбуке закрыть было НЕЧЕМ — в архиве лежали только проверки дома, а
+	// на её телефоне тот же самый диагноз читался с первой строки ядра.
+	for _, put := range dopolnitelnye {
+		if put == "" {
+			continue
+		}
+		puti = append(puti, put, put+".proshlyy")
 	}
 	return puti
 }

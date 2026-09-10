@@ -202,6 +202,18 @@ type Sluzhba struct {
 	// idetProverkaObnovleniya — не даёт фоновому тику и толчку от открытия
 	// окна другой копии (obnovlenieProveritRuchka) спросить GitHub разом.
 	idetProverkaObnovleniya bool
+	// summaExe / summaYadra — короткие отпечатки файлов, посчитанные один раз.
+	// Паспорт уходит с КАЖДЫМ запросом к серверу, а файлы весят десятки
+	// мегабайт: считать их отпечаток каждый раз значило бы жечь диск и время
+	// на данные, которые между перезапусками не меняются.
+	summaExe   string
+	summaYadra string
+
+	// tihoStavili — версия, которую тихая установка уже пробовала поставить.
+	// Без неё редкий фоновый тик дёргал бы установку по кругу на одной и той же
+	// сборке, если та не встаёт (занятый файл, нет прав на запись).
+	tihoStavili string
+
 	// idetUstanovkaObnovleniya — свой замок, отдельный от idetProverkaObnovleniya
 	// выше: второй тычок в пузырь, пока первый ещё качает найденную сборку, не
 	// должен звать obnovlenie.Postavit второй раз (см. PostavitNaydennoe).
@@ -402,6 +414,9 @@ func Novaya() (*Sluzhba, error) {
 		avtorezhimDnsAdres: os.Getenv("KELEVRA_AVTOREZHIM_DNS"),
 		avtorezhimShlyuz:   os.Getenv("KELEVRA_AVTOREZHIM_SHLYUZ"),
 	}
+	// Паспорт назначаем ПОСЛЕ сборки: он читает саму службу (режим, права,
+	// возраст профиля), поэтому раньше её существования не собирается.
+	s.Podpiska.Pasport = s.SobratPasport
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
@@ -650,7 +665,119 @@ func (s *Sluzhba) ProveritObnovlenieFonom() {
 	if n != nil {
 		log.Printf("фоновая проверка обновления: найдена версия %s", n.Versiya)
 		s.povestitEsliNovaya(n.Versiya)
+		s.postavitTiho(*n)
 	}
+}
+
+// SobratPasport — чем устройство описывает себя серверу сверх имени и версии.
+//
+// Зачем. Разбор 10.09.2026: сервер знал про устройство пять полей и не мог
+// ответить ни на «человек сам переключил режим», ни на «какой возраст профиля»,
+// ни на «та ли это сборка, что мы выпускали». А половина диагнозов складывается
+// ровно из этого, и каждый такой разбор стоил по полсессии.
+//
+// Формат — «ключ=значение» через точку с запятой (см. ustroystvo.ZagolovokPasporta).
+// Новый ключ можно добавить не трогая сервер: незнакомые он кладёт рядом.
+//
+// Ошибки чтения не мешают: поле просто не попадает в строку. Паспорт — сведения
+// о себе, а не работа, и ронять из-за него запрос к серверу нельзя.
+func (s *Sluzhba) SobratPasport() string {
+	var chasti []string
+
+	if prava.Est() {
+		chasti = append(chasti, "prava=1")
+	} else {
+		chasti = append(chasti, "prava=0")
+	}
+
+	s.zamok.Lock()
+	avto := s.Nastroyki.Avtorezhim
+	ruchnoy := s.Nastroyki.RuchnoyVybor
+	s.zamok.Unlock()
+	switch {
+	case avto:
+		chasti = append(chasti, "rezhim=avto")
+	case ruchnoy:
+		chasti = append(chasti, "rezhim=ruchnoy")
+	default:
+		chasti = append(chasti, "rezhim=nevybran")
+	}
+
+	// Возраст профиля минутами: по нему видно, доезжают ли до человека наши
+	// правки правил вообще. Профиль старше суток — уже беда.
+	if st, err := os.Stat(hranenie.PutProfilya()); err == nil {
+		chasti = append(chasti, fmt.Sprintf("profil=%d", int(time.Since(st.ModTime()).Minutes())))
+	}
+
+	if sum := s.otpechatokFayla(hranenie.PutYadra(), &s.summaYadra); sum != "" {
+		chasti = append(chasti, "yadro="+sum)
+	}
+	if put, err := obnovlenie.PutSebya(); err == nil {
+		if sum := s.otpechatokFayla(put, &s.summaExe); sum != "" {
+			chasti = append(chasti, "exe="+sum)
+		}
+	}
+	return strings.Join(chasti, ";")
+}
+
+// otpechatokFayla — короткий отпечаток файла с запоминанием в поле.
+//
+// Считаем по размеру и времени изменения, а не по содержимому: полный хэш
+// десятимегабайтного файла ради строки в заголовке — трата на пустом месте, а
+// «тот же файл или подменённый» эта пара показывает не хуже.
+func (s *Sluzhba) otpechatokFayla(put string, kesh *string) string {
+	s.zamok.Lock()
+	gotovo := *kesh
+	s.zamok.Unlock()
+	if gotovo != "" {
+		return gotovo
+	}
+	st, err := os.Stat(put)
+	if err != nil {
+		return ""
+	}
+	sum := fmt.Sprintf("%dk-%d", st.Size()/1024, st.ModTime().Unix())
+	s.zamok.Lock()
+	*kesh = sum
+	s.zamok.Unlock()
+	return sum
+}
+
+// postavitTiho доводит найденное обновление до конца САМО, не дожидаясь человека.
+//
+// Зачем. До 10.09.2026 установку запускал только тычок в пузырь трея. Замер по
+// реестру устройств на сервере: у мамы стояла 0.6.50 от 05.09, у Вики 0.6.45 от
+// 31.08 при живой 0.6.66 — они пузырь не нажимают вовсе, и любая наша правка до
+// них не доезжает НИКОГДА. Обновление, которое ждёт щелчка, для семьи равно
+// отсутствию обновления. Слова хозяина продукта 09.09: «пока не починено —
+// выпуски для них бессмысленны».
+//
+// Почему это безопасно. Установка меняет файл и поднимает смену тихо (см.
+// PostavitNaydennoe и zapustitSmenuPosleObnovleniya): окно не всплывает, связь
+// поднимается заново сама, если была поднята. Фоновый тик редкий, поэтому одной
+// попытки на версию достаточно, а неудача попадёт в журнал.
+func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
+	s.zamok.Lock()
+	uzhe := s.idetUstanovkaObnovleniya
+	stavili := s.tihoStavili
+	s.zamok.Unlock()
+	if uzhe {
+		return
+	}
+	if stavili == n.Versiya {
+		return // эту версию уже пробовали, второй раз незачем
+	}
+	s.zamok.Lock()
+	s.tihoStavili = n.Versiya
+	s.zamok.Unlock()
+
+	log.Printf("тихая установка %s: начинаю, человека не спрашиваю", n.Versiya)
+	put, err := s.PostavitNaydennoe()
+	if err != nil {
+		log.Printf("тихая установка %s: не вышло (%v), остаюсь на прежней", n.Versiya, err)
+		return
+	}
+	log.Printf("тихая установка %s: поставлено, файл %s", n.Versiya, put)
 }
 
 // povestitEsliNovaya решает, стоит ли беспокоить человека пузырём в трее.
@@ -1051,7 +1178,11 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 		Adres:     fmt.Sprintf("%s://%s/logs", shema, host),
 		DeviceID:  s.Nastroyki.DeviceID,
 		Versiya:   podpiska.Versiya,
-		Puti:      zhurnaly.Istochniki(hranenie.PutZhurnala(), hranenie.ZapasnayaPapkaZhurnala()),
+		Puti: zhurnaly.Istochniki(
+			hranenie.PutZhurnala(),
+			hranenie.ZapasnayaPapkaZhurnala(),
+			yadro.PutZhurnalaVPapke(hranenie.PapkaYadra()),
+		),
 		PutMetok:  hranenie.PutOtmetokZhurnalov(),
 		Zagolovki: ustroystvo.Zagolovki,
 	}
