@@ -7,6 +7,7 @@ import (
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
+	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/pravila"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
@@ -33,11 +34,22 @@ import (
 //     поднимаем новое рядом и гасим старое только после того, как новое
 //     заработало;
 //   - принимать нечего или не наше: молча уходим, дальше всё как раньше.
-func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context) {
+func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
+	// Какая версия работала до нас — запоминаем СРАЗУ, до всех развилок:
+	// ответить на этот вопрос можно только один раз, и любой выход ниже не
+	// должен оставить запись вчерашней.
+	smenaVersii := s.zapomnitSvoyuVersiyu()
+
 	papka := hranenie.PapkaYadra()
 	p, est := yadro.ProchestPeredachu(papka)
 	if !est {
-		return // записки нет — обычный холодный старт
+		// Записки нет. Либо обычный холодный старт, либо — и это важный
+		// случай — обновление СО СТАРОЙ версии, которая записок ещё не
+		// умела оставлять и ядро гасила безусловно.
+		if smenaVersii {
+			s.podnyatSvyazPosleSmenyVersii(ctx, sledTunnelya)
+		}
+		return
 	}
 
 	itog := s.Yadro.Prinyat(p, s.otpechatokZhelaemogoKonfiga())
@@ -68,6 +80,64 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context) {
 		}
 		yadro.UbratPeredachu(papka)
 	}
+}
+
+// zapomnitSvoyuVersiyu записывает нынешнюю версию и отвечает, сменилась ли она.
+//
+// ПУСТАЯ запись тоже считается сменой, и это не оплошность. Поле появилось
+// только в 0.6.71, а обновляются люди со старых версий, которые его не знали, —
+// то есть ровно в нужном случае записано будет пусто. Считать пустоту «первым
+// запуском» значит не сработать именно там, ради чего всё и написано (замер на
+// стенде 11.09.2026: переход 0.6.69 → 0.6.71 связь не вернул по этой причине).
+//
+// От чистой установки защищает не это условие, а след туннеля: у человека,
+// который только поставил приложение, связи не было и следа нет, поднимать
+// нечего (см. podnyatSvyazPosleSmenyVersii).
+func (s *Sluzhba) zapomnitSvoyuVersiyu() bool {
+	bylo := s.Nastroyki.RabotalaVersiya
+	if bylo == podpiska.Versiya {
+		return false
+	}
+	s.Nastroyki.RabotalaVersiya = podpiska.Versiya
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("не сохранил отметку о своей версии: %v", err)
+	}
+	return true
+}
+
+// podnyatSvyazPosleSmenyVersii возвращает туннель, который оборвало обновление
+// со старой версии.
+//
+// Нужно, пока у людей стоят версии до 0.6.71. Обновление ведёт СТАРАЯ копия
+// своим старым кодом: он безусловно гасит ядро и записки не оставляет —
+// значит принимать нечего, сколько бы новая копия ни умела. Разрыв на самом
+// переходе неизбежен, его делает код, который уже стоит на машине. Но остаться
+// БЕЗ связи после него — не неизбежность, а наша недоделка: автоподключение у
+// людей выключено, а авторежим дома решает, что туннель не нужен.
+//
+// Судим по следу туннеля. Он остаётся ровно тогда, когда связь поднимали и не
+// опускали штатно (штатное «Отключить» след снимает само) — то есть говорит
+// именно то, что нужно: человек был подключён и не просил обратного.
+//
+// Имя адаптера ПАРАМЕТРОМ, а не чтением файла: сам файл к этому моменту уже
+// снят уборкой в начале main, и читать его тут значит всегда видеть пустоту
+// (замер на стенде 11.09.2026 — связь не поднималась именно по этой причине).
+//
+// Проверка живого ядра здесь не нужна: выше по PrinyatZhivoeYadro записки нет,
+// а без неё живое ядро нам всё равно не принять.
+func (s *Sluzhba) podnyatSvyazPosleSmenyVersii(ctx context.Context, adapter string) {
+	if adapter == "" {
+		// Следа не было: либо связь не поднимали, либо человек отключился сам
+		// (штатное «Отключить» снимает след). Возвращать нечего.
+		return
+	}
+	log.Printf("версия сменилась, а прошлая копия держала туннель (адаптер %q) и записки не оставила — "+
+		"поднимаю связь обратно сам", adapter)
+	if err := s.PodnyatZashchitu(ctx); err != nil {
+		log.Printf("связь после смены версии не поднялась: %v", err)
+		return
+	}
+	log.Printf("связь после смены версии поднята")
 }
 
 // dobavitPravilaIzKesha кладёт в выбор правила, уже лежащие на диске.
