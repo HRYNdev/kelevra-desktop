@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 )
 
 // fakeResolver — подставной резолвер: отвечает по имени домена без единого
@@ -174,6 +175,58 @@ func TestDnsZondKontrolnyyMolchitNeMeshayet(t *testing.T) {
 	}
 	if !doma {
 		t.Fatal("контрольный домен промолчал — это не довод, признак дома по 2 из 3 обязан устоять")
+	}
+}
+
+// medlennyResolver — подставной резолвер, который для доменов из stoit
+// висит, пока не отменят контекст (имитирует молчащий/недоступный домен),
+// а для остальных отвечает сразу — нужен, чтобы измерить время, а не
+// поверить ему на слово.
+type medlennyResolver struct {
+	otvety map[string][]net.IP
+	stoit  map[string]bool
+}
+
+func (m medlennyResolver) LookupIP(ctx context.Context, network, host string) ([]net.IP, error) {
+	if m.stoit[host] {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return m.otvety[host], nil
+}
+
+// TestDnsZondRannijVyhodPoByudzhetuNeZhdyotOstavshiesyaDomeny — как только
+// Nuzhno совпадений набрано, оставшиеся домены из Domeny не спрашиваются
+// вовсе: молчащий (тут — зависающий до отмены контекста) домен, идущий
+// последним, не должен удлинять заход сверх времени, нужного на два честных
+// ответа. Мерится временем, а не количеством вызовов — гейт этой правки
+// как раз в том, что заход не имеет права ВИСЕТЬ до конца бюджета.
+func TestDnsZondRannijVyhodPoByudzhetuNeZhdyotOstavshiesyaDomeny(t *testing.T) {
+	z := &DnsZond{
+		Resolver: medlennyResolver{
+			otvety: map[string][]net.IP{
+				"a.home":                     {fakeAdres(198, 18, 1, 1)},   // подменный
+				"b.home":                     {fakeAdres(198, 19, 1, 1)},   // подменный
+				KontrolnyyDomenPoUmolchaniyu: {fakeAdres(213, 59, 254, 7)}, // настоящий
+			},
+			stoit: map[string]bool{"c.slow": true},
+		},
+		Domeny:  []string{"a.home", "b.home", "c.slow"},
+		Nuzhno:  2,
+		Taimaut: 500 * time.Millisecond,
+	}
+	nachalo := time.Now()
+	doma, err := z.DomaPoDns(context.Background())
+	zanyalo := time.Since(nachalo)
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if !doma {
+		t.Fatal("2 из 3 подменных — признак дома обязан быть true")
+	}
+	if zanyalo > 150*time.Millisecond {
+		t.Fatalf("заход занял %s при бюджете %s — похоже, зонд всё равно ждал c.slow "+
+			"вместо раннего выхода после Nuzhno совпадений", zanyalo, z.Taimaut)
 	}
 }
 

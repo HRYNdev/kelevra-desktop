@@ -103,9 +103,11 @@ type Nablyudeniye struct {
 	ZondSlep bool
 
 	// DnsPriznakDoma — DNS-зонд насчитал подмену на ≥2 из 3 контрольных
-	// доменов. Значение осмысленно, ТОЛЬКО пока DnsMolchit == false: при
-	// молчащем резолвере здесь false просто потому, что считать было нечего,
-	// а не потому, что посчитали и вышло «не дома».
+	// доменов, ИЛИ этот заход не подтвердил подмену, но признак ещё стоит
+	// по памяти (см. PriznakPamyat, перенос HomeSign.stands с телефона).
+	// Значение осмысленно, ТОЛЬКО пока DnsMolchit == false: при молчащем
+	// резолвере здесь false просто потому, что считать было нечего, а не
+	// потому, что посчитали и вышло «не дома».
 	DnsPriznakDoma bool
 
 	// DnsMolchit — резолвер не ответил НИ НА ОДИН контрольный домен, то есть
@@ -213,6 +215,11 @@ type Avtorezhim struct {
 	Trafik    TrafikProver
 	Zadvizhka *Zadvizhka
 
+	// Priznak — память DNS-признака дома между заходами (см.
+	// [PriznakPamyat]). nil — памяти нет, поведение как до переноса этого
+	// куска: признак дома живёт ровно один заход.
+	Priznak *PriznakPamyat
+
 	// TunnelPodnyat — стоит ли сейчас наш туннель на пути зондов. nil значит
 	// «не стоит» (так собран Novyy: сам по себе пакет про ядро ничего не
 	// знает, признак приносит служба — internal/sluzhba).
@@ -307,6 +314,7 @@ func Novyy() *Avtorezhim {
 		Dns:          NovyyDnsZond(),
 		Trafik:       NovyyPryamoyZond(),
 		Zadvizhka:    NovayaZadvizhka(Neizvestno),
+		Priznak:      NovyyPriznakPamyat(),
 		SetevoyAdres: SetevoyAdapter,
 		DnsPryamoy:   novyyDnsZondPryamoy,
 		// Главный признак дома. Ставится ТОЛЬКО здесь, как и SetevoyAdres:
@@ -379,7 +387,6 @@ const PodryadDoPrichiny = 3
 // условием, а не просто фактом наблюдения.
 const prichinaAdapterNeNaiden = "физический сетевой адаптер не найден"
 
-
 // domaSlovami — как назвать вердикт по шлюзу в журнале.
 func domaSlovami(doma bool) string {
 	if doma {
@@ -406,6 +413,17 @@ func prichinaDnsNePrivaten(dnsAdres string) string {
 // вернёт VneDoma при !DnsPriznakDoma независимо от TrafikPryamoy) — лишний
 // TCP-запрос платить незачем.
 func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nablyudeniye Nablyudeniye, izmenilos bool, tekushcheye Sostoyanie) {
+	if dovereno {
+		// Доверенный заход — по уже доказанному сигналу смены сети (см.
+		// Sledchik). На телефоне память DNS-признака ключуется объектом
+		// Network (HomeSign.rememberHomeSign/homeSignAge), и смена сети
+		// сама по себе делает старую память недоступной. Здесь такого
+		// объекта нет — сигнал смены сети от Sledchik и есть единственный
+		// маркер «сеть уже не та», поэтому стираем память им же, ДО этого
+		// захода: иначе признак чужой (уже покинутой) сети мог бы
+		// подсказать «дома» на новой.
+		a.Priznak.Zabyt()
+	}
 	if !estSet {
 		a.sbrositSlepotu()
 		n := Nablyudeniye{EstSet: false}
@@ -532,8 +550,28 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 			otchet.Podmen, otchet.Kontrolnyy, strings.Join(otchet.Otvety, " "))
 	}
 
+	// Память признака (перенос HomeSign.stands/rememberHomeSign с телефона,
+	// см. PriznakPamyat): резолвер молчащим этот заход не считаем
+	// (dnsMolchit трогать нельзя — см. Reshit и авария 28.08), а вот
+	// честный ответ БЕЗ подмены признак не отменяет мгновенно, пока не
+	// истёк PamyatPriznaka с последнего раза, когда его видели, — свежий
+	// Wi-Fi мигает, и без памяти это выглядело бы как «дом моргает».
+	// priznakDoma (а не сырой dnsDoma) идёт и в проверку трафика ниже, и в
+	// Nablyudeniye — так же, как на телефоне трафик спрашивается по dnsHome
+	// (памяти), а не по сырому dnsNow.
+	seychas := time.Now()
+	priznakDoma := dnsDoma
+	if !dnsMolchit {
+		if dnsDoma {
+			a.Priznak.Zapomnit(seychas)
+		} else if a.Priznak.Stoit(seychas, 0) {
+			priznakDoma = true
+			log.Printf("авторежим: DNS сейчас подмены не нашёл, но признак дома видели меньше %s назад — держим его до проверки трафиком", PamyatPriznaka)
+		}
+	}
+
 	var trafik *bool
-	if dnsDoma {
+	if priznakDoma {
 		// PryamoyZond в TUN-режиме всё равно ходит наружу ЧЕРЕЗ туннель и
 		// потому почти всегда «проходит» — это ложноположительный ВТОРОЙ
 		// признак, а не первый. Опасности в этом нет: dnsDoma здесь уже
@@ -544,6 +582,11 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 		// самостоятельно защиту не снимет.
 		if izmereno, proshel := a.Trafik.Proshel(ctx); izmereno {
 			trafik = &proshel
+			if !proshel {
+				// Опровергнуто делом — держаться за память больше не на
+				// чем (forgetHomeSign на телефоне при carried == false).
+				a.Priznak.Zabyt()
+			}
 		}
 	}
 
@@ -561,7 +604,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	// числе ПОКА ПОДНИМАЕТСЯ), зонд спрашивает резолвер физического адаптера,
 	// привязавшись к его адресу, и Windows выпускает такой пакет мимо туннеля.
 	// Проверено дампом на стенде 09.09: ответы приходят честные.
-	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: dnsDoma, DnsMolchit: dnsMolchit, TrafikPryamoy: trafik}
+	n := Nablyudeniye{EstSet: true, DnsPriznakDoma: priznakDoma, DnsMolchit: dnsMolchit, TrafikPryamoy: trafik}
 	izm := a.Zadvizhka.Predlozhit(Reshit(n), dovereno)
 	return n, izm, a.Zadvizhka.Tekushcheye()
 }
