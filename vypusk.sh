@@ -77,6 +77,102 @@ else
   rm -f "$PRIYOMKA_LOG"
 fi
 
+api() { curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+             -H "Accept: application/vnd.github+json" "$@"; }
+
+if api "https://api.github.com/repos/$REPO/releases/tags/$TEG" | grep -q '"tag_name"'; then
+  echo "✗ релиз $TEG уже есть"; exit 1
+fi
+
+# С 01.09 тег app-v* сам по себе — событие: .github/workflows/vypusk.yml
+# собирает и публикует релиз, а с 08.09 ещё и ждёт зелёной проверки на
+# настоящей Windows перед этим. Если скрипт по старой памяти соберёт и
+# опубликует релиз сам, получится гонка за один тег: либо два релиза, либо
+# к человеку уезжает линуксовая сборка, которая тот гейт не проходила.
+# Поэтому смотрим на факт — есть ли в репозитории такой workflow — а не на
+# захардкоженное имя файла, и если есть, дальше работает CI, а не мы.
+CI_VYPUSK_FAYL=$(python3 - "$KOREN" "$TEG" <<'PY' || true
+import fnmatch, glob, os, sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(1)
+koren, teg = sys.argv[1], sys.argv[2]
+shablony = glob.glob(os.path.join(koren, ".github/workflows/*.yml")) \
+    + glob.glob(os.path.join(koren, ".github/workflows/*.yaml"))
+for put in shablony:
+    try:
+        with open(put, encoding="utf-8") as f:
+            dannye = yaml.safe_load(f) or {}
+    except Exception:
+        continue
+    # YAML 1.1 читает голый `on:` как булев True — берём оба варианта.
+    on = dannye.get("on", dannye.get(True))
+    if not isinstance(on, dict):
+        continue
+    push = on.get("push")
+    if not isinstance(push, dict):
+        continue
+    for teg_shablon in (push.get("tags") or []):
+        if fnmatch.fnmatch(teg, teg_shablon):
+            print(put)
+            sys.exit(0)
+sys.exit(1)
+PY
+)
+
+if [ -n "$CI_VYPUSK_FAYL" ]; then
+  echo "── тег $TEG уходит в CI ($CI_VYPUSK_FAYL) — сборку и релиз делает он"
+  git tag -f "$TEG" && git push -q "https://x-access-token:$GITHUB_TOKEN@github.com/$REPO.git" "$TEG"
+
+  SHA_TEGA=$(git rev-parse "$TEG^{commit}")
+  CI_PUT_OTN=".github/workflows/$(basename "$CI_VYPUSK_FAYL")"
+  TAYMAUT_CI=${TAYMAUT_CI:-1800}
+  NACHALO=$(date +%s)
+  echo "── жду, пока CI найдёт прогон по $SHA_TEGA (таймаут ${TAYMAUT_CI}с)"
+  RUN_ID=""
+  while [ -z "$RUN_ID" ]; do
+    RUN_ID=$(api "https://api.github.com/repos/$REPO/actions/runs?head_sha=$SHA_TEGA&per_page=20" \
+      | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for r in d.get('workflow_runs', []):
+    if r.get('path') == '$CI_PUT_OTN':
+        print(r['id']); break
+" 2>/dev/null || true)
+    if [ -n "$RUN_ID" ]; then break; fi
+    if [ $(( $(date +%s) - NACHALO )) -gt "$TAYMAUT_CI" ]; then
+      echo "✗ CI не начал прогон по тегу $TEG за ${TAYMAUT_CI}с — к человеку ничего не уехало"
+      exit 1
+    fi
+    sleep 10
+  done
+  echo "   прогон найден: run $RUN_ID"
+
+  ZAKLYUCHENIE=""
+  while [ -z "$ZAKLYUCHENIE" ]; do
+    OTVET=$(api "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID")
+    STATUS=$(echo "$OTVET" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
+    if [ "$STATUS" = "completed" ]; then
+      ZAKLYUCHENIE=$(echo "$OTVET" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("conclusion",""))')
+      break
+    fi
+    if [ $(( $(date +%s) - NACHALO )) -gt "$TAYMAUT_CI" ]; then
+      echo "✗ CI не закончил прогон по тегу $TEG за ${TAYMAUT_CI}с (run $RUN_ID висит) — к человеку ничего не уехало"
+      exit 1
+    fi
+    sleep 15
+  done
+
+  if [ "$ZAKLYUCHENIE" = "success" ]; then
+    echo "✓ CI зелёный: https://github.com/$REPO/releases/tag/$TEG"
+    exit 0
+  else
+    echo "✗ CI закончился как «$ZAKLYUCHENIE» на $TEG — к человеку ничего не уехало: https://github.com/$REPO/actions/runs/$RUN_ID"
+    exit 1
+  fi
+fi
+
 echo "── сборка $VERSIYA"
 VYHOD=$(mktemp -d)
 trap 'rm -rf "$VYHOD"' EXIT
@@ -113,13 +209,6 @@ else
   fi
   echo "   стартовал, назвался $VERSIYA, служба поднялась"
   rm -f "$LOG"
-fi
-
-api() { curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
-             -H "Accept: application/vnd.github+json" "$@"; }
-
-if api "https://api.github.com/repos/$REPO/releases/tags/$TEG" | grep -q '"tag_name"'; then
-  echo "✗ релиз $TEG уже есть"; exit 1
 fi
 
 echo "── тег и релиз $TEG"
