@@ -70,6 +70,15 @@ type Sluzhba struct {
 	// domaSeychas собирает боевой avtorezhim.Novyy() с s.tunnelPodnyat (см.
 	// avtorezhimBoevoy).
 	avtorezhimDlyaKnopki func() *avtorezhim.Avtorezhim
+	// avtorezhimDlyaSluzhitelya — точка подмены для тестов ФОНОВОГО пути
+	// (zapustitAvtorezhimSNachala → go sluzh.Krutit): по умолчанию (nil)
+	// собирает тот же боевой avtorezhim.Novyy() через avtorezhimBoevoy, что и
+	// сейчас. Нужна отдельно от avtorezhimDlyaKnopki: тот подменяет только
+	// одиночный заход кнопки (domaSeychas), а служитель — второй, независимый
+	// путь к тем же зондам (см. gotovStendLestnicy в pravila_lestnitsa_test.go
+	// и диагноз падения на настоящей Windows 10.09 — незаглушенный служитель бил по настоящей
+	// сети параллельно с тестом и накручивал посторонний podyomov).
+	avtorezhimDlyaSluzhitelya func() *avtorezhim.Avtorezhim
 	// avtorezhimDnsAdres — из KELEVRA_AVTOREZHIM_DNS (Novaya): "ip:port"
 	// резолвера, которого DNS-зонд обязан спрашивать НАПРЯМУЮ вместо
 	// системного пути, и в domaSeychas, и в фоновом авторежиме
@@ -1822,7 +1831,11 @@ func (s *Sluzhba) zapustitAvtorezhimSNachala(roditelskiy context.Context, nachal
 	// примениться, с этой секунды недействительно.
 	s.avtorezhimPokolenie++
 	moyoPokolenie := s.avtorezhimPokolenie
-	s.avtorezhimEkz = s.avtorezhimBoevoy()
+	sobratSluzhitelya := s.avtorezhimDlyaSluzhitelya
+	if sobratSluzhitelya == nil {
+		sobratSluzhitelya = s.avtorezhimBoevoy
+	}
+	s.avtorezhimEkz = sobratSluzhitelya()
 	if nachalo != avtorezhim.Neizvestno {
 		s.avtorezhimEkz.Zadvizhka = avtorezhim.NovayaZadvizhka(nachalo)
 	}

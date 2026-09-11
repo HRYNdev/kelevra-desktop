@@ -33,6 +33,26 @@ func (f dnsFunc) DomaPoDns(ctx context.Context) (bool, error) { return f(ctx) }
 // любой записи») и на некоторых сетях (в т.ч. в этой песочнице) ложно решал
 // бы «дома», молча пропуская PodnyatZashchitu и роняя все тесты этого
 // файла и prava_avto_test.go, которые проверяют совсем другое.
+//
+// avtorezhimDlyaSluzhitelya глушит ВТОРОЙ, фоновый путь (ZapustitAvtorezhim /
+// vklyuchitAvtorezhim → go sluzh.Krutit, см. sluzhba.go) — тот, что
+// avtorezhimDlyaKnopki не трогает вовсе, потому что он подменяет только
+// одиночный заход кнопки domaSeychas. Без отдельной подмены фоновый служитель
+// (internal/avtorezhim.Sluzhitel.Krutit) уходил в настоящий DNS на системный
+// резолвер (диагноз падения на настоящей Windows 10.09: два живых DNS-подэтапа в логе -v
+// одного вызова TestSlovoChelovekaByotResheniyeAvtomataNachatoyeRanshe на
+// main ef476414) и накручивал СВОЙ, посторонний podyomov, гоняясь с главной
+// горутиной теста — тест шатался не из-за гонки в боевом коде, а из-за
+// незаглушенной сети в самом стенде.
+//
+// Лечение — ИЗОЛЯЦИЯ, а не подбор медленного адреса (тот вариант держал
+// зонды на плаву до 16/100 повторных подъёмов на 127.0.0.1:1 и добавлял ~3с
+// к каждому заходу теста в CI). Подставной DnsProver блокируется на
+// ctx.Done() и только тогда возвращает ctx.Err() — служитель поэтому не
+// может ни при каком порядке планировщика завершить заход раньше отмены
+// своего же ctx (OstanovitAvtorezhim/новое поколение), а avtorezhimAktualen
+// первым делом проверяет именно ctx.Err() (sluzhba.go) — заход с отменённым
+// ctx не применяет решение НИКОГДА, а не «обычно успевает».
 func gotovStendLestnicy(t *testing.T) *Sluzhba {
 	t.Helper()
 	t.Setenv("KELEVRA_PRAVA", "net") // как на стенде: тут нет /dev/net/tun
@@ -40,6 +60,15 @@ func gotovStendLestnicy(t *testing.T) *Sluzhba {
 	s.avtorezhimDlyaKnopki = func() *avtorezhim.Avtorezhim {
 		return &avtorezhim.Avtorezhim{
 			Dns:       dnsFunc(func(ctx context.Context) (bool, error) { return false, nil }),
+			Zadvizhka: avtorezhim.NovayaZadvizhka(avtorezhim.Neizvestno),
+		}
+	}
+	s.avtorezhimDlyaSluzhitelya = func() *avtorezhim.Avtorezhim {
+		return &avtorezhim.Avtorezhim{
+			Dns: dnsFunc(func(ctx context.Context) (bool, error) {
+				<-ctx.Done()
+				return false, ctx.Err()
+			}),
 			Zadvizhka: avtorezhim.NovayaZadvizhka(avtorezhim.Neizvestno),
 		}
 	}
