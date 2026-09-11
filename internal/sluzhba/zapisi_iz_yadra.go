@@ -49,6 +49,10 @@ type nablyudatelYadra struct {
 	otkazy      int
 	kody        map[string]int
 	imena       map[string]int
+
+	// spravochnik — «адрес → имя сайта» у служебного порта ядра. nil, если
+	// ядра нет: тогда отказы пишутся по адресу, как было до 11.09.2026.
+	spravochnik *yadro.Imena
 }
 
 // SleditZaYadrom крутит чтение журнала ядра, пока живёт служба.
@@ -67,6 +71,9 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 		put:     yadro.PutZhurnalaVPapke(hranenie.PapkaYadra()),
 		kody:    map[string]int{},
 		imena:   map[string]int{},
+	}
+	if s.Yadro != nil {
+		n.spravochnik = yadro.NovyeImena(s.Yadro)
 	}
 	// Обстановка одной записью на старте: по ней видно, с какими правами и в
 	// каком режиме работала машина, когда случилось остальное.
@@ -147,10 +154,17 @@ func (n *nablyudatelYadra) uchest(stroka string) {
 	case s.Otkaz:
 		n.otkazy++
 		n.kody[s.Kod]++
-		if s.Imya != "" {
-			n.imena[s.Imya]++
+		// Ядро печатает в строке отказа адрес, а имя знает, но не пишет.
+		// Спрашиваем его у служебного порта — иначе ось «сайт» в журнале
+		// компьютера отсутствует вовсе и диагноз ставить нечем.
+		imya := s.Imya
+		if imya == "" {
+			imya = n.spravochnik.Imya(s.Adres)
 		}
-		n.pisatel.Otkaz(s.Imya, s.Adres, s.Port, s.Kod, s.Vyhod, 0)
+		if imya != "" {
+			n.imena[imya]++
+		}
+		n.pisatel.Otkaz(imya, s.Adres, s.Port, s.Kod, s.Vyhod, 0)
 	case s.Vhod:
 		n.soed++
 	}
