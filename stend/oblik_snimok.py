@@ -8,7 +8,7 @@
 
     python3 stend/oblik_snimok.py [папка-для-png]
 """
-import http.server, json, os, re, socketserver, sys, threading, time
+import functools, http.server, json, os, re, socketserver, subprocess, sys, threading, time
 from pathlib import Path
 
 KOREN = Path(__file__).resolve().parent.parent
@@ -595,6 +595,31 @@ def kontrol_shchupa(br, port):
     return bedy, porcha_css
 
 
+@functools.lru_cache(maxsize=1)
+def _kto_pravil_okno():
+    """Хеш/дата/автор последней правки index.html — один дешёвый git-вызов
+    без сети, посчитанный один раз за прогон (11.09: формулировки в окне
+    переписал сам хозяин коммитом 4c27d16, а ожидания стенда молчали об
+    этом — красная строка не говорила, что случилось и кто прав)."""
+    try:
+        vyvod = subprocess.run(
+            ["git", "log", "-1", "--format=%h %ad %an", "--date=short",
+             "--", str(OBLIK / "index.html")],
+            cwd=KOREN, capture_output=True, text=True, timeout=5,
+        )
+        return vyvod.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _podskazka_pravki_okna():
+    kto = _kto_pravil_okno()
+    if not kto:
+        return ""
+    return (f" — формулировка окна менялась в {kto} — "
+            f"если это хозяин, прав он, правь ожидание стенда")
+
+
 # Перевод беды: сырой текст ядра → заголовок, который читает не программист.
 # Держим таблицей, потому что осечка тут тихая: 20.08 «decode config at
 # rule_set[2]» переводилось как «подключение зависло» — правдоподобно и мимо.
@@ -604,17 +629,17 @@ PEREVOD_ZHDEM = [
     ("ядро не ответило за 45 секунд: FATAL configure tun: operation not permitted",
      "Windows не дал создать сетевой адаптер"),          # точная примета бьёт таймаут
     ("ядро упало при старте: listen tcp 127.0.0.1:2412: bind: address already in use",
-     "Нужный порт занят другой программой"),
-    ("ядро ответило 401", "Код доступа не подошёл"),
+     "Порт занят другой программой"),
+    ("ядро ответило 401", "Код доступа не принят"),
     ("ядро не ответило за 45 секунд: dial tcp 185.204.1.14:443: i/o timeout",
      "Сервер не ответил"),
-    ("ядро не найдено: C:\\\\Users\\\\Vova\\\\kelevra\\\\sing-box.exe", "На месте нет рабочего файла"),
-    ("нет конфига: сначала введите код доступа", "Код доступа ещё не введён"),
+    ("ядро не найдено: C:\\\\Users\\\\Vova\\\\kelevra\\\\sing-box.exe", "Отсутствует рабочий файл"),
+    ("нет конфига: сначала введите код доступа", "Код доступа не введён"),
     ("ядро упало при старте: decode config at rule_set[2]: unexpected token",
-     "Настройки по вашему коду доступа не читаются"),
-    ("ядро не ответило за 45 секунд: ", "Подключение зависло"),
-    ("ядро упало при старте: ", "Kelevra не смогла запуститься"),
-    ("хтонь, какой ещё не бывало", "Связь не поднялась"),
+     "Настройки по коду доступа не читаются"),
+    ("ядро не ответило за 45 секунд: ", "Подключение не завершилось"),
+    ("ядро упало при старте: ", "Kelevra не запустилась"),
+    ("хтонь, какой ещё не бывало", "Соединение не установлено"),
 ]
 
 
@@ -623,9 +648,9 @@ PEREVOD_ZHDEM = [
 # живых сценах смотрим, что в блоке беды лежит ЗАГОЛОВОК, а сырое спрятано.
 ZHDEM_V_OKNE = {
     "5_slomalos": "Windows не дал создать сетевой адаптер",
-    "11_beda_port": "Нужный порт занят другой программой",
+    "11_beda_port": "Порт занят другой программой",
     "12_beda_seti": "Сервер не ответил",
-    "13_beda_konfig": "Настройки по вашему коду доступа не читаются",
+    "13_beda_konfig": "Настройки по коду доступа не читаются",
 }
 
 
@@ -685,7 +710,8 @@ def proverit_okno_bedy(str_, imya_sceny, zhdem):
     bedy = []
     if vidno["zagolovok"] != zhdem:
         bedy.append(f'{imya_sceny}: в окне заголовок беды «{vidno["zagolovok"]}», '
-                    f'а ждали «{zhdem}» — окно печатает не то, что переводит')
+                    f'а ждали «{zhdem}» — окно печатает не то, что переводит'
+                    f'{_podskazka_pravki_okna()}')
     if vidno["syroe_spryatano"] is not True:
         bedy.append(f"{imya_sceny}: сырой лог ядра не спрятан под «подробности»")
     if "FATAL" in (vidno["ves_tekst"] or "") and vidno["syroe_spryatano"] is not True:
@@ -1653,7 +1679,8 @@ def proverit_perevod(br, port):
     for syroe, zhdem in PEREVOD_ZHDEM:
         dal = str_.evaluate("(s) => perevestiBedu(s).chto", syroe)
         if dal != zhdem:
-            bedy.append(f'перевод: «{syroe[:52]}…» → «{dal}», а ждали «{zhdem}»')
+            bedy.append(f'перевод: «{syroe[:52]}…» → «{dal}», а ждали «{zhdem}»'
+                        f'{_podskazka_pravki_okna()}')
     str_.close()
     return bedy
 
