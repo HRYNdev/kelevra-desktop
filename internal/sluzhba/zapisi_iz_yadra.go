@@ -1,6 +1,7 @@
 package sluzhba
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
@@ -136,8 +137,19 @@ func (n *nablyudatelYadra) prochitatNovoe() ([]string, error) {
 	if err != nil && prochitano == 0 {
 		return nil, err
 	}
-	n.smeshenie += int64(prochitano)
-	return razbitNaStroki(string(bufer[:prochitano])), nil
+	bufer = bufer[:prochitano]
+	// Смещение двигаем только до последнего перевода строки в прочитанном
+	// куске: недописанный ядром хвост (без \n) остаётся на месте и будет
+	// прочитан заново, вместе со своим продолжением, на следующем заходе.
+	// Если куска целиком нет — оставляем и смещение, и хвост нетронутыми,
+	// иначе следующий заход снова упрётся в тот же неполный кусок и будет
+	// бесконечно его перечитывать, не продвигаясь.
+	poslednPerevod := bytes.LastIndexByte(bufer, '\n')
+	if poslednPerevod < 0 {
+		return nil, nil
+	}
+	n.smeshenie += int64(poslednPerevod + 1)
+	return razbitNaStroki(string(bufer[:poslednPerevod+1])), nil
 }
 
 // uchest — одна строка журнала ядра в счётчики и, если это отказ, в запись.
