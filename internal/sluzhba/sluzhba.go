@@ -319,6 +319,12 @@ type Sluzhba struct {
 	// после него лишний час незачем. Удача, в отличие от попытки, живёт на
 	// диске (hranenie.Nastroyki.OtpravkaZhurnalovKogda).
 	zhurnalyPopytka time.Time
+	// zhurnalyPovtorCherez — сколько ждать после последней неудачи, прежде чем
+	// пробовать снова. Живёт рядом с zhurnalyPopytka и под тем же замком:
+	// вдвоём они и составляют правило повтора. Ноль означает «как обычно»
+	// (PovtorPosleOtkaza); короткое значение ставится, когда отказ случился до
+	// первого отправленного байта — см. otkazDoPeredachi.
+	zhurnalyPovtorCherez time.Duration
 	// zhurnalyIdut — посылка уже в пути. Тик каждые несколько минут не должен
 	// начать вторую отправку поверх первой: 25 МБ по слабому каналу уходят
 	// дольше, чем идёт тик.
@@ -950,7 +956,22 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 			log.Printf("установка обновления: хук перезапуска не подключён, эта копия продолжает работать старым процессом")
 			return
 		}
-		_ = s.Yadro.Ostanovit() // ядро старой копии гасим сами, как и polnayaZashchita
+		// ЯДРО НЕ ГАСИМ. До 11.09.2026 здесь стоял Ostanovit — «ядро старой
+		// копии гасим сами», чтобы на машине не оказалось двух хозяев одного
+		// адаптера (авария 25.08). Цена этой предосторожности, замеренная на
+		// стенде 11.09: старая копия ушла в 15:56:49, новая поднялась в
+		// 15:56:57 — восемь секунд без туннеля, причём НЕЗАМЕТНЫХ, потому что
+		// связь не пропадала, трафик просто шёл напрямую мимо обхода. А после
+		// обновления туннель не возвращался вовсе: автоподключение у людей
+		// выключено, авторежим дома считает туннель ненужным.
+		//
+		// Двух хозяев теперь не бывает по другой причине, надёжнее: новая
+		// копия ПРИНИМАЕТ это самое ядро по записке (yadro.Peredacha) вместо
+		// того, чтобы поднимать своё. Второго ядра не появляется, а туннель
+		// не прерывается ни на пакет — адаптер принадлежит ядру, и пока живо
+		// ядро, жив и он.
+		//
+		// Записка уже на диске: её пишет Zapustit, когда ядро ответило.
 		if err := s.PerezapuskPosleObnovleniya(put, pid); err != nil {
 			log.Printf("установка обновления: не поднял новую копию: %v", err)
 			return
@@ -1061,6 +1082,23 @@ var ShagSlezhkiZaZhurnalami = 5 * time.Minute
 // мегабайт — это не настойчивость, а трата чужого трафика.
 const PovtorPosleOtkaza = time.Hour
 
+// PovtorPosleOtkazaDoPeredachi — для отказов, случившихся ДО того, как ушёл
+// хоть один байт тела: имя не разрешилось, соединение не установилось.
+//
+// Зачем отдельно от PovtorPosleOtkaza. Час молчания там оплачен трафиком:
+// посылка в десятки мегабайт могла оборваться на середине, и повторять её
+// сразу — это швырять чужой канал. Но отказ на разрешении имени не стоит
+// ничего и почти всегда означает одно: машина только что проснулась, а сеть
+// ещё не поднялась. Замер 11.09.2026 на десктопе Вовы: компьютер вышел из сна
+// в 13:28:03, тик отправки пришёлся на 13:28:00 — за три секунды ДО того, как
+// система доложила о пробуждении, — и упал с «lookup … no such host». По
+// старому правилу следующая попытка была только в 14:31, и всё это время
+// устройство числилось молчащим, хотя было включено и здорово.
+//
+// Значение равно шагу тикера: повтор случается на ближайшем тике, а не через
+// час, и при этом всё равно не чаще, чем тикер вообще просыпается.
+const PovtorPosleOtkazaDoPeredachi = 3 * time.Minute
+
 // PeriodOtpravkiZhurnalov — как часто посылка уходит при удачах.
 //
 // var, а не const: стенду нужно двигать период, чтобы не ждать час.
@@ -1087,14 +1125,38 @@ func vecherOtpravki(t time.Time) time.Time {
 // Дорого это не стоит: отправка ведёт отметки по каждому файлу и посылает
 // ТОЛЬКО новое (internal/zhurnaly, Metka.Otpravleno). Часовая посылка — это
 // килобайты, а не те десятки мегабайт, которыми пугало суточное накопление.
-func poraOtpravlyatZhurnaly(seychas, uspeh, popytka time.Time) bool {
+// povtorCherez — сколько ждать после последней НЕУДАЧНОЙ попытки. Параметром,
+// а не константой внутри: цена отказа разная. Оборвавшаяся на середине посылка
+// стоила трафика и ждёт час (PovtorPosleOtkaza), а отказ до первого байта не
+// стоил ничего и ждёт до ближайшего тика (PovtorPosleOtkazaDoPeredachi).
+func poraOtpravlyatZhurnaly(seychas, uspeh, popytka time.Time, povtorCherez time.Duration) bool {
 	if !uspeh.IsZero() && seychas.Sub(uspeh) < PeriodOtpravkiZhurnalov {
 		return false // час с удачной посылки ещё не прошёл
 	}
-	if !popytka.IsZero() && seychas.Sub(popytka) < PovtorPosleOtkaza {
-		return false // недавно пробовали и не вышло — ждём час
+	if povtorCherez <= 0 {
+		povtorCherez = PovtorPosleOtkaza
+	}
+	if !popytka.IsZero() && seychas.Sub(popytka) < povtorCherez {
+		return false // недавно пробовали и не вышло — ждём положенное
 	}
 	return true
+}
+
+// otkazDoPeredachi — отказ случился до того, как ушёл хоть один байт тела.
+//
+// Разбор по типам ошибок, а не по тексту: текст у net-ошибок разный на разных
+// системах и языках, а «не разрешилось имя» и «не установилось соединение» —
+// это ровно *net.DNSError и *net.OpError с Op == "dial".
+func otkazDoPeredachi(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	return false
 }
 
 // SleditZaZhurnalami крутит суточную отправку по расписанию, пока живёт
@@ -1137,7 +1199,7 @@ func (s *Sluzhba) OtpravitZhurnalyEsliPora(ctx context.Context, seychas time.Tim
 		uspeh = time.Unix(u, 0)
 	}
 	s.zamok.Lock()
-	if s.zhurnalyIdut || !poraOtpravlyatZhurnaly(seychas, uspeh, s.zhurnalyPopytka) {
+	if s.zhurnalyIdut || !poraOtpravlyatZhurnaly(seychas, uspeh, s.zhurnalyPopytka, s.zhurnalyPovtorCherez) {
 		s.zamok.Unlock()
 		return
 	}
@@ -1156,10 +1218,23 @@ func (s *Sluzhba) OtpravitZhurnalyEsliPora(ctx context.Context, seychas time.Tim
 	otchet, err := otpravshchik.Otpravit(ctx)
 	if err != nil {
 		// Не удалось — отметки на диске не тронуты, те же байты уйдут в
-		// следующую попытку (не раньше чем через час, см. poraOtpravlyatZhurnaly).
-		log.Printf("отправка журналов не удалась: %v", err)
+		// следующую попытку. Когда именно, решает цена отказа: до первого
+		// отправленного байта ждать час незачем (машина обычно просто ещё не
+		// подняла сеть после сна), а оборвавшаяся посылка ждёт как прежде.
+		povtor := PovtorPosleOtkaza
+		if otkazDoPeredachi(err) {
+			povtor = PovtorPosleOtkazaDoPeredachi
+		}
+		s.zamok.Lock()
+		s.zhurnalyPovtorCherez = povtor
+		s.zamok.Unlock()
+		log.Printf("отправка журналов не удалась: %v (повтор не раньше чем через %s)", err, povtor)
 		return
 	}
+	// Удача снимает укороченный повтор: следующий отказ будет судиться заново.
+	s.zamok.Lock()
+	s.zhurnalyPovtorCherez = 0
+	s.zamok.Unlock()
 	if len(otchet.Kuski) == 0 {
 		log.Printf("отправка журналов: нового с прошлого раза нет")
 	} else {
@@ -2130,19 +2205,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	//
 	// Кеш наполняют часы (SveryatPravila): первый заход — сразу при запуске
 	// службы, задолго до того, как человек нажмёт «Подключить».
-	if kesh := pravila.IzKesha(hranenie.PapkaYadra(), s.tegiPravil()); kesh != nil {
-		vybor.PravilaIzKomplekta = kesh
-		vybor.PravilaKomplektData = "" // не комплект, а свежие с диска — заметку не показываем
-		// Возраст кеша в журнале — не украшение. Без него «беру из кеша»
-		// одинаково выглядит и для правил, скачанных десять минут назад, и
-		// для месячной давности; ровно из-за этой слепоты 08.09 нельзя было
-		// проверить жалобу «списки никогда не обновляются».
-		log.Printf("правила беру из кеша на диске (%d наборов, последняя сверка с сервером %s назад) — ядру не придётся качать их на старте",
-			len(kesh), okruglit(pravila.Vozrast(hranenie.PapkaYadra(), s.tegiPravil())))
-		s.zamok.Lock()
-		s.svezhihPravil = 0 // применили: то, что лежало на диске, теперь в работе
-		s.zamok.Unlock()
-	}
+	s.dobavitPravilaIzKesha(&vybor, true)
 	if err := s.perestroit(vybor); err != nil {
 		log.Printf("не подготовил конфиг: %v", err)
 		return fmt.Errorf("не подготовил конфиг: %w", err)
