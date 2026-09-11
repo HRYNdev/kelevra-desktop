@@ -23,6 +23,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/sluzhba"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/vinsluzhba"
+	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
 // argSluzhba/argTiho — режимы запуска этого же .exe (см. шапку файла).
@@ -473,6 +474,18 @@ func snyatOsirotevshiySledTunnelya(papka string) { uborkaSledaTunnelya(papka, ni
 // случай «адаптер пережил процесс» иначе не проверить вовсе, а он тут самый
 // важный. nil — боевая проверка (tunnel.Zhivoy, чтение net.Interfaces()).
 func uborkaSledaTunnelya(papka string, zhiv tunnel.Adapter) {
+	// С 11.09.2026 живой адаптер при мёртвой копии — ЧАСТЫЙ И ШТАТНЫЙ случай,
+	// а не признак аварии: обновление больше не гасит ядро, оно переживает
+	// смену версии, и туннель всё это время работает (см. yadro/peredacha.go).
+	// Спрашиваем об этом раньше всего: и след трогать нельзя (он описывает
+	// живую связь, а не остаток мёртвой), и пугать журнал человека незачем.
+	// Записка лежит рядом с конфигом ядра, то есть на уровень глубже папки
+	// приложения: путь берём у hranenie, а не достраиваем от papka руками.
+	if p, zhivo := yadro.ZhivoPoZapiske(hranenie.PapkaYadra()); zhivo {
+		log.Printf("ядро прошлой копии живо (pid %d, адаптер %q) — туннель не прерывался, "+
+			"след не трогаю: его примет эта копия", p.PID, p.Adapter)
+		return
+	}
 	_, zhiva := kopiya.Nayti(papka)
 	itog := tunnel.UbratOsirotevshiy(zhiva, zhiv)
 	if !itog.BylSled {
@@ -792,6 +805,18 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 
 	ctx, otmena := context.WithCancel(vneshniy)
 	defer otmena()
+
+	// Ядро прошлой копии, если оно живо, принимаем ПЕРВЫМ делом — до
+	// авторежима и до любого решения о подключении. Причина простая: если
+	// связь уже работает, решать нечего, её надо взять, а не поднимать
+	// заново. Именно так обновление перестаёт рвать туннель (11.09.2026,
+	// см. internal/sluzhba/priyom_yadra.go и yadro/peredacha.go).
+	//
+	// Синхронно, а не в горутине: авторежим ниже спрашивает у ядра его
+	// состояние, и запусти мы приём параллельно, он успел бы увидеть
+	// «ничего не поднято» и поднять второе ядро рядом с живым.
+	s.PrinyatZhivoeYadro(ctx)
+
 	go s.ObnovlyatProfil(ctx)
 	// Копия, которую человек не закрывал днями, никогда больше не проходит
 	// obnovitsya() (он звучит один раз при холодном старте, выше по main()) —
