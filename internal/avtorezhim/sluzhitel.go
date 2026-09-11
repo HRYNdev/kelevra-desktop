@@ -90,6 +90,13 @@ type Sluzhitel struct {
 	// Posle подменяется тестом, чтобы не спать по-настоящему во время
 	// проверки схлопывания дребезга. По умолчанию — time.After.
 	Posle func(d time.Duration) <-chan time.Time
+
+	// SprosFizicheskoySeti отвечает, поднят ли вообще физический сетевой
+	// адаптер — не сама обстановка (дома/не дома), а есть ли что вообще
+	// зондировать. nil значит FizicheskiySetevoyAdapterPodnyat. Поле — ради
+	// теста: на машине проверяющего адаптеры настоящие, а сценарий
+	// "адаптера нет вовсе" должен проверяться и без него.
+	SprosFizicheskoySeti func() bool
 }
 
 func (s *Sluzhitel) interval() time.Duration {
@@ -125,6 +132,17 @@ func (s *Sluzhitel) posle() func(time.Duration) <-chan time.Time {
 		return s.Posle
 	}
 	return time.After
+}
+
+// sprosFizicheskoySeti — есть ли вообще поднятый физический адаптер (см.
+// SprosFizicheskoySeti). Ошибаться можно только в сторону лишнего зонда: и
+// сам спросчик по умолчанию (FizicheskiySetevoyAdapterPodnyat), и отсутствие
+// подмены здесь ничего в эту гарантию не добавляют — просто источник ответа.
+func (s *Sluzhitel) sprosFizicheskoySeti() bool {
+	if s.SprosFizicheskoySeti != nil {
+		return s.SprosFizicheskoySeti()
+	}
+	return FizicheskiySetevoyAdapterPodnyat()
 }
 
 // Krutit — блокирующий цикл слежения. Заходит один раз сразу на старте (окно
@@ -224,11 +242,7 @@ func (s *Sluzhitel) Krutit(ctx context.Context) {
 // добивает именно slep-заходы — заход, честно подтвердивший то, на чём и так
 // стоим (izmenilos=false, slep=false), добивать не нужно.
 func (s *Sluzhitel) zahod(ctx context.Context, poSobytiyu bool) (izmenilos bool, slep bool) {
-	// TODO(упрощение среза): спросчика физической сети ("адаптер вообще
-	// поднят") здесь нет — считаем сеть всегда физически присутствующей.
-	// Ложь только в сторону лишнего зонда, не в сторону молчания; сам
-	// спросчик — задача следующего захода (см. пакетный комментарий).
-	const estSet = true
+	estSet := s.sprosFizicheskoySeti()
 	nablyudeniye, izm, tekushcheye := s.Avtorezhim.Zahod(ctx, estSet, poSobytiyu)
 	if izm {
 		log.Printf("авторежим: обстановка сменилась на %s", tekushcheye)

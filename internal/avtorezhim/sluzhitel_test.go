@@ -362,3 +362,44 @@ func TestSluzhitelHolodnyyStartMenyaetSrazu(t *testing.T) {
 	otmena()
 	<-gotovo
 }
+
+// TestSluzhitelBezFizicheskogoAdapteraZondNeHodit — спросчик говорит
+// "физического адаптера нет" -> заход не зондирует сеть вовсе (счётчик
+// вызовов DNS остаётся 0). Заход вызывается напрямую (zahod), а не через
+// Krutit: вопрос здесь не про тайминг цикла, а про то, что несёт estSet
+// дальше в Avtorezhim.Zahod.
+func TestSluzhitelBezFizicheskogoAdapteraZondNeHodit(t *testing.T) {
+	dns := &schitayushchiyDns{}
+	sl := novyyFakeSledchik()
+	posle := novyyFakePosle()
+	sluzh := novyySluzhitelDlyaTesta(dns, sl, posle, nil)
+	sluzh.SprosFizicheskoySeti = func() bool { return false }
+
+	izmenilos, slep := sluzh.zahod(context.Background(), true)
+
+	if got := dns.schyot(); got != 0 {
+		t.Fatalf("зонд DNS ходил при опущенном физическом адаптере: %d вызовов, хочу 0", got)
+	}
+	if izmenilos {
+		t.Fatal("обстановка сменилась при опущенном адаптере, а должна остаться как была (Neizvestno не проходит Podtverzhdeniy с одного раза)")
+	}
+	if slep {
+		t.Fatal("заход помечен слепым (ZondSlep), а должен быть честным EstSet=false, не слепым зондом")
+	}
+}
+
+// TestSluzhitelSFizicheskimAdapteromZondHodit — отрицательный контроль:
+// адаптер поднят -> поведение ровно как до появления спросчика, зонд идёт.
+func TestSluzhitelSFizicheskimAdapteromZondHodit(t *testing.T) {
+	dns := &schitayushchiyDns{}
+	sl := novyyFakeSledchik()
+	posle := novyyFakePosle()
+	sluzh := novyySluzhitelDlyaTesta(dns, sl, posle, nil)
+	sluzh.SprosFizicheskoySeti = func() bool { return true }
+
+	sluzh.zahod(context.Background(), true)
+
+	if got := dns.schyot(); got == 0 {
+		t.Fatal("зонд DNS не ходил при поднятом физическом адаптере")
+	}
+}
