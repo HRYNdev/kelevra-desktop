@@ -537,6 +537,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// fakeip надо по тому, что от dns осталось, а не по тому, что было.
 	if rezhimTunnelya {
 		soglasovatFakeip(d)
+		okrepitPryamoyResolverVTunnele(d)
 	} else {
 		obezvreditFakeip(d)
 		pryamoyResolverCherezSistemu(d)
