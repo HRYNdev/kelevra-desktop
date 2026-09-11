@@ -25,6 +25,15 @@ var DomenyPoUmolchaniyu = []string{"youtube.com", "discord.com", "rutracker.org"
 // (перехватчик).
 const KontrolnyyDomenPoUmolchaniyu = "gosuslugi.ru"
 
+// TaimautPoUmolchaniyu — бюджет DnsZond по умолчанию (DnsZond.Taimaut == 0):
+// ОБЩИЙ на все контрольные домены разом, а не таймаут на каждый — заход не
+// вправе занять больше него, сколько бы доменов ни спрашивалось. В бою
+// складывается с бюджетом прямого зонда (3с+4с, см. avtorezhim.go, Zahod) в
+// бюджет всего захода целиком — тот же живой бюджет на Windows шатал заход
+// 10.09, поэтому число вынесено сюда именованной константой, а не разбросано
+// по местам применения.
+const TaimautPoUmolchaniyu = 3 * time.Second
+
 // fakeIPPervyy, fakeIPPosledniy — границы диапазона подменных адресов
 // домашнего роутера: 198.18.0.0 .. 198.19.255.255 — тот же диапазон, что
 // FAKE_IP_FIRST/FAKE_IP_LAST в AutoMode.kt.
@@ -64,8 +73,13 @@ type resolvat interface {
 // KontrolnyyDomen (HOME_CONTROL в AutoMode.kt) должен резолвиться по
 // настоящему адресу — иначе это не «выборочный» домашний обход, а
 // перехватчик, подменяющий всё подряд, и признак дома снимается.
-// Остальная логика HomeSign (память признака, ранний выход по бюджету) в
-// этот срез не перенесена — TODO.
+//
+// Остальная логика HomeSign перенесена: ранний выход по бюджету — здесь же,
+// в DomaPoDns (как только Nuzhno совпадений набрано, оставшиеся из Domeny
+// не спрашиваются); память признака между заходами — уровнем выше, в
+// Avtorezhim.Zahod (см. PriznakPamyat), потому что ей нужны данные, которых
+// у самого зонда нет (доверенный сигнал смены сети, итог прямой проверки
+// трафика).
 type DnsZond struct {
 	Resolver resolvat // nil — берётся AdresResolvera, а если и он пуст — net.DefaultResolver
 
@@ -131,7 +145,7 @@ func NovyyDnsZond() *DnsZond {
 		Domeny:          append([]string(nil), DomenyPoUmolchaniyu...),
 		Nuzhno:          2,
 		KontrolnyyDomen: KontrolnyyDomenPoUmolchaniyu,
-		Taimaut:         3 * time.Second,
+		Taimaut:         TaimautPoUmolchaniyu,
 	}
 }
 
@@ -192,7 +206,7 @@ func (z *DnsZond) DomaPoDns(ctx context.Context) (bool, error) {
 	defer func() { z.zapomnit(otchet) }()
 	taimaut := z.Taimaut
 	if taimaut <= 0 {
-		taimaut = 3 * time.Second
+		taimaut = TaimautPoUmolchaniyu
 	}
 	nuzhno := z.Nuzhno
 	if nuzhno <= 0 {
@@ -225,6 +239,16 @@ func (z *DnsZond) DomaPoDns(ctx context.Context) (bool, error) {
 				hits++
 				break
 			}
+		}
+		if hits >= nuzhno {
+			// Ранний выход по бюджету (HomeSign.verdict/settle на
+			// телефоне, hits >= needed): нужное число совпадений уже
+			// набрано, оставшиеся из domeny ничего не решают — не
+			// спрашиваем их вовсе, а не ждём их таймаута или бюджета
+			// впустую. Контрольный домен ниже спрашивается всегда: он
+			// одно совпадение сам по себе не заменяет, а отменяет решение
+			// целиком, если подмена тотальная.
+			break
 		}
 	}
 	otchet.Otvetili, otchet.Podmen = otvetili, hits

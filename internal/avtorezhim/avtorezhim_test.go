@@ -174,3 +174,109 @@ func (d dnsSchitalka) DomaPoDns(ctx context.Context) (bool, error) {
 	*d.zvali = true
 	return true, nil
 }
+
+// seqDns — DNS-зонд с заранее заданной последовательностью ответов
+// (последний повторяется, если заходов больше, чем элементов).
+type seqDns struct {
+	otvety []bool
+	i      int
+}
+
+func (d *seqDns) DomaPoDns(ctx context.Context) (bool, error) {
+	v := d.otvety[d.i]
+	if d.i < len(d.otvety)-1 {
+		d.i++
+	}
+	return v, nil
+}
+
+// seqTrafik — зонд трафика с заранее заданной последовательностью ответов,
+// считает звонки.
+type seqTrafik struct {
+	otvety []struct{ izmereno, proshel bool }
+	i      int
+	zvonki int
+}
+
+func (f *seqTrafik) Proshel(ctx context.Context) (bool, bool) {
+	f.zvonki++
+	r := f.otvety[f.i]
+	if f.i < len(f.otvety)-1 {
+		f.i++
+	}
+	return r.izmereno, r.proshel
+}
+
+// TestAvtorezhimPriznakPamyatDerzhitDoOprovergnutiyaIlZabyvaet — перенос
+// HomeSign.stands/rememberHomeSign/forgetHomeSign с телефона: DNS, честно
+// не нашедший подмены сразу после того, как её видели, признак не
+// отменяет — трафик всё равно спрашивается, — а вот трафик, который
+// доказанно не прошёл, память стирает, и следующий такой же заход трафик
+// уже не спрашивает вовсе.
+func TestAvtorezhimPriznakPamyatDerzhitDoOprovergnutiyaIlZabyvaet(t *testing.T) {
+	dns := &seqDns{otvety: []bool{true, false, false, false}}
+	trafik := &seqTrafik{otvety: []struct{ izmereno, proshel bool }{
+		{true, true},  // заход 1: подтвердил
+		{true, true},  // заход 2: подтвердил — память ещё в силе
+		{true, false}, // заход 3: не прошёл — память опровергнута делом
+	}}
+	a := &Avtorezhim{
+		Dns:       dns,
+		Trafik:    trafik,
+		Zadvizhka: NovayaZadvizhka(Neizvestno),
+		Priznak:   NovyyPriznakPamyat(),
+	}
+
+	n1, _, _ := a.Zahod(context.Background(), true, false)
+	if !n1.DnsPriznakDoma || trafik.zvonki != 1 {
+		t.Fatalf("заход 1: %+v, звонков трафику %d — ждал признак=true, звонок 1", n1, trafik.zvonki)
+	}
+
+	n2, _, _ := a.Zahod(context.Background(), true, false)
+	if !n2.DnsPriznakDoma {
+		t.Fatalf("заход 2: DNS сейчас не нашёл подмены, но признак видели только что — ждал DnsPriznakDoma=true по памяти, получил %+v", n2)
+	}
+	if trafik.zvonki != 2 {
+		t.Fatalf("заход 2: звонков трафику %d, ждал 2 — трафик обязан спрашиваться, пока признак стоит по памяти", trafik.zvonki)
+	}
+
+	n3, _, _ := a.Zahod(context.Background(), true, false)
+	if !n3.DnsPriznakDoma || trafik.zvonki != 3 {
+		t.Fatalf("заход 3: %+v, звонков трафику %d — память ещё стояла ДО этого захода", n3, trafik.zvonki)
+	}
+
+	n4, _, _ := a.Zahod(context.Background(), true, false)
+	if n4.DnsPriznakDoma {
+		t.Fatalf("заход 4: %+v — заход 3 не прошёл трафиком, память обязана была стереться", n4)
+	}
+	if trafik.zvonki != 3 {
+		t.Fatalf("заход 4: звонков трафику %d, ждал 3 — памяти нет, DNS сказал «не дома», трафик спрашивать незачем", trafik.zvonki)
+	}
+}
+
+// TestAvtorezhimPriznakPamyatSteretsyaDoverennymZahodom — сигнал смены сети
+// (dovereno==true, см. Sledchik) стирает память признака ДО этого захода:
+// здесь такого объекта, как Network на телефоне, нет, и это единственный
+// маркер «сеть уже не та» (см. Avtorezhim.Zahod).
+func TestAvtorezhimPriznakPamyatSteretsyaDoverennymZahodom(t *testing.T) {
+	dns := &seqDns{otvety: []bool{true, false}}
+	trafik := &seqTrafik{otvety: []struct{ izmereno, proshel bool }{{true, true}}}
+	a := &Avtorezhim{
+		Dns:       dns,
+		Trafik:    trafik,
+		Zadvizhka: NovayaZadvizhka(Neizvestno),
+		Priznak:   NovyyPriznakPamyat(),
+	}
+
+	if n1, _, _ := a.Zahod(context.Background(), true, false); !n1.DnsPriznakDoma {
+		t.Fatalf("заход 1: %+v, ждал признак=true", n1)
+	}
+
+	n2, _, _ := a.Zahod(context.Background(), true, true) // dovereno — сеть сменилась
+	if n2.DnsPriznakDoma {
+		t.Fatalf("заход 2 (доверенный): %+v — сигнал смены сети обязан был стереть память признака старой сети", n2)
+	}
+	if trafik.zvonki != 1 {
+		t.Fatalf("заход 2: звонков трафику %d, ждал 1 — памяти нет, трафик спрашивать незачем", trafik.zvonki)
+	}
+}
