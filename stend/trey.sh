@@ -48,6 +48,10 @@ export LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8}
 STEND=$KORFN/.stend_trey
 mkdir -p "$STEND" "$WINEPREFIX"
 . "$KORFN/stend/obshchee.sh"
+# Не начинать замер с ложного отказа на порченом/недостроенном общем префиксе
+# (наряд 0912-121042) — проверка и, если нужно, синхронная пересборка ДО
+# первого запуска продукта. См. обоснование в obshchee.sh.
+proverit_i_pochinit_wineprefix "$WINEPREFIX"
 
 command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
 
