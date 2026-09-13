@@ -70,6 +70,41 @@ ploshchadka_ne_tyanet() {
   grep -q 'getadaptersaddresses: Invalid data' "$1" 2>/dev/null
 }
 
+# proverit_i_pochinit_wineprefix <prefix> — целостность WINEPREFIX не гарантирована
+# накопленным использованием. Наряд 0912-121042 поймал разделяемый kd/.wine
+# в момент гонки первого boot: следующий прогон получил не отказ продукта, а
+# ⚫ ПРИБОР МЁРТВ на «wine: failed to open C:\windows\syswow64\rundll32.exe
+# (c0000135)», хотя тот же код в свежем префиксе стартовал 3 из 3. Судить по
+# syswow64 нельзя: на ЭТОЙ машине стоит только 64-битный wine (пакета
+# wine32/i386 нет), поэтому syswow64 остаётся пустым (0 файлов) ДАЖЕ в полностью
+# здоровом префиксе — замерено 12.09 на заведомо рабочем прогоне. Честный
+# признак — system32 (там и лежит настоящий, 64-битный rundll32.exe): пустой
+# или почти пустой каталог значит префикс попал в кадр на середине boot'а.
+# При порче — префикс сносится и создаётся заново СИНХРОННО (wineboot -u +
+# wineserver -w дожидается завершения), а не через рискованный неявный boot
+# на первом же запуске продукта, который и породил гонку. Замерено 12.09:
+# полная пересборка ~9.4с — дешевле минуты, дороже не проверять вовсе.
+proverit_i_pochinit_wineprefix() {
+  local prefix=$1 sys32 n
+  sys32="$prefix/drive_c/windows/system32"
+  n=$(find "$sys32" -maxdepth 1 -type f 2>/dev/null | wc -l)
+  if [ "$n" -ge 100 ] && [ -s "$sys32/rundll32.exe" ]; then
+    echo "wineprefix: цел ($n файлов в system32, rundll32.exe на месте) — $prefix"
+    return 0
+  fi
+  echo "wineprefix: порча или недостроенный boot ($n файлов в system32) — пересоздаю $prefix"
+  rm -rf "$prefix"
+  mkdir -p "$prefix"
+  "$WINE" wineboot -u >/dev/null 2>&1
+  "$(dirname "$WINE")/wineserver" -w 2>/dev/null
+  n=$(find "$sys32" -maxdepth 1 -type f 2>/dev/null | wc -l)
+  if [ "$n" -ge 100 ] && [ -s "$sys32/rundll32.exe" ]; then
+    echo "wineprefix: пересоздан и дозагружен ($n файлов в system32) — $prefix"
+  else
+    echo "wineprefix: пересоздание НЕ помогло ($n файлов в system32) — $prefix" >&2
+  fi
+}
+
 wine_zapusti() {
   local log=$1 zhurnal=$2 stroka=$3 taimaut=$4
   shift 4
