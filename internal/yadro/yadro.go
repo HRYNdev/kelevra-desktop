@@ -395,6 +395,13 @@ func (y *Yadro) sleditZaPrinyatym(d *derzhatel, umer chan struct{}) {
 // odinItotZhe — один ли это файл. Сравнение по чистому пути, а не по строке:
 // записка могла быть написана копией, которая шла к тому же бинарю другой
 // дорогой (через служебные пути Windows, например).
+//
+// Последний довод — сама ФС (os.SameFile: том и номер файла), а не строки.
+// Строк мало: ОС называет образ процесса путём ПОСЛЕ разворота точек
+// подключения, а конфиг хранит путь ДО него. С Go 1.23 EvalSymlinks на
+// Windows точки подключения (junction) не разворачивает, так что два имени
+// одного файла строками не сходились — и опознание по образу объявляло своё
+// же ядро чужой программой (стенд, данные через junction на другой раздел).
 func odinItotZhe(a, b string) bool {
 	if a == "" || b == "" {
 		return false
@@ -402,12 +409,28 @@ func odinItotZhe(a, b string) bool {
 	if strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) {
 		return true
 	}
-	ra, err1 := filepath.EvalSymlinks(a)
-	rb, err2 := filepath.EvalSymlinks(b)
+	if ra, err := filepath.EvalSymlinks(a); err == nil {
+		if rb, err := filepath.EvalSymlinks(b); err == nil &&
+			strings.EqualFold(filepath.Clean(ra), filepath.Clean(rb)) {
+			return true
+		}
+	}
+	fa, err1 := os.Stat(a)
+	fb, err2 := os.Stat(b)
 	if err1 != nil || err2 != nil {
 		return false
 	}
-	return strings.EqualFold(filepath.Clean(ra), filepath.Clean(rb))
+	return os.SameFile(fa, fb)
+}
+
+// ObrazNash — ОС подтверждает, что процесс pid запущен из файла bin.
+//
+// «Не узнали» здесь значит НЕТ: вызывающий решает, гасить ли процесс, а
+// гасить можно только то, что точно наше. Номер процесса из записки мог
+// достаться посторонней программе.
+func ObrazNash(pid int, bin string) bool {
+	obraz, znaem := putObrazaProcessa(pid)
+	return znaem && odinItotZhe(obraz, bin)
 }
 
 // zapros — обращение к Clash API ядра с паролем, если он задан конфигом.

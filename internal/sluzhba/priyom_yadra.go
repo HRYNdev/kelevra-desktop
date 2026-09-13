@@ -26,6 +26,13 @@ import (
 // если ядро уже работает, то решать нечего — связь есть, и её надо не
 // поднимать заново, а взять.
 
+// pogasitChuzhoe — точка подмены для тестов: настоящий вызов гасит процесс по
+// номеру, а в тесте номер свой.
+var pogasitChuzhoe = yadro.PogasitChuzhoe
+
+// nashiYadra — точка подмены для тестов: поиск своих живых ядер по образу.
+var nashiYadra = yadro.NashiYadra
+
 // PrinyatZhivoeYadro берёт под управление ядро прошлой копии, если оно живо.
 //
 // Три исхода, и каждый ведёт себя по-своему:
@@ -74,9 +81,29 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 		// на машине остался бы хозяин без головы: связь работает, а
 		// управлять ею некому и выключить её человек не может. Такое гасим.
 		log.Printf("живое ядро не принято (%s)", itog.Pochemu)
+		// Живой порт из записки ещё не значит, что процесс под номером из
+		// записки — наше ядро: номер могла занять посторонняя программа, а
+		// порт — держать совсем другой процесс. Гасим ТОЛЬКО то, чей образ ОС
+		// подтверждает нашим бинарём; иначе убили бы чужой процесс.
+		pogasili := false
 		if _, zhivo := yadro.ZhivoPoZapiske(papka); zhivo {
-			log.Printf("ядро из записки живо, но управлять им отсюда нельзя — гашу, чтобы не осталось без хозяина")
-			yadro.PogasitChuzhoe(p.PID)
+			if yadro.ObrazNash(p.PID, s.Yadro.Bin) {
+				log.Printf("ядро из записки живо, но управлять им отсюда нельзя — гашу, чтобы не осталось без хозяина")
+				pogasitChuzhoe(p.PID)
+				pogasili = true
+			} else {
+				log.Printf("служебный порт из записки отвечает, но процесс %d не наше ядро — его не трогаю", p.PID)
+				// Порт при этом кто-то держит. Если это наше ядро под другим
+				// номером (записка разошлась с правдой), без поиска по образу
+				// оно осталось бы сиротой: служба считает связь выключенной,
+				// «Отключить» его не гасит, «Подключиться» поднимает второе
+				// рядом (стенд 13.09.2026, п.3).
+				var prinyali bool
+				prinyali, pogasili = s.prinyatSirotuPoObrazu(ctx, p)
+				if prinyali {
+					return
+				}
+			}
 		}
 		yadro.UbratPeredachu(papka)
 
@@ -85,10 +112,75 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 		// обхода. Записка тут была, но пользы от неё не вышло — ядро по ней
 		// либо уже мертво, либо мы его только что сами погасили, — значит
 		// принимать нечего, и дальше всё как при обновлении со старой версии.
+		//
+		// След туннеля при ЖИВОМ ядре из записки уборка в main не снимает и
+		// не запоминает (uborkaSledaTunnelya уходит раньше), поэтому, если
+		// погасили мы сами, имя адаптера берём из записки — иначе связь не
+		// вернётся вовсе (стенд 13.09.2026: туннеля нет после обновления).
 		if smenaVersii {
-			s.podnyatSvyazPosleSmenyVersii(ctx, sledTunnelya)
+			adapter := sledTunnelya
+			if adapter == "" && pogasili {
+				adapter = p.Adapter
+			}
+			s.podnyatSvyazPosleSmenyVersii(ctx, adapter)
 		}
 	}
+}
+
+// prinyatSirotuPoObrazu ищет своё живое ядро среди процессов по образу и
+// поступает с ним так же, как с ядром, опознанным по записке: принимает, если
+// можно; плавно меняет, если конфиг устарел; иначе гасит — но только процесс,
+// чей образ ОС подтверждает нашим бинарём.
+//
+// prinyali — ядро теперь под управлением этой копии (принято или меняется
+// плавно), вызывающему больше делать нечего. pogasili — своё ядро погашено, и
+// связь после смены версии надо поднимать заново.
+func (s *Sluzhba) prinyatSirotuPoObrazu(ctx context.Context, p yadro.Peredacha) (prinyali, pogasili bool) {
+	papka := hranenie.PapkaYadra()
+	nashi := nashiYadra(s.Yadro.Bin)
+	if len(nashi) == 0 {
+		return false, false
+	}
+	if len(nashi) == 1 {
+		naydennoe := p
+		naydennoe.PID = nashi[0]
+		// Бинарь в записке мог быть назван другой дорогой — берём тот, по
+		// которому ОС только что подтвердила образ.
+		if naydennoe.Bin == "" {
+			naydennoe.Bin = s.Yadro.Bin
+		}
+		itog := s.Yadro.Prinyat(naydennoe, s.otpechatokZhelaemogoKonfiga())
+		switch {
+		case itog.Prinyato:
+			log.Printf("своё ядро нашлось по образу под другим номером (pid %d, в записке %d) — принято", naydennoe.PID, p.PID)
+			// Записку переписываем на правду: следующая копия будет искать
+			// ядро по этому номеру.
+			yadro.ZapisatPeredachu(papka, naydennoe)
+			if naydennoe.Adapter != "" {
+				zakrepitTunnel(naydennoe.Adapter)
+			}
+			s.soobshchitTreyuProZashchitu(true)
+			return true, false
+		case itog.KonfigUstarel:
+			log.Printf("своё ядро нашлось по образу (pid %d), но конфиг сменился — меняю плавно", naydennoe.PID)
+			yadro.ZapisatPeredachu(papka, naydennoe)
+			s.smenitYadroPlavno(ctx, naydennoe)
+			return true, false
+		default:
+			log.Printf("своё ядро нашлось по образу (pid %d), но не принято (%s)", naydennoe.PID, itog.Pochemu)
+		}
+	}
+	for _, pid := range nashi {
+		// Между поиском и гашением номер мог освободиться и достаться другому
+		// процессу — спрашиваем ОС ещё раз прямо перед ударом.
+		if !yadro.ObrazNash(pid, s.Yadro.Bin) {
+			continue
+		}
+		log.Printf("своё ядро без хозяина (pid %d, найдено по образу) — гашу", pid)
+		pogasitChuzhoe(pid)
+		pogasili = true
+	}
+	return false, pogasili
 }
 
 // zapomnitSvoyuVersiyu записывает нынешнюю версию и отвечает, сменилась ли она.
