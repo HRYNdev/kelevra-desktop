@@ -323,6 +323,15 @@ func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
 	if err != nil {
 		return ItogPriyoma{Pochemu: fmt.Sprintf("процесса %d уже нет", p.PID)}
 	}
+	// Номер процесса система переиспользует: живой PID сам по себе не
+	// доказывает, что это НАШЕ ядро, а не что-то постороннее, занявшее
+	// освободившийся номер. Спрашиваем ОС, чем в реальности является процесс
+	// с этим PID, и сверяем с образом, а не только со строкой из записки.
+	// Не узнали (нет прав, платформа не умеет) — не отвергаем: молчание ОС —
+	// не повод рвать работающий туннель.
+	if obraz, znaem := putObrazaProcessa(p.PID); znaem && !odinItotZhe(obraz, y.Bin) {
+		return ItogPriyoma{Pochemu: fmt.Sprintf("под номером процесса %d сейчас чужая программа", p.PID)}
+	}
 	if !y.Zhivo() {
 		return ItogPriyoma{Pochemu: "служебный порт ядра молчит"}
 	}
