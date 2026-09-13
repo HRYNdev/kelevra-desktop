@@ -32,6 +32,22 @@ func yadroNaPodstavnomApi(t *testing.T, papka string, otvechaet bool) *Yadro {
 	}
 }
 
+// podstavitSvoyObrazVBin подменяет y.Bin на настоящий путь образа ТЕКУЩЕГО
+// тестового процесса, каким его называет ОС (putObrazaProcessa). Нужна там,
+// где тест выдаёт os.Getpid() за PID «своего» живого ядра: opoзнание с
+// 12.09.2026 сверяет не только строку конфига, но и реальный путь образа
+// процесса, а фиктивный путь из yadroNaPodstavnomApi ему по определению не
+// принадлежит. Если ОС путь не назвала — тест недоказателен, а не обречён,
+// поэтому пропускаем его явно, а не подделываем совпадение.
+func podstavitSvoyObrazVBin(t *testing.T, y *Yadro) {
+	t.Helper()
+	obraz, znaem := putObrazaProcessa(os.Getpid())
+	if !znaem {
+		t.Skip("ОС не назвала путь образа собственного процесса на этой платформе/сборке")
+	}
+	y.Bin = obraz
+}
+
 // polozhitKonfig кладёт конфиг ядра и возвращает его отпечаток.
 func polozhitKonfig(t *testing.T, papka, soderzhimoe string) string {
 	t.Helper()
@@ -102,9 +118,15 @@ func TestOtpechatokPoSoderzhimomuANePoVremeni(t *testing.T) {
 // потому что опознанию нужен заведомо живой процесс, а поднимать настоящее
 // ядро в проверке нельзя. Отсюда запрет: ни Ostanovit, ни PogasitChuzhoe
 // здесь звать нельзя — они погасят сам тест.
+//
+// С 12.09.2026 opoзнание сверяет ещё и РЕАЛЬНЫЙ путь образа процесса (см.
+// putObrazaProcessa в yadro.go), поэтому y.Bin здесь подменяется на
+// настоящий путь тестового процесса — иначе фиктивный путь из
+// yadroNaPodstavnomApi не совпал бы с собой же.
 func TestZhivoeYadroPrinimaetsya(t *testing.T) {
 	papka := t.TempDir()
 	y := yadroNaPodstavnomApi(t, papka, true)
+	podstavitSvoyObrazVBin(t, y)
 	otpechatok := polozhitKonfig(t, papka, `{"log":{"level":"info"}}`)
 
 	itog := y.Prinyat(Peredacha{
@@ -165,6 +187,7 @@ func TestMolchashcheeYadroNePrinimaetsya(t *testing.T) {
 func TestUstarevshiyKonfigNazyvaetsyaOtdelno(t *testing.T) {
 	papka := t.TempDir()
 	y := yadroNaPodstavnomApi(t, papka, true)
+	podstavitSvoyObrazVBin(t, y)
 	polozhitKonfig(t, papka, `{"log":{"level":"debug"}}`) // конфиг УЖЕ другой
 
 	itog := y.Prinyat(Peredacha{
