@@ -50,9 +50,16 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 	papka := hranenie.PapkaYadra()
 	p, est := yadro.ProchestPeredachu(papka)
 	if !est {
-		// Записки нет. Либо обычный холодный старт, либо — и это важный
-		// случай — обновление СО СТАРОЙ версии, которая записок ещё не
-		// умела оставлять и ядро гасила безусловно.
+		// Записки нет. Либо обычный холодный старт, либо обновление СО
+		// СТАРОЙ версии, которая записок ещё не умела оставлять и ядро
+		// гасила безусловно, либо сама записка потерялась (снесена уборкой,
+		// не успела записаться) при живом ядре. Три случая неразличимы по
+		// одному только !est, а поиск по образу — ровно тот же, каким
+		// default-ветка ниже находит сироту, когда записка есть, но не
+		// опознана: без него ядро без записки осталось бы сиротой навсегда.
+		if prinyali, _ := s.prinyatSirotuPoObrazu(ctx, yadro.Peredacha{}); prinyali {
+			return
+		}
 		if smenaVersii {
 			s.podnyatSvyazPosleSmenyVersii(ctx, sledTunnelya)
 		}
@@ -135,6 +142,11 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 // prinyali — ядро теперь под управлением этой копии (принято или меняется
 // плавно), вызывающему больше делать нечего. pogasili — своё ядро погашено, и
 // связь после смены версии надо поднимать заново.
+//
+// Зовётся из двух мест: из default-ветки PrinyatZhivoeYadro, когда записка
+// есть, но не опознана, и из ветки !est, когда записки нет вовсе, — p там
+// пустой, и Bin/Adapter в найденной записи берутся из s.Yadro.Bin (Adapter
+// остаётся пустым: без записки его взять негде, и zakrepitTunnel не позовётся).
 func (s *Sluzhba) prinyatSirotuPoObrazu(ctx context.Context, p yadro.Peredacha) (prinyali, pogasili bool) {
 	papka := hranenie.PapkaYadra()
 	nashi := nashiYadra(s.Yadro.Bin)
