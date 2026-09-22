@@ -84,8 +84,32 @@ ploshchadka_ne_tyanet() {
 # wineserver -w дожидается завершения), а не через рискованный неявный boot
 # на первом же запуске продукта, который и породил гонку. Замерено 12.09:
 # полная пересборка ~9.4с — дешевле минуты, дороже не проверять вовсе.
+
+# ubrat_sirotu_obshchey_papki [prefix] — снести %PROGRAMDATA%\Kelevra, оставшийся
+# в префиксе от ПРОШЛОГО прогона.
+#
+# Расследование 22.09 (наряд 0922-162115): hranenie.Papka() на windows отдаёт
+# общую папку, как только она существует как каталог (internal/hranenie/hranenie.go:40),
+# — и служба, и окно смотрят в одно место, это правило самого продукта. Но
+# каталог переживает прогон стенда: его заводит сценарий со службой, а следующий
+# стенд ждёт журнал в drive_c/users/$USER/AppData/Local/Kelevra, куда продукт
+# больше не пишет. Пустой журнал wine_zapusti возвращает как 77 → «⚫ ПРИБОР
+# МЁРТВ» на живом продукте. Так было с 11.09 (дата каталога в ~/.wine) и шесть
+# суток держало выпуск десктопа: vypusk.sh не выпускает на мёртвых приборах.
+#
+# Чистим ПЕРЕД стендом, а не внутри wine_zapusti: стенд полного режима заводит
+# общую папку сам и в следующих своих сценариях на неё рассчитывает.
+ubrat_sirotu_obshchey_papki() {
+  local prefix=${1:-${WINEPREFIX:-$HOME/.wine}} sirota
+  sirota="$prefix/drive_c/ProgramData/Kelevra"
+  [ -d "$sirota" ] || return 0
+  echo "wineprefix: сношу осиротевшую общую папку $sirota (иначе продукт пишет туда, а стенд читает AppData)"
+  rm -rf "$sirota"
+}
+
 proverit_i_pochinit_wineprefix() {
   local prefix=$1 sys32 n
+  ubrat_sirotu_obshchey_papki "$prefix"
   sys32="$prefix/drive_c/windows/system32"
   n=$(find "$sys32" -maxdepth 1 -type f 2>/dev/null | wc -l)
   if [ "$n" -ge 100 ] && [ -s "$sys32/rundll32.exe" ]; then
