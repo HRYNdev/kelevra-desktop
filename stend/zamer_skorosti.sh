@@ -130,8 +130,12 @@ rm -f "$STEND/sluzhba.log"
 # но ложно решает «дома» и podklyuchit не поднимает защиту. Здесь это выглядело
 # не красным, а ⚫ «ПРИБОР МЁРТВ» (sost=stoit после podklyuchit) — та же беда,
 # что красила пять стендов, просто в другой одежде.
+# KELEVRA_AVTOREZHIM_SHLYUZ — стенд физически стоит внутри домашней сети,
+# без подмены ARP-шлюз честно совпадает с домашним и авторежим решает «дома»
+# (та же беда, другой канал обнаружения — см. dom_po_shlyuzu.go).
 KELEVRA_DIR="$DOM" KELEVRA_PRAVA=net KELEVRA_BEZ_OBNOVLENIYA=1 \
   KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" \
+  KELEVRA_AVTOREZHIM_SHLYUZ="de:ad:be:ef:00:01" \
   "$BIN" --sluzhba > "$STEND/sluzhba.log" 2>&1 &
 SLUZHBA_PID=$!
 
