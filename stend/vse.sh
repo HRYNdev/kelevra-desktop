@@ -109,6 +109,18 @@ for put in "$KOREN"/stend/*.sh "$KOREN"/stend/*.py; do
     continue
   fi
   ubrat_ostatki перед "$imya"
+  # Осиротевшая общая папка продукта переживает прогон и переключает
+  # hranenie.Papka() на путь, которого стенд не читает (см.
+  # ubrat_sirotu_obshchey_papki в stend/obshchee.sh). Стенды, которые не зовут
+  # proverit_i_pochinit_wineprefix — например testy_pod_wine.sh, где под wine
+  # краснел hranenie_test, — иначе получают её от соседа по приёмке.
+  if est_v "$imya" "${NUZHEN_WINE[@]}"; then
+    for pref in "$KOREN/.wine" "$HOME/.wine"; do
+      [ -d "$pref/drive_c/ProgramData/Kelevra" ] || continue
+      echo "   ⚠ сношу осиротевшую общую папку $pref/drive_c/ProgramData/Kelevra"
+      rm -rf "$pref/drive_c/ProgramData/Kelevra"
+    done
+  fi
   case "$imya" in
     *.py) shag "$imya" python3 "$put" ;;
     *)    shag "$imya" bash "$put" ;;
