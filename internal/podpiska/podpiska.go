@@ -12,9 +12,12 @@ package podpiska
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +29,10 @@ const Host = "subkv.chickenkiller.com"
 
 // Puti — известные префиксы кода доступа, в порядке предпочтения.
 var Puti = []string{"k", "s"}
+
+// Dveri — адреса выдачи «из коробки», в том же порядке, что dveri.json у телефона:
+// старый сервер семьи и выдача своей сети (мозг). Сервер может назвать свои в /info.
+var Dveri = []string{"subkv.chickenkiller.com", "node2kv.chickenkiller.com"}
 
 // Versiya подставляется при сборке (-ldflags "-X ...Versiya=…").
 var Versiya = "0.1.0-rabota"
@@ -82,7 +89,11 @@ func (k *Klient) http() *http.Client {
 }
 
 func (k *Klient) zapros(ctx context.Context, url string) (*http.Request, error) {
-	r, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	return k.zaprosMetodom(ctx, http.MethodGet, url)
+}
+
+func (k *Klient) zaprosMetodom(ctx context.Context, metod, url string) (*http.Request, error) {
+	r, err := http.NewRequestWithContext(ctx, metod, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -125,13 +136,20 @@ func (e *OshibkaKoda) Error() string {
 // Konfig качает конфиг ядра по коду доступа.
 // Возвращает сырой JSON — ровно то, что нужно скормить sing-box.
 func (k *Klient) Konfig(ctx context.Context, kod string) ([]byte, error) {
+	telo, _, err := k.konfigNaDveri(ctx, k.host(), kod)
+	return telo, err
+}
+
+// konfigNaDveri — Konfig у конкретной двери; второе значение — адрес, по которому профиль отдали.
+func (k *Klient) konfigNaDveri(ctx context.Context, dver, kod string) ([]byte, string, error) {
 	kod = strings.TrimSpace(kod)
 	if kod == "" {
-		return nil, fmt.Errorf("пустой код доступа")
+		return nil, "", fmt.Errorf("пустой код доступа")
 	}
 	var posledn error
 	for _, p := range Puti {
-		telo, status, err := k.vzyat(ctx, fmt.Sprintf("%s://%s/%s/%s", k.shema(), k.host(), p, kod))
+		adres := fmt.Sprintf("%s://%s/%s/%s", k.shema(), dver, p, kod)
+		telo, status, err := k.vzyat(ctx, adres)
 		if err != nil {
 			posledn = err
 			continue
@@ -148,9 +166,117 @@ func (k *Klient) Konfig(ctx context.Context, kod string) ([]byte, error) {
 			posledn = err
 			continue
 		}
-		return telo, nil
+		return telo, adres, nil
 	}
-	return nil, posledn
+	return nil, "", posledn
+}
+
+// KonfigPoAdresu качает конфиг по сохранённому адресу подписки (см. RazobratSsylku, Voyti).
+func (k *Klient) KonfigPoAdresu(ctx context.Context, adres string) ([]byte, error) {
+	telo, status, err := k.vzyat(ctx, adres)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound || status == http.StatusForbidden {
+		return nil, &OshibkaKoda{Kod: status}
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("сервер ответил %d", status)
+	}
+	if err := ProverKonfig(telo); err != nil {
+		return nil, err
+	}
+	return telo, nil
+}
+
+// ssylka — адрес подписки: https://<дверь>/k/<код>, /s/<код> или /u/<ключ устройства>.
+var ssylka = regexp.MustCompile(`^https?://([A-Za-z0-9.-]+(?::[0-9]+)?)/(k|s|u)/([A-Za-z0-9_-]{4,64})/?$`)
+
+// RazobratSsylku: ввод человека — ссылка на подписку? Да — адрес в виде, в котором его
+// хранить (без хвоста /info, параметров и пробелов), и последняя часть (код или ключ) для
+// маски в окне. Нет — ok=false, и ввод считается кодом доступа.
+func RazobratSsylku(vvod string) (adres, hvost string, ok bool) {
+	v := strings.TrimSpace(vvod)
+	if u, err := url.Parse(v); err == nil && u.Scheme != "" {
+		u.RawQuery, u.Fragment = "", ""
+		v = strings.TrimSuffix(strings.TrimSuffix(u.String(), "/"), "/info")
+	}
+	m := ssylka.FindStringSubmatch(v)
+	if m == nil {
+		return "", "", false
+	}
+	return strings.TrimSuffix(v, "/"), m[3], true
+}
+
+// OshibkaVhoda — дверь узнала код, но в устройство отказала (лимит устройств, доступ
+// закрыт). Tekst — слова сервера для человека.
+type OshibkaVhoda struct{ Tekst string }
+
+func (e *OshibkaVhoda) Error() string { return e.Tekst }
+
+// otvetVhoda — ответ POST /k/<код>/ustroystvo (KelevraServer docs/PRIGLASHENIE.md).
+type otvetVhoda struct {
+	Profil string `json:"profil"`
+	Slot   string `json:"slot"`
+	Tekst  string `json:"tekst"`
+}
+
+// Voyti — вход по коду, как у телефона (Priglashenie.vybratDver): двери по порядку,
+// у каждой сперва вход устройства (POST /k/<код>/ustroystvo — дверь своей сети выдаёт
+// ключ этой машины и адрес /u/<ключ>), а если дверь такого входа не знает (404/405) —
+// старый путь /k/<код>. Возвращает адрес подписки, который сохранять.
+func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string, error) {
+	kod = strings.TrimSpace(kod)
+	if kod == "" {
+		return "", fmt.Errorf("пустой код доступа")
+	}
+	var posledn error
+	neTolko404 := false
+	for _, dver := range dveri {
+		dver = strings.TrimSpace(dver)
+		if dver == "" {
+			continue
+		}
+		req, err := k.zaprosMetodom(ctx, http.MethodPost, fmt.Sprintf("%s://%s/k/%s/ustroystvo", k.shema(), dver, kod))
+		if err != nil {
+			return "", err
+		}
+		otvet, err := k.http().Do(req)
+		if err != nil {
+			posledn, neTolko404 = err, true
+			continue
+		}
+		telo, _ := io.ReadAll(io.LimitReader(otvet.Body, 64<<10))
+		otvet.Body.Close()
+		var o otvetVhoda
+		_ = json.Unmarshal(telo, &o)
+		switch {
+		case otvet.StatusCode == http.StatusOK && o.Profil != "":
+			return o.Profil, nil
+		case otvet.StatusCode == http.StatusNotFound || otvet.StatusCode == http.StatusMethodNotAllowed:
+			// Входа устройства тут нет или код ему незнаком — спросим старым путём.
+			_, adres, err := k.konfigNaDveri(ctx, dver, kod)
+			if err == nil {
+				return adres, nil
+			}
+			var nezn *OshibkaKoda
+			if !errors.As(err, &nezn) {
+				neTolko404 = true
+			}
+			posledn = err
+		case o.Tekst != "":
+			return "", &OshibkaVhoda{Tekst: o.Tekst}
+		default:
+			posledn, neTolko404 = fmt.Errorf("дверь %s ответила %d", dver, otvet.StatusCode), true
+		}
+	}
+	if posledn == nil {
+		return "", fmt.Errorf("нет ни одной двери")
+	}
+	if !neTolko404 {
+		return "", &OshibkaKoda{Kod: http.StatusNotFound}
+	}
+	return "", posledn
 }
 
 // Svedeniya — что сервер рассказывает о подписке.
@@ -185,6 +311,8 @@ type Svedeniya struct {
 	// Старый сервер поля не шлёт — пустой срез законен, окно тогда рисует
 	// одну строку про текущую машину, как и раньше.
 	Ustroystva []Ustroystvo `json:"devices,omitempty"`
+	// Dveri — адреса выдачи, которые сервер советует для входа по коду (своя сеть).
+	Dveri []string `json:"dveri,omitempty"`
 }
 
 // Ustroystvo — одна строка списка «кто ещё ходит под этим кодом».
@@ -267,6 +395,26 @@ func Maska(kod string) string {
 		return "***"
 	}
 	return "***" + string(znaki[len(znaki)-2:])
+}
+
+// SvedeniyaPoAdresu — то же, что Svedeniya, по сохранённому адресу подписки (+ /info).
+func (k *Klient) SvedeniyaPoAdresu(ctx context.Context, adres string) (*Svedeniya, error) {
+	u := strings.TrimSuffix(adres, "/") + "/info"
+	if k.DeviceID != "" {
+		u += "?device=" + k.DeviceID
+	}
+	telo, status, err := k.vzyat(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("сервер ответил %d", status)
+	}
+	s := &Svedeniya{}
+	if err := json.Unmarshal(telo, s); err != nil {
+		return nil, fmt.Errorf("сведения о подписке нечитаемы: %w", err)
+	}
+	return s, nil
 }
 
 // Svedeniya спрашивает состояние подписки. Ошибка здесь не мешает подключению.

@@ -7,6 +7,7 @@
 package sluzhba
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -18,9 +19,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +34,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/ochered"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
 	"github.com/HRYNdev/kelevra-desktop/internal/pravila"
@@ -1261,7 +1265,13 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 	}
 	host := s.Podpiska.Host
 	if host == "" {
-		host = podpiska.Host
+		// Подписка по своему адресу (своя сеть) — журналы туда же, где выдача человека: её
+		// журналы видит мозг. Иначе — прежний сервер.
+		if u, err := url.Parse(s.Nastroyki.Podpiska); err == nil && u.Host != "" {
+			host = u.Host
+		} else {
+			host = podpiska.Host
+		}
 	}
 	return &zhurnaly.Otpravshchik{
 		Adres:     fmt.Sprintf("%s://%s/logs", shema, host),
@@ -1367,6 +1377,47 @@ func (s *Sluzhba) zapomnitUzel(gruppa, uzel string) {
 	s.Nastroyki.Uzly[gruppa] = uzel
 	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 		log.Printf("не сохранил выбор узла: %v", err)
+	}
+}
+
+// VestiOcheredUzlov — переход по очереди узлов своей сети (пакет ochered), пока ядро работает.
+// Очередь берётся из конфига ядра и пересобирается, когда профиль обновился. Профиль с одним
+// узлом (у семьи на старом сервере) очереди не имеет — тогда цикл только смотрит на конфиг.
+func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
+	var o *ochered.Ochered
+	var bylKonfig []byte
+	t := time.NewTicker(ochered.ShagMezhduZamerami)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if s.Yadro == nil || s.Yadro.Sost() != yadro.Rabotaet {
+			continue
+		}
+		syroy, err := os.ReadFile(s.Yadro.PutKonfiga())
+		if err != nil {
+			continue
+		}
+		if !bytes.Equal(syroy, bylKonfig) {
+			bylKonfig = syroy
+			o = nil
+			if gruppa, uzly, ok := ochered.IzKonfiga(syroy); ok {
+				pervyy := uzly[0]
+				o = &ochered.Ochered{Gruppa: gruppa, Uzly: uzly, Ya: s.Yadro, Log: log.Printf,
+					// Человек выбрал в окне не первый узел — его выбор, очередь не вмешивается.
+					Ruchnoy: func() bool { v := s.Nastroyki.Uzly[gruppa]; return v != "" && v != pervyy }}
+				log.Printf("очередь узлов: %q, узлы %v", gruppa, uzly)
+			}
+		}
+		if o == nil {
+			continue
+		}
+		shctx, otmena := context.WithTimeout(ctx, 20*time.Second)
+		o.Shag(shctx)
+		otmena()
 	}
 }
 
@@ -2112,28 +2163,91 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 	kod := strings.TrimSpace(vhod.Kod)
 	ctx, otmena := context.WithTimeout(r.Context(), 30*time.Second)
 	defer otmena()
-	profil, err := s.Podpiska.Konfig(ctx, kod)
+	// Ввод — либо готовая ссылка на подписку (https://<дверь>/k/<код> или /u/<ключ>), либо
+	// код: тогда вход по дверям, как на телефоне (своя сеть выдаёт этой машине свой ключ).
+	adres, hvost, ssylka := podpiska.RazobratSsylku(kod)
+	if ssylka {
+		kod = hvost
+	} else {
+		var err error
+		adres, err = s.Podpiska.Voyti(ctx, kod, s.dveri())
+		if err != nil {
+			log.Printf("вход по коду не удался: %v", err)
+			otdat(w, nil, err)
+			return
+		}
+	}
+	profil, err := s.Podpiska.KonfigPoAdresu(ctx, adres)
 	if err != nil {
 		log.Printf("сервер подписки не дал профиль: %v", err)
 		otdat(w, nil, err)
 		return
 	}
-	log.Printf("профиль получен с сервера подписки: %d байт", len(profil))
+	log.Printf("профиль получен с сервера подписки: %d байт (%s)", len(profil), adresDlyaZhurnala(adres))
 	if err := s.SohranitProfil(profil); err != nil {
 		otdat(w, nil, err)
 		return
 	}
 	s.Nastroyki.Kod = kod
+	s.Nastroyki.Podpiska = adres
 	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 		otdat(w, nil, err)
 		return
 	}
-	if sv, err := s.Podpiska.Svedeniya(ctx, kod); err == nil {
+	if sv, err := s.Podpiska.SvedeniyaPoAdresu(ctx, adres); err == nil {
 		s.zamok.Lock()
 		s.svedeniya = sv
 		s.zamok.Unlock()
+		s.zapomnitDveri(sv)
 	}
 	otdat(w, map[string]any{"gotovo": true}, nil)
+}
+
+// dveri — куда стучаться с кодом: стенд (KELEVRA_PODPISKA) — только он; иначе двери, которые
+// сервер назвал в /info; иначе двери «из коробки».
+func (s *Sluzhba) dveri() []string {
+	if h := os.Getenv("KELEVRA_PODPISKA"); h != "" {
+		return []string{h}
+	}
+	if len(s.Nastroyki.Dveri) > 0 {
+		return s.Nastroyki.Dveri
+	}
+	return podpiska.Dveri
+}
+
+// zapomnitDveri — сервер своей сети называет свои двери в /info: запоминаем для следующего входа.
+func (s *Sluzhba) zapomnitDveri(sv *podpiska.Svedeniya) {
+	if sv == nil || len(sv.Dveri) == 0 || slices.Equal(sv.Dveri, s.Nastroyki.Dveri) {
+		return
+	}
+	s.Nastroyki.Dveri = slices.Clone(sv.Dveri)
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("двери из сведений не сохранились: %v", err)
+	}
+}
+
+// adresDlyaZhurnala — адрес подписки без кода и ключа: журнал уезжает разработчику.
+func adresDlyaZhurnala(adres string) string {
+	if i := strings.LastIndex(adres, "/"); i > 0 {
+		return adres[:i+1] + "…"
+	}
+	return "…"
+}
+
+// vzyatProfil и vzyatSvedeniya — по сохранённому адресу подписки; старые установки
+// (адреса нет) — по коду на зашитом хосте, как раньше.
+func (s *Sluzhba) vzyatProfil(ctx context.Context) ([]byte, error) {
+	if s.Nastroyki.Podpiska != "" {
+		return s.Podpiska.KonfigPoAdresu(ctx, s.Nastroyki.Podpiska)
+	}
+	return s.Podpiska.Konfig(ctx, s.Nastroyki.Kod)
+}
+
+func (s *Sluzhba) vzyatSvedeniya(ctx context.Context) (*podpiska.Svedeniya, error) {
+	if s.Nastroyki.Podpiska != "" {
+		return s.Podpiska.SvedeniyaPoAdresu(ctx, s.Nastroyki.Podpiska)
+	}
+	return s.Podpiska.Svedeniya(ctx, s.Nastroyki.Kod)
 }
 
 // PodnyatZashchitu поднимает ядро, а если ядра на машине ещё нет — сначала
@@ -2947,10 +3061,10 @@ func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 // Замер 02.09.2026 на сервере: с боевого ПК за всю историю ноль запросов
 // /info при семи выдачах конфига — ровно эта дыра.
 func (s *Sluzhba) ObnovitSvedeniya(ctx context.Context) {
-	if s.Nastroyki.Kod == "" {
+	if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
 		return
 	}
-	sv, err := s.Podpiska.Svedeniya(ctx, s.Nastroyki.Kod)
+	sv, err := s.vzyatSvedeniya(ctx)
 	if err != nil {
 		// Молчим не полностью: без этой строки непонятно, врёт ли окно про
 		// «Пока неизвестно» или сервер правда недоступен.
@@ -2960,6 +3074,7 @@ func (s *Sluzhba) ObnovitSvedeniya(ctx context.Context) {
 	s.zamok.Lock()
 	s.svedeniya = sv
 	s.zamok.Unlock()
+	s.zapomnitDveri(sv)
 
 	// Сервер попросил журнал — отдаём сейчас, не дожидаясь ночной посылки.
 	//
@@ -2992,13 +3107,13 @@ func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if s.Nastroyki.Kod == "" {
+			if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
 				continue
 			}
 			// Подписка едет вместе с профилем: срок, объём и список устройств
 			// меняются на сервере сами по себе, без участия этой машины.
 			s.ObnovitSvedeniya(ctx)
-			k, err := s.Podpiska.Konfig(ctx, s.Nastroyki.Kod)
+			k, err := s.vzyatProfil(ctx)
 			if err != nil {
 				log.Printf("плановое обновление профиля не удалось: %v", err)
 				continue // сеть могла лечь; работаем на прежнем конфиге
