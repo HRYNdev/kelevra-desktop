@@ -339,7 +339,7 @@ func TestPosleProvalaZhurnalUhoditSrazu(t *testing.T) {
 }
 
 // Сервер попросил журнал — клиент отдаёт его сам, не трогая человека
-// (08.09, слово владельца: (цитата убрана)).
+// (08.09: человеку не до пересылки журнала руками).
 func TestServerPoprosilZhurnalKlientOtpravlyaet(t *testing.T) {
 	s := gotovStendLestnicy(t)
 
