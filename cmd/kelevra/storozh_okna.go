@@ -60,11 +60,28 @@ const (
 // Поэтому молчание — ещё не приговор: сперва спрашиваем метку на диске
 // (kopiya.Nayti), и если там живой адрес и он ДРУГОЙ, окно надо не хоронить,
 // а открыть заново на нём.
-func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, srokZameny time.Duration, zakryt func(), perejti func(string)) {
+//
+// perezapustit — вопрос «служба вернулась НОВЕЕ этого окна?» (17.10). Зовётся
+// после каждого возвращения службы: переезд на новый адрес, ожила на прежнем,
+// ответила после одиночного промаха. true — окно уходит на перезапуск само
+// (perezapustit его уже начал), сторожу тут больше делать нечего. nil — не
+// спрашивать (тесты старых веток).
+//
+// Зачем. Обновление под службой Windows меняет только службу: окно — процесс
+// старой версии — переходило на новый адрес и жило дальше со страницей новой
+// версии, но со старыми привязками Go. 17.10 так «Панель сети» в окне 0.6.73
+// ушла в системный браузер: kelevraPanel у старого процесса нет.
+func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, srokZameny time.Duration, zakryt func(), perejti func(string), perezapustit func(string) bool) {
+	novee := func(adres string) bool { return perezapustit != nil && perezapustit(adres) }
 	promahov := 0
 	for {
 		time.Sleep(shag)
 		if kopiya.Otvechaet(url) {
+			// Ответ после промаха — служба могла успеть перезапуститься на
+			// том же порту быстрее, чем сторож разуверился.
+			if promahov > 0 && novee(url) {
+				return
+			}
 			promahov = 0
 			continue
 		}
@@ -91,12 +108,18 @@ func storozhitSluzhbu(url, papka string, shag time.Duration, predel int, srokZam
 			// А закрывать и незачем: окно живое, поменялся только адрес
 			// службы. Переход на него дешевле, быстрее и без единого нового
 			// окна на экране.
+			if novee(adres) {
+				return
+			}
 			log.Printf("сторож окна: служба переехала на %s (была %s) — перевожу окно на новый адрес", adres, url)
 			perejti(adres)
 			url = adres
 			promahov = 0
 			continue
 		} else if vernulas {
+			if novee(url) {
+				return
+			}
 			log.Printf("сторож окна: служба ответила по прежнему адресу, продолжаю дозор")
 			promahov = 0
 			continue

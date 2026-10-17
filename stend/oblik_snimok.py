@@ -358,6 +358,10 @@ SCENY.update({
     # даже если сервер прислал и их (тут прислал: chelovek_imya от BAZA).
     "33_podpiska_odno_ustroystvo": dict(BAZA, chelovek_imya="Лена",
                                         ustroystva=USTROYSTVA_ODNO),
+    # 17.10: машина админа своей сети (/info panel) — последней строкой шторки
+    # стоит «Панель сети», как на телефоне. Со списком устройств и без него.
+    "34_podpiska_panel": dict(BAZA, panel=True, ustroystva=USTROYSTVA_TRI),
+    "35_podpiska_panel_bez_ustroystv": dict(BAZA, panel=True),
 })
 
 # 27.08: сцена 24 несла rezhim="proksi" и при этом заметку ПОЛНОГО режима —
@@ -400,7 +404,8 @@ NASTROYKI_SCENY = {"8_avtozapusk_vykl", "9_avtozapusk_vkl", "10_avtozapusk_ustar
 # ветки расхода) и одно (обычный случай семьи + столбец из одних прочерков).
 PODPISKA_SCENY = {"27_podpiska", "28_podpiska_pauza", "29_podpiska_staryy_server",
                   "30_podpiska_molchit", "31_podpiska_dlinnye_imena",
-                  "32_podpiska_ustroystva", "33_podpiska_odno_ustroystvo"}
+                  "32_podpiska_ustroystva", "33_podpiska_odno_ustroystvo",
+                  "34_podpiska_panel", "35_podpiska_panel_bez_ustroystv"}
 
 # Шторка выбора выхода (29.08, см. комментарий у сцен 25/26 выше) закрыта по
 # умолчанию — снимок без клика по карточке «Выход» показал бы главный экран,
@@ -1236,10 +1241,11 @@ def proverit_podpisku(str_, imya_sceny, sost):
          отсутствия», правило телефона: Subscription.kt 30-37);
       3. карточка «кто пользуется» осталась с пустыми строками на старом
          сервере, который person/device не шлёт вовсе;
-      4. КОД ДОСТУПА УТЁК ОТКРЫТЫМ ТЕКСТОМ. Это не косметика: снимок окна
-         человек шлёт в поддержку не задумываясь, и вместе со снимком уехал бы
-         рабочий доступ к подписке. Гейт держит форму маски (звёздочки и не
-         больше двух знаков), а не конкретную строку.
+      4. ЛИШНЕЕ ПРОТИВ ТЕЛЕФОНА (17.10, владелец: «в десктопе есть лишнее; бесит,
+         что не одинаковые»): строки «Код доступа» и «Трафик подписки» с
+         полосой в шторке быть не должно вовсе — ни маски кода, ни процента.
+         Порядок блоков — как на телефоне: «Состояние», «Кто пользуется»,
+         «Устройства», «Панель сети» последней (только при panel).
       5. СПИСОК УСТРОЙСТВ (02.09) — ради него шторка и затевалась, и до этой
          правки ни одна сцена поля ustroystva не знала вовсе: снимался старый
          вид со строками «Кто пользуется»/«Устройство», а список не видел
@@ -1269,7 +1275,14 @@ def proverit_podpisku(str_, imya_sceny, sost):
         podskazka: vidno("podp-podskazka"),
         chelovek: vidno("podp-ryad-chelovek") ? t("podp-chelovek") : "",
         ustroystvo: vidno("podp-ryad-ustroystvo") ? t("podp-ustroystvo") : "",
-        kod: vidno("podp-karta-kod") ? t("podp-kod") : "",
+        tekstShtorki: (shtorka ? shtorka.innerText : ""),
+        polosa: !!document.querySelector('#shtorka-podpiska-fon .polosa-rashod'),
+        panelVidna: vidno("podp-panel"),
+        panelTekst: vidno("podp-panel") ? document.getElementById("podp-panel").innerText.replace(/\\s+/g, " ").trim() : "",
+        // Видимые блоки шторки сверху вниз — порядок сверяем с телефоном.
+        poryadok: [...document.querySelectorAll('#shtorka-podpiska-fon .shtorka > *')]
+            .filter((el) => el.offsetParent && !el.classList.contains('shtorka-shapka'))
+            .map((el) => el.id || (el.querySelector('#podp-sostoyanie') ? 'sostoyanie' : el.className)),
         pustye,
         // СПИСОК УСТРОЙСТВ (02.09). Читаем то же, на что человек смотрит
         // глазами: имя, пометку своего, время словами, расход и значок.
@@ -1280,6 +1293,7 @@ def proverit_podpisku(str_, imya_sceny, sost):
         ustroystva: [...document.querySelectorAll("#podp-karta-ustroystv .ustr")].map((r) => {
           const imya = r.querySelector(".ustr-imya");
           const kogda = r.querySelector(".ustr-sost");
+          const melko = r.querySelector(".ustr-melko");
           const trafik = r.querySelector(".ustr-trafik");
           const znachok = r.querySelector(".ustr-znachok svg");
           const rr = r.getBoundingClientRect(), kr = r.parentElement.getBoundingClientRect();
@@ -1292,6 +1306,7 @@ def proverit_podpisku(str_, imya_sceny, sost):
             metka: !!r.querySelector(".ustr-metka"),
             kogda: kogda ? (kogda.textContent || "").trim() : "",
             trafik: trafik ? (trafik.textContent || "").trim() : "",
+            melko: melko ? (melko.textContent || "").trim() : "",
             znachok: znachok ? znachok.innerHTML.replace(/\\s+/g, " ").trim() : "",
             vylez: Math.round(Math.max(rr.right - kr.right, kr.left - rr.left)),
           };
@@ -1373,6 +1388,12 @@ def proverit_podpisku(str_, imya_sceny, sost):
                   "прочерк тут единственная правда, «0 Б» соврал бы точным числом")
             if not na_ekrane["znachok"]:
                 p(f"«{imya}»: строка устройства без значка вовсе")
+            # Мелкая строка — как на телефоне: «0.6.74 · с 31 августа», без «версия».
+            if dano.get("versiya"):
+                if "версия" in na_ekrane["melko"]:
+                    p(f"«{imya}»: «{na_ekrane['melko']}» — на телефоне слова «версия» нет")
+                elif not na_ekrane["melko"].startswith(dano["versiya"]):
+                    p(f"«{imya}»: версия {dano['versiya']} пропала из строки «{na_ekrane['melko']}»")
             # Длинное имя обязано перенестись внутри карточки, а не распереть
             # её собой: щуп перелива стережёт край ОКНА, этот — край карточки.
             if na_ekrane["vylez"] > 1:
@@ -1405,24 +1426,40 @@ def proverit_podpisku(str_, imya_sceny, sost):
           f"а ждали {'видна' if zhdem_kartu else 'скрыта'} (сервер прислал: "
           f"человек={chelovek!r}, устройство={ustr_imya!r}, "
           f"список из {len(zhdem_ustr)})")
-    if d["podskazka"] != (zhdem_kartu and not zhdem_ustr):
+    # Телефон: подсказка — ровно при строке «Устройство» (device и нет списка).
+    if d["podskazka"] != bool(ustr_imya and not zhdem_ustr):
         p("подсказка «так это устройство подписано на сервере» живёт отдельно от "
-          "своей карточки — они обязаны появляться и исчезать вместе")
+          "строки «Устройство» — на телефоне они появляются и исчезают вместе")
 
     for pusto in d["pustye"]:
         p(f"строка «{pusto}» видна, а значения в ней нет — пустая строка хуже её отсутствия")
 
-    # Гейт на утёкший код. Маска приходит с сервера (internal/podpiska.Maska),
-    # но окно могло бы показать вместо неё что угодно — проверяем ФОРМУ.
-    kod = d["kod"]
-    if kod:
-        if not kod.startswith("***"):
-            p(f"код доступа показан без маски: «{kod}»")
-        elif len(kod) > 5:
-            p(f"маска кода открывает слишком много: «{kod}» ({len(kod)} знаков, "
-              f"больше «***» плюс два)")
-    elif sost.get("kod_maska"):
-        p("маска кода пришла с сервера, а строки «Код доступа» в шторке нет")
+    # Лишнее против телефона (17.10): ни кода доступа, ни полосы трафика.
+    tekst = d["tekstShtorki"]
+    maska = (sost.get("kod_maska") or "").strip()
+    if "Код доступа" in tekst or (maska and maska in tekst):
+        p("в шторке показан код доступа — на телефоне его там нет")
+    if "Трафик подписки" in tekst or d["polosa"] or re.search(r"\d+\s*%", tekst):
+        p("в шторке полоса/процент трафика подписки — на телефоне их нет, "
+          "трафик живёт только в строке «до … · N из M ГБ»")
+
+    # «Панель сети» — только машине админа и последней строкой.
+    if d["panelVidna"] != bool(sost.get("panel")):
+        p(f"строка «Панель сети» {'видна' if d['panelVidna'] else 'скрыта'}, "
+          f"а сервер прислал panel={sost.get('panel')!r}")
+    if d["panelVidna"]:
+        if d["panelTekst"] != "Панель сети Люди, устройства, узлы и трафик ›":
+            p(f"строка панели «{d['panelTekst']}» — ждали как на телефоне: "
+              "«Панель сети» / «Люди, устройства, узлы и трафик» и шеврон")
+        if d["poryadok"] and d["poryadok"][-1] != "podp-panel":
+            p(f"«Панель сети» не последняя: порядок {d['poryadok']}")
+
+    # Порядок блоков — как на телефоне.
+    mesto = {k: i for i, k in enumerate(d["poryadok"])}
+    zhdem = [k for k in ("sostoyanie", "podp-karta-kto", "podp-zag-ustroystv", "podp-panel") if k in mesto]
+    if [k for k in d["poryadok"] if k in zhdem] != zhdem:
+        p(f"порядок блоков шторки {d['poryadok']} — на телефоне: Состояние, "
+          "Кто пользуется, Устройства, Панель сети")
     return bedy
 
 
@@ -1431,7 +1468,7 @@ def kontrol_podpiski(br, port):
 
     Порчи — ровно те, которых боимся, и все три ставятся на одной сцене со
     списком устройств (32), чтобы контроль трогал ВСЕ ветки щупа, а не одну:
-      1. в строку кода кладём правдоподобный целый ключ вместо маски;
+      1. возвращаем в шторку карточку «Код доступа» (её на телефоне нет);
       2. со своего устройства снимаем и цвет (класс), и надпись «это
          устройство» — человек перестаёт отличать свою машину от чужой;
       3. в столбец расхода того, у кого расход не мерили, пишем «0 Б» —
@@ -1447,7 +1484,10 @@ def kontrol_podpiski(br, port):
     str_.click("#karta-podpiska")
     str_.wait_for_timeout(200)
     str_.evaluate("""() => {
-      document.getElementById('podp-kod').textContent = 'Hgh-QXAH8_8HQ_Et';
+      const lishnee = document.createElement('div');
+      lishnee.className = 'karta karta-nastroyki';
+      lishnee.textContent = 'Код доступа ***Et';
+      document.querySelector('#shtorka-podpiska-fon .shtorka').appendChild(lishnee);
       const svoyo = document.querySelector('#podp-karta-ustroystv .ustr.svoyo');
       svoyo.classList.remove('svoyo');
       svoyo.querySelector('.ustr-metka').remove();

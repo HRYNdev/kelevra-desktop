@@ -4,12 +4,17 @@ package main
 
 import (
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 	"log"
 	"os"
+	"os/exec"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/jchv/go-webview2"
 )
@@ -133,6 +138,16 @@ func pokazatOkno(url string) {
 				gdeWebView2+"\n\n(этот текст можно скопировать целиком: Ctrl+C)")
 		os.Exit(1)
 	}
+	// Перезапуск окна после обновления службы (perezapusk_okna.go): новая копия
+	// запускается ПОСЛЕ Destroy — иначе она нашла бы это окно (podnyatChuzheeOkno),
+	// подняла его и ушла. defer стоит раньше defer w.Destroy(), значит
+	// исполняется позже него.
+	var nadoPerezapustit atomic.Bool
+	defer func() {
+		if nadoPerezapustit.Load() {
+			zapustitOknoZanovo()
+		}
+	}()
 	defer w.Destroy()
 	// go-webview2 не ставит окну свой значок — HWND у него класса
 	// webview2 без RegisterClassExW.hIcon (в отличие от трея, который
@@ -171,7 +186,20 @@ func pokazatOkno(url string) {
 	if err := w.Bind("kelevraPanel", zapustitOknoPaneli); err != nil {
 		log.Printf("кнопка панели сети не привязана: %v", err)
 	}
-	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, srokOzhidaniyaZameny, zakrytOkno, perejtiNaAdres)
+	// Служба вернулась после обновления НОВЕЕ окна — окно закрывается и
+	// запускается заново тем же .exe (на диске он уже новый): у старого
+	// процесса старые привязки (17.10: без kelevraPanel панель ушла в браузер).
+	perezapustitPriNovoySluzhbe := func(adres string) bool {
+		v := versiyaSluzhby(adres)
+		if !nuzhenPerezapuskOkna(podpiska.Versiya, v) {
+			return false
+		}
+		log.Printf("сторож окна: служба уже версии %s, окно — %s; перезапускаю окно", v, podpiska.Versiya)
+		nadoPerezapustit.Store(true)
+		zakrytOkno()
+		return true
+	}
+	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, srokOzhidaniyaZameny, zakrytOkno, perejtiNaAdres, perezapustitPriNovoySluzhbe)
 	w.Navigate(url)
 	w.Run()
 }
@@ -337,4 +365,27 @@ func zakrytStaroeOkno() itogSmenyOkna {
 		}
 		time.Sleep(shagOzhidaniyaUhoda)
 	}
+}
+
+// zapustitOknoZanovo — новая копия окна взамен этой, тем же способом, что
+// «Открыть» в трее (otkrytOknoIzTreya): без аргументов, отдельным процессом.
+// Она найдёт живую службу (kopiya.Nayti) и откроет своё окно уже новой версии.
+func zapustitOknoZanovo() {
+	sebya, err := os.Executable()
+	if err != nil {
+		log.Printf("перезапуск окна: не понял свой путь: %v", err)
+		return
+	}
+	put := putDlyaPerezapuska(sebya)
+	cmd := exec.Command(put)
+	cmd.Env = os.Environ()
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("перезапуск окна: не запустил %s: %v", put, err)
+		return
+	}
+	_ = cmd.Process.Release()
+	log.Printf("перезапуск окна: запущена новая копия из %s", put)
 }

@@ -828,15 +828,14 @@
     margin-top:6px; font-size:15px; font-weight:500; color:var(--tekst);
     line-height:1.3; word-break:break-word;
   }
-  /* Значение подписки красится цветом состояния: «Активна» акцентом (тот же
-     выбор, что у круга и чипа — Components.kt:73-79), «Приостановлена»
-     жёлтым тревоги. Серым остаётся только «Пока неизвестно»: это не
+  /* Значение в шторке подписки — обычным цветом текста, как title KRowItem на
+     телефоне (до 17.10 «Активна» тут была акцентной, «Приостановлена» жёлтой —
+     на телефоне так нет). Серым остаётся только «Пока неизвестно»: это не
      состояние подписки, а состояние НАШЕГО знания о ней. */
-  .ryad-znachenie.horosho { color:var(--akcent); }
-  .ryad-znachenie.trevoga { color:var(--zhdem); }
   .ryad-znachenie.molchit { color:var(--tihiy); }
+  /* Подпись под значением — subtitle KRowItem: Montserrat 13sp Dim, через 3dp. */
   .ryad-podpis {
-    margin-top:3px; font-size:11.5px; line-height:1.35; color:var(--tihiy);
+    margin-top:3px; font-size:13px; line-height:1.35; color:var(--tihiy);
     white-space:normal;
   }
   /* Подсказка под карточкой «кто пользуется» — дословно с телефона
@@ -846,20 +845,21 @@
   .podskazka-pod-kartoy { margin:8px 17px 0; font-size:12px; line-height:1.4; color:var(--tihiy); }
   .podskazka-pod-kartoy[hidden] { display:none; }
   /* Зазор между карточками держит общее правило `.karta + .karta` (12px), но
-     между второй и третьей стоит ПОДСКАЗКА — соседство разрывается, и без
-     этого правила карточка «Код доступа» прилипала бы к строке подсказки
-     вплотную. Селектор берёт подсказку и в скрытом виде тоже (старый сервер:
-     карточка «кто пользуется» и подсказка исчезают вместе), поэтому зазор
-     перед «Кодом доступа» одинаков в обоих случаях — 12px, тот же, что между
-     любыми двумя карточками окна. */
+     перед строкой «Панель сети» стоит ПОДСКАЗКА — соседство разрывается, и без
+     этого правила строка прилипала бы к подсказке вплотную. Селектор берёт
+     подсказку и в скрытом виде тоже, поэтому зазор одинаков в обоих случаях. */
   .shtorka .podskazka-pod-kartoy + .karta { margin-top:12px; }
+  /* Строка «Панель сети» — KCard + KRowItem телефона: поля 16/14dp, а не
+     ужатые 12px карточек главного экрана (.karta-vyhod выше). */
+  .shtorka .karta-vyhod { padding:14px 16px; }
+  /* Тот же капкан, что у .zagolovok-bloka: display:flex у .karta-vyhod перебивает
+     встроенное [hidden]{display:none} — без этого строка «Панель сети» была
+     видна и тем, кому сервер её не присылал. */
+  .karta-vyhod[hidden] { display:none; }
 
-  /* ПОЛОСА РАСХОДА — единственная новая форма в шторке, и она нарочно собрана
-     из уже принятых мер: высота 6px, скругление по кругу, цвета — те же три
-     роли состояния, что у точек узлов (норма / внимание / ошибка), четвёртой
-     не заводим. Пустой полосы не бывает: когда лимита нет (podpiska_limit_bayt
-     == 0), вместо неё стоит строка «Без ограничений» — полоса без потолка не
-     значит ничего и врёт формой. */
+  /* ПОЛОСА — у диалога обновления (ход скачивания). До 17.10 жила и в шторке
+     подписки полосой расхода; там её убрали — на телефоне её нет. Меры: высота
+     6px, скругление по кругу, цвета — роли состояния (норма / внимание / ошибка). */
   .polosa-rashod {
     height:6px; margin-top:8px; border-radius:999px; background:var(--gran); overflow:hidden;
   }
@@ -876,21 +876,15 @@
      наполняется по-настоящему, как полоса расхода подписки. */
   .polosa-rashod.beskonechnaya > i { width:35%; animation:polosa-begaet 1.2s ease-in-out infinite; }
   @keyframes polosa-begaet { from { margin-left:-35%; } to { margin-left:100%; } }
-  .rashod-shapka { display:flex; align-items:baseline; gap:8px; font-size:12.5px; color:var(--tihiy); }
-  .rashod-dolya {
-    margin-left:auto; font-family:ui-monospace, Consolas, monospace;
-    font-size:11.5px; font-variant-numeric:tabular-nums;
-  }
 
-  /* СТРОКА УСТРОЙСТВА — тот же скелет, что у .uzel (значок, текст, число
-     справа), но без своей рамки: строки живут внутри одной карточки и
-     разделены линией KDivider, как пункты настроек. Своё устройство метится
-     акцентным значком и тихой надписью — двух подсветок разом ему не надо.
-     align-items:flex-start, а не center: у строки три этажа текста, и при
-     center значок с расходом уезжали бы к середине всей строки, а не к её
-     первой строчке (та же беда, что чинили у .tihaya в настройках). */
-  .ustr { display:flex; align-items:flex-start; gap:11px; }
-  .ustr-znachok { flex:none; width:22px; height:22px; margin-top:1px; color:var(--tihiy); }
+  /* СТРОКА УСТРОЙСТВА — DeviceRow телефона (HomeScreen.kt) мера в меру: значок
+     20dp (своё — Accent, чужое — Dim), зазор 12dp, имя Montserrat Medium 15sp,
+     «это устройство» 11sp Accent, «в сети»/«был …» 13sp (в сети — Ok, иначе
+     Dim), мелко 11sp Dim2, расход справа моно 13sp Dim. Строка выровнена по
+     середине, как Row(verticalAlignment = CenterVertically) на телефоне. Строки
+     живут в одной карточке и разделены линией KDivider, как пункты настроек. */
+  .ustr { display:flex; align-items:center; gap:12px; }
+  .ustr-znachok { flex:none; width:20px; height:20px; color:var(--tihiy); }
   .ustr-znachok svg { width:100%; height:100%; display:block; }
   .ustr.svoyo .ustr-znachok { color:var(--akcent); }
   .ustr-tekst { display:flex; flex-direction:column; min-width:0; flex:1; }
@@ -898,20 +892,16 @@
      той же причине, что у .ryad-znachenie ниже: сервер отдаёт имена вроде
      «ASUS TUF Gaming B550-PLUS WIFI II», и обрезанное имя не отвечает на
      вопрос, ради которого строка тут стоит. */
-  .ustr-imya { font-size:14px; color:var(--tekst); line-height:1.35; word-break:break-word; }
-  .ustr-metka {
-    margin-left:6px; font-family:ui-monospace, Consolas, monospace;
-    font-size:9.5px; letter-spacing:.8px; text-transform:uppercase;
-    color:var(--akcent); white-space:nowrap;
-  }
-  .ustr-sost { margin-top:2px; font-size:12px; color:var(--tihiy); }
-  .ustr-sost.v-seti { color:var(--akcent); }
+  .ustr-imya { font-size:15px; font-weight:500; color:var(--tekst); line-height:1.3; word-break:break-word; }
+  .ustr-metka { margin-left:8px; font-size:11px; font-weight:400; color:var(--akcent); white-space:nowrap; }
+  .ustr-sost { margin-top:3px; font-size:13px; color:var(--tihiy); }
+  /* «в сети» — K.Ok телефона, у окна это --norma (см. комментарий у .chip). */
+  .ustr-sost.v-seti { color:var(--norma); }
   .ustr-melko { margin-top:2px; font-size:11px; line-height:1.35; color:var(--slabyy); }
   .ustr-trafik {
-    flex:none; margin-left:auto; padding-left:8px; font-size:12.5px; color:var(--tihiy);
+    flex:none; margin-left:auto; font-size:13px; color:var(--tihiy);
     font-family:ui-monospace, Consolas, monospace; font-variant-numeric:tabular-nums;
   }
-  .ustr-trafik.pusto { color:var(--slabyy); }
 
   /* Подвал «KELEVRA <версия>» — тот же текст, что и на телефоне
      (BuildConfig.VERSION_NAME), тем же моно-шрифтом и цветом Dim2
@@ -1035,9 +1025,7 @@
   /* Значение подписки на КАРТОЧКЕ красится, только когда оно тревожное.
      «Активна» остаётся обычным цветом текста, как и заголовок соседней
      карточки «Выход»: акцент на этом экране уже занят кругом, и второе
-     акцентное пятно в двух сантиметрах от него спорит с ним за глаз. В самой
-     шторке (.ryad-znachenie.horosho ниже) «Активна» по-прежнему акцентная —
-     там она главная и единственная, спорить не с чем. */
+     акцентное пятно в двух сантиметрах от него спорит с ним за глаз. */
   .vyhod-title.trevoga { color:var(--zhdem); }
   .vyhod-title.molchit { color:var(--tihiy); }
 
@@ -1230,27 +1218,22 @@
       </div>
     </div>
 
-    <!-- ШТОРКА «ПОДПИСКА». Порядок сверху вниз повторяет шторку подписки на
-         телефоне (HomeScreen.kt 464-514), а не придуман здесь:
-           1) карточка «Состояние» — Активна/Приостановлена, подписью срок и
-              трафик одной строкой через « · » (Subscription.kt: note), под
-              ней полоса общего расхода подписки — или строка «Без
-              ограничений», когда потолка нет вовсе;
-           2) список устройств этого ключа доступа (поле ustroystva в
-              /api/sostoyanie) — ради него шторка и затевалась: человек хочет
-              видеть, что ещё сидит под его кодом, и своё устройство среди
-              них;
-           3) карточка «Кто пользуется» + «Устройство» — она остаётся ТОЛЬКО
-              для старого сервера, который списка устройств не шлёт вовсе;
-              как только список приехал, эти две строки — то же самое, но
-              беднее, и они прячутся;
-           4) серая подсказка под ней — дословная строка с телефона.
-         Своё, чего на телефоне нет, ровно одно: строка «Код доступа» — и она
-         намеренно ПОСЛЕДНЯЯ и в отдельной карточке. На телефоне код не
-         показан нигде, но там он и не нужен: приложение одно на устройстве, а
-         на компьютере человек ставит Kelevra рядом с телефоном и спрашивает
-         «тот ли ключ я сюда ввёл». Отвечают последние два знака
-         (podpiska.Maska) — узнать свой ключ ими можно, собрать чужой нельзя. -->
+    <!-- ШТОРКА «ПОДПИСКА» — один в один шторка подписки телефона (KelevraBox,
+         HomeScreen.kt: ModalBottomSheet подписки и DeviceRow; Subscription.kt:
+         note). Сверху вниз:
+           1) карточка «Состояние»: «Активна»/«Приостановлена», подписью note —
+              «до 12 сентября · 12 из 50 ГБ» или «… · без ограничений»;
+              сервер ещё не отвечал — «Пока неизвестно» без подписи;
+           2) карточка «Кто пользуется» (+ «Устройство» — только когда списка
+              устройств нет: старый сервер), под ней «так это устройство
+              подписано на сервере» — ровно при строке «Устройство»;
+           3) группа «Устройства»: значок, имя, «это устройство», «в сети» /
+              «был …», мелко «0.6.74 · с 31 августа», справа расход; прочерк у
+              всех — строка «прочерк — расход по устройствам сервер не считал»;
+           4) последней — строка «Панель сети» (только машине админа, /info panel).
+         17.10 убраны своё-десктопное: полоса «Трафик подписки» с процентом и
+         карточка «Код доступа» с маской. владелец: «приведи состояние подписки к
+         состоянию на телефоне… в десктопе есть лишнее; бесит, что не одинаковые». -->
     <div class="shtorka-fon" id="shtorka-podpiska-fon" hidden>
       <div class="shtorka">
         <div class="shtorka-shapka">
@@ -1264,22 +1247,7 @@
             <span class="ryad-znachenie molchit" id="podp-sostoyanie">Пока неизвестно</span>
             <span class="ryad-podpis" id="podp-zametka" hidden></span>
           </div>
-          <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-rashod" hidden>
-            <span class="ryad-metka">Трафик подписки</span>
-            <div class="rashod-shapka">
-              <span id="podp-rashod-slova"></span><span class="rashod-dolya" id="podp-rashod-dolya"></span>
-            </div>
-            <div class="polosa-rashod"><i id="podp-polosa"></i></div>
-          </div>
-          <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-bez-limita" hidden>
-            <span class="ryad-metka">Трафик подписки</span>
-            <span class="ryad-znachenie">Без ограничений</span>
-          </div>
         </div>
-
-        <div class="zagolovok-bloka" id="podp-zag-ustroystv" hidden>Устройства</div>
-        <div class="karta karta-nastroyki" id="podp-karta-ustroystv" hidden></div>
-        <div class="podskazka-pod-kartoy" id="podp-net-rashoda" hidden>Расход по устройствам пока не считается — прочерк тут значит «не мерили», а не «ничего не качали».</div>
 
         <div class="karta karta-nastroyki" id="podp-karta-kto" hidden>
           <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-chelovek" hidden>
@@ -1293,21 +1261,23 @@
         </div>
         <div class="podskazka-pod-kartoy" id="podp-podskazka" hidden>так это устройство подписано на сервере</div>
 
-        <!-- Панель своей сети — только машине админа (сервер пишет panel в сведениях). Открывается
-             отдельным окном: второе окно WebView2 в этом процессе не живёт (cmd/kelevra okno_windows.go). -->
-        <button class="karta karta-vyhod" id="podp-panel" type="button" hidden>
-          <span class="vyhod-label">Сеть</span>
-          <span class="vyhod-title">Панель сети</span>
-          <span class="vyhod-subtitle" id="podp-panel-podpis">Люди, устройства, узлы и трафик</span>
-        </button>
+        <div class="zagolovok-bloka" id="podp-zag-ustroystv" hidden>Устройства</div>
+        <div class="karta karta-nastroyki" id="podp-karta-ustroystv" hidden></div>
+        <div class="podskazka-pod-kartoy" id="podp-net-rashoda" hidden>прочерк — расход по устройствам сервер не считал</div>
 
-        <div class="karta karta-nastroyki" id="podp-karta-kod" hidden>
-          <div class="ryad-svedeniya nastroyki-ryad">
-            <span class="ryad-metka">Код доступа</span>
-            <span class="ryad-znachenie mono" id="podp-kod"></span>
-            <span class="ryad-podpis">Показаны последние два знака. Сменить код — в настройках.</span>
-          </div>
-        </div>
+        <!-- Панель своей сети — строка телефона (KRowItem «Панель сети» / «Люди, устройства,
+             узлы и трафик», шеврон), только машине админа (сервер пишет panel в сведениях).
+             Открывается отдельным окном через window.kelevraPanel (cmd/kelevra okno_paneli.go).
+             Системного браузера тут нет нарочно: 17.10 окно старой версии (без kelevraPanel)
+             уводило панель в браузер. Нет привязки — просим перезапустить окно. -->
+        <button class="karta karta-vyhod" id="podp-panel" type="button" hidden>
+          <span class="vyhod-tekst">
+            <span class="vyhod-title">Панель сети</span>
+            <span class="vyhod-subtitle" id="podp-panel-podpis">Люди, устройства, узлы и трафик</span>
+          </span>
+          <span class="vyhod-shevron" aria-hidden="true">&#8250;</span>
+        </button>
+        <div class="podskazka-pod-kartoy" id="podp-panel-beda" hidden></div>
       </div>
     </div>
 
@@ -1935,22 +1905,20 @@ function kogdaBylo(unix) {
   return "был " + den.toLocaleDateString("ru-RU", {day:"numeric", month:"long"});
 }
 
-// Байты человеку: «12,4 ГБ», запятая русская. Ноль отдаём ПУСТОЙ строкой, а не
-// «0 Б»: сбор расхода по устройствам ещё не включён (служба шлёт 0 всем), и
-// «0 Б» читалось бы как «ничего не качал» — то есть врало бы точным числом
-// там, где числа нет вовсе. Что делать с пустотой, решает тот, кто рисует
-// строку: у устройства это прочерк, у общего расхода подписки — настоящий 0.
+// Расход устройства — дословно deviceTrafficWords телефона (Subscription.kt):
+// «12 ГБ», «3,0 ГБ», «870 МБ». Дробь только у чисел меньше 10, запятая русская;
+// округление до «1024 МБ» переносится в следующую единицу («1,0 ГБ»). Ноль —
+// ПУСТАЯ строка: ноль в ответе сервера значит «не мерили», и на его месте в
+// строке устройства стоит прочерк, а не «0 Б».
 function bayty(b) {
-  if (!b || b < 0) return "";
-  const mery = [["ТБ", 1099511627776], ["ГБ", 1073741824], ["МБ", 1048576], ["КБ", 1024]];
-  for (const [imya, mera] of mery) {
-    if (b >= mera) {
-      const chislo = b / mera;
-      const slovo = chislo >= 10 ? String(Math.round(chislo)) : chislo.toFixed(1);
-      return slovo.replace(".", ",") + " " + imya;
-    }
-  }
-  return b + " Б";
+  if (!b || b <= 0) return "";
+  const edinicy = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+  let chislo = b, i = 0;
+  while (chislo >= 1024 && i < edinicy.length - 1) { chislo /= 1024; i++; }
+  if (chislo >= 1023.5 && i < edinicy.length - 1) { chislo /= 1024; i++; }
+  const slovo = (i === 0 || chislo >= 10) ? String(Math.round(chislo))
+      : chislo.toFixed(1).replace(".", ",");
+  return slovo + " " + edinicy[i];
 }
 
 // Значки устройств — свои, трёх видов (поле vid: phone / laptop / desktop).
@@ -2010,11 +1978,11 @@ function narisovatUstroystva(spisok) {
       sost.textContent = kogda;
       tekst.appendChild(sost);
     }
-    // Версия и дата появления — мелочью третьей строкой. Чего сервер не
-    // прислал, того в строке просто нет: ни прочерков, ни пустых скобок (то
-    // же правило, что у zametkaPodpiski выше).
+    // Версия и дата появления — мелочью третьей строкой, как на телефоне:
+    // «0.6.74 · с 31 августа», без слова «версия». Чего сервер не прислал,
+    // того в строке просто нет: ни прочерков, ни пустых скобок.
     const melko = [];
-    if (u.versiya) melko.push("версия " + u.versiya);
+    if (u.versiya) melko.push(u.versiya);
     if (u.vpervye) {
       melko.push("с " + new Date(u.vpervye * 1000)
           .toLocaleDateString("ru-RU", {day:"numeric", month:"long"}));
@@ -2036,8 +2004,8 @@ function narisovatUstroystva(spisok) {
     karta.appendChild(ryad);
   }
   // Строка-объяснение под карточкой видна ровно тогда, когда прочерки стоят у
-  // ВСЕХ: сбор расхода по устройствам ещё не включён, и без этой строки
-  // столбец прочерков читается как «никто ничего не качал».
+  // ВСЕХ (как на телефоне): рядом с честными цифрами одинокий прочерк читается
+  // сам, а столбец из одних прочерков без неё — как «никто ничего не качал».
   $("podp-net-rashoda").hidden = hotGdeToTrafik;
 }
 
@@ -2061,8 +2029,10 @@ function narisovatPodpisku(s) {
 
   const sost = $("podp-sostoyanie"), zametka = $("podp-zametka");
   if (s.podpiska_est) {
+    // Цвет — обычный текст, как title KRowItem на телефоне: состояние
+    // говорится словом, а не краской.
     sost.textContent = s.podpiska_aktivna ? "Активна" : "Приостановлена";
-    sost.className = "ryad-znachenie " + (s.podpiska_aktivna ? "horosho" : "trevoga");
+    sost.className = "ryad-znachenie";
     const tekst = zametkaPodpiski(s);
     zametka.textContent = tekst;
     zametka.hidden = !tekst;
@@ -2073,27 +2043,6 @@ function narisovatPodpisku(s) {
     sost.className = "ryad-znachenie molchit";
     zametka.textContent = "";
     zametka.hidden = true;
-  }
-
-  // Полоса расхода — только при заданном потолке. Лимит 0 значит «без
-  // ограничений», и полоса там нарисовалась бы пустой на всю ширину: форма
-  // сказала бы «израсходовано нисколько из чего-то», хотя правда — «мерить
-  // не по чему». Вместо полосы в этом случае стоит строка словами.
-  const estLimit = s.podpiska_est && s.podpiska_limit_bayt > 0;
-  $("podp-ryad-rashod").hidden = !estLimit;
-  $("podp-ryad-bez-limita").hidden = !(s.podpiska_est && !estLimit);
-  if (estLimit) {
-    const dolya = Math.min(1, (s.podpiska_syedeno_bayt || 0) / s.podpiska_limit_bayt);
-    // Тут ноль — настоящий измеренный ноль (подпиской не пользовались), а не
-    // «не считали», как у устройств: пишем его числом, а не прочерком.
-    $("podp-rashod-slova").textContent =
-        (bayty(s.podpiska_syedeno_bayt) || "0 Б") + " из " + bayty(s.podpiska_limit_bayt);
-    $("podp-rashod-dolya").textContent = Math.round(dolya * 100) + "%";
-    const polosa = $("podp-polosa");
-    polosa.style.width = Math.round(dolya * 100) + "%";
-    // Три роли состояния, те же, что у точек узлов: спокойно / внимание /
-    // ошибка. Четвёртого цвета в языке системы нет.
-    polosa.className = dolya >= .9 ? "perebor" : dolya >= .75 ? "trevoga" : "";
   }
 
   narisovatUstroystva(s.ustroystva);
@@ -2110,29 +2059,43 @@ function narisovatPodpisku(s) {
   const ustroystvo = (s.ustroystvo_imya || "").trim();
   $("podp-chelovek").textContent = chelovek;
   $("podp-ryad-chelovek").hidden = !chelovek;
+  // Подсказка объясняет ровно строку «Устройство» и живёт с ней (телефон:
+  // showDeviceRow = device != null && devices.isEmpty()).
+  const strokaUstroystva = !!ustroystvo && !estSpisok;
   $("podp-ustroystvo").textContent = ustroystvo || "";
-  $("podp-ryad-ustroystvo").hidden = !ustroystvo || estSpisok;
-  $("podp-karta-kto").hidden = !(chelovek || (ustroystvo && !estSpisok));
-  $("podp-podskazka").hidden = !(chelovek || (ustroystvo && !estSpisok)) || estSpisok;
+  $("podp-ryad-ustroystvo").hidden = !strokaUstroystva;
+  $("podp-karta-kto").hidden = !(chelovek || strokaUstroystva);
+  $("podp-podskazka").hidden = !strokaUstroystva;
 
-  // Код доступа приходит УЖЕ замаскированным (internal/podpiska.Maska) —
-  // окно не маскирует его само и целого кода не получает вовсе.
-  const maska = s.kod_maska || "";
-  $("podp-kod").textContent = maska;
-  $("podp-karta-kod").hidden = !maska;
+  // Панель сети — последней строкой, только машине админа.
   $("podp-panel").hidden = !s.panel;
+  if (!s.panel) $("podp-panel-beda").hidden = true;
 }
 
+// «Панель сети» открывается ТОЛЬКО окном приложения (window.kelevraPanel —
+// привязка из cmd/kelevra okno_windows.go). Запасного window.open больше нет:
+// в окне без привязки (процесс старой версии пережил обновление службы) он
+// уводил панель в системный браузер — жалоба 17.10. Нет привязки — говорим,
+// что делать, и на сервер за ссылкой не ходим вовсе: одноразовую ссылку
+// открыть всё равно нечем.
+const PODPIS_PANELI = "Люди, устройства, узлы и трафик";
 $("podp-panel").onclick = async () => {
-  const podpis = $("podp-panel-podpis");
+  const podpis = $("podp-panel-podpis"), beda = $("podp-panel-beda");
+  if (typeof window.kelevraPanel !== "function") {
+    beda.textContent = "Перезапустите окно Kelevra, чтобы открыть панель";
+    beda.hidden = false;
+    return;
+  }
+  beda.hidden = true;
   podpis.textContent = "Открываю…";
   try {
     const d = await api("panel", {});
-    if (window.kelevraPanel) await window.kelevraPanel(d.ssylka);
-    else window.open(d.ssylka, "_blank");
-    podpis.textContent = "Люди, устройства, узлы и трафик";
+    await window.kelevraPanel(d.ssylka);
+    podpis.textContent = PODPIS_PANELI;
   } catch (e) {
-    podpis.textContent = e.message;
+    podpis.textContent = PODPIS_PANELI;
+    beda.textContent = (e && e.message) || String(e);
+    beda.hidden = false;
   }
 };
 
