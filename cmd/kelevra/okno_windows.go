@@ -186,6 +186,31 @@ func pokazatOkno(url string) {
 	if err := w.Bind("kelevraPanel", zapustitOknoPaneli); err != nil {
 		log.Printf("кнопка панели сети не привязана: %v", err)
 	}
+	// Кнопка «Дать права»: окно Windows с запросом прав просит ПРОЦЕСС ОКНА,
+	// а не служебное. Запрос от процесса без переднего плана Windows прячет
+	// мигающей кнопкой на панели задач, и человек его не видит; окно же у
+	// человека перед глазами — его HWND и становится владельцем запроса.
+	// Ответ привязке — сразу: установка идёт фоном, а поток окна ждать её не
+	// должен. Итог виден по состоянию службы (служебное уступит место службе,
+	// сторож переведёт окно на её адрес).
+	var idetUstanovka atomic.Bool
+	if err := w.Bind("kelevraDatPrava", func() bool {
+		if !idetUstanovka.CompareAndSwap(false, true) {
+			return false
+		}
+		go func() {
+			defer idetUstanovka.Store(false)
+			log.Printf("«Дать права»: прошу права администратора и ставлю службу Windows")
+			if err := poprositUstanovkuSluzhby(uintptr(hwndOkna)); err != nil {
+				log.Printf("«Дать права»: служба не поставлена: %v", err)
+				return
+			}
+			log.Printf("«Дать права»: служба Windows поставлена")
+		}()
+		return true
+	}); err != nil {
+		log.Printf("кнопка «Дать права» не привязана: %v", err)
+	}
 	// Служба вернулась после обновления НОВЕЕ окна — окно закрывается и
 	// запускается заново тем же .exe (на диске он уже новый): у старого
 	// процесса старые привязки (17.10: без kelevraPanel панель ушла в браузер).

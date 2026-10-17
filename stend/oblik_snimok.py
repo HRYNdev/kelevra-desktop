@@ -84,13 +84,33 @@ def zametki_iz_go():
             if not zhdem_prodolzhenie:
                 nashli[imya] = "".join(kuski)
                 imya, kuski = None, []
-    if len(nashli) < 4:
+    # Заметок три с 0.6.77: заметки неполного режима ушли вместе с ним.
+    if len(nashli) < 3:
         raise SystemExit(f"🔴 в konfig.go нашлось лишь {len(nashli)} заметок: "
                          "стенд разучился их читать, гейт жаргона стал пустым")
     return nashli
 
 
 ZAMETKI = zametki_iz_go()
+
+
+def otkazy_iz_go():
+    """Отказы подъёма связи (sluzhba.Oshibka*) — ИЗ sluzhba.go, а не выдуманные.
+
+    Тот же довод, что у zametki_iz_go: стенд, сочиняющий вход сам, доказывает
+    согласие себя с собой. Окно показывает эти строки как есть (s.otkaz и
+    строка «нужны права»).
+    """
+    ishodnik = (KOREN / "internal" / "sluzhba" / "sluzhba.go").read_text(encoding="utf-8")
+    nashli = dict(re.findall(r'^\s*(Oshibka\w+)\s*=\s*errors\.New\("((?:[^"\\]|\\.)*)"\)',
+                             ishodnik, re.M))
+    for nuzhno in ("OshibkaNetPrav", "OshibkaAdapterZanyat", "OshibkaTunnelNePodnyalsya"):
+        if nuzhno not in nashli:
+            raise SystemExit(f"🔴 в sluzhba.go не нашёлся {nuzhno}: стенд разучился читать отказы")
+    return nashli
+
+
+OTKAZY = otkazy_iz_go()
 
 # Слова, которых человек в окне видеть не должен: он не программист, и из
 # «прокси-режим: в профиле нет туннеля» не следует ни что случилось, ни что
@@ -170,7 +190,7 @@ USTROYSTVA_ODNO = [
 BAZA = {"versiya": "0.5.3", "kod_est": True, "sost": "stoit",
         "vniz_bayt": 0, "vverh_bayt": 0, "pid": 0,
         "imya": "Егор", "do_unix": 1789430400, "rezhim": "", "zametka": "",
-        "mozhno_tun": False, "ruchnoy_proksi": False,
+        "nuzhny_prava": False, "otkaz": "",
         "beda": "", "kachaem_yadro": False, "yadro_est": True,
         # Подписка (вкладка «Подписка», 01.09). Значения — правдоподобный
         # живой ответ /info: ключ на 50 ГБ, съедено 12, оба имени сервер знает.
@@ -196,14 +216,15 @@ SCENY = {
                                              sluzhba_est=True),
     "3_podnimaem": dict(BAZA, sost="podnimaem"),
     "4_rabotaet": dict(BAZA, sost="rabotaet", pid="8124",
-                       rezhim="proksi", vniz_bayt=418_365_440, vverh_bayt=21_495_808,
-                       mozhno_tun=True, zametka=ZAMETKI["ZametkaBezPrav"]),
+                       rezhim="tunnel", vniz_bayt=418_365_440, vverh_bayt=21_495_808,
+                       zametka=ZAMETKI["ZametkaVes"]),
     "14_polnaya_zashchita": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                  vniz_bayt=1_073_741_824, vverh_bayt=52_428_800,
                                  zametka=ZAMETKI["ZametkaVes"]),
-    "15_tolko_brauzery": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
-                              vniz_bayt=12_582_912, vverh_bayt=1_048_576,
-                              zametka=ZAMETKI["ZametkaBezTunnelya"]),
+    # 17.10: службы Windows нет, человек отказал в запросе прав. Неполного
+    # режима больше нет: круг «Не подключено», одна строка «нужны права» и
+    # кнопка «Дать права» (решение владельца: «нет никаких неполных режимов»).
+    "15_net_prav": dict(BAZA, nuzhny_prava=True),
     # 23.08: источник правил маршрутизации недоступен (пустой кеш + слабая сеть
     # или провайдер режет домен правил) — раньше ядро на этом падало целиком и
     # связи не было вовсе, теперь защита поднимается без правил и гонит всё в
@@ -222,30 +243,23 @@ SCENY = {
     "23_pravila_iz_komplekta": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                     vniz_bayt=134_217_728, vverh_bayt=9_437_184,
                                     zametka=ZAMETKI["ZametkaPravilaIzKomplekta"] % "23.08.2026"),
-    # 31.08: полный режим не поднялся (сетевой адаптер не создался), и клиент
-    # честно опустился ступенькой ниже вместо «нет связи» и пустоты
-    # (konfig.Vybor.BezTunnelya, sluzhba.PodnyatZashchitu). Человек обязан
-    # видеть: связь есть, но половинная, и не потому, что так задумано.
-    # mozhno_tun тут False нарочно — права у приложения ЕСТЬ, кнопки «Включить
-    # для всех программ» на экране нет, и заметка никуда не шлёт.
-    "24_tunnel_ne_podnyalsya": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
-                                    vniz_bayt=20_971_520, vverh_bayt=2_097_152,
-                                    chastichnaya=True,
-                                    zametka=ZAMETKI["ZametkaTunnelNePodnyalsya"]),
-    # 02.09: та же ступень, но причина известна поимённо. Имя сетевого
-    # адаптера осталось занято остатком прошлого подключения (замер с боевой
-    # машины 01.09: «create adapter: файл уже существует | open existing
-    # adapter: элемент не найден», ядро падало через 15 секунд). Приложение
-    # берёт соседнее свободное имя само, и до этой сцены дело доходит только
-    # когда заняты и соседние, — поэтому текст не шлёт нажимать ещё раз, а
-    # называет причину (konfig.ZametkaAdapterZanyat).
-    "25_adapter_zanyat": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
-                              vniz_bayt=18_874_368, vverh_bayt=1_572_864,
-                              chastichnaya=True,
-                              zametka=ZAMETKI["ZametkaAdapterZanyat"]),
-    "7_ruchnoy_proksi": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
-                             vniz_bayt=5_242_880, vverh_bayt=524_288, ruchnoy_proksi=True,
-                             zametka=ZAMETKI["ZametkaRuchnoyProksi"] % "127.0.0.1:2412"),
+    # 17.10: туннель не поднялся (сетевой адаптер не создался). Ступени ниже
+    # (прокси, «только браузеры») больше нет: круг «Нет подключения», заголовок
+    # беды — отказ службы (sluzhba.OshibkaTunnelNePodnyalsya) без советов
+    # «попробуйте ещё раз», сырой текст ядра — под «подробностями».
+    "24_tunnel_ne_podnyalsya": dict(BAZA, sost="stoit",
+                                    otkaz=OTKAZY["OshibkaTunnelNePodnyalsya"],
+                                    beda="ядро упало при старте: FATAL[0000] start service: "
+                                         "initialize inbound/tun[0]: configure tun interface: "
+                                         "permission denied"),
+    # Та же беда, но причина известна поимённо: имя сетевого адаптера держит
+    # остаток прошлого подключения, и соседние тоже (повторы на других именах
+    # не помогли). Освобождает его только перезагрузка — это и сказано.
+    "25_adapter_zanyat": dict(BAZA, sost="stoit",
+                              otkaz=OTKAZY["OshibkaAdapterZanyat"],
+                              beda="ядро упало при старте: FATAL[0015] start service: start inbound/tun[tun-in]: "
+                                   "configure tun interface: (create adapter: Cannot create a file when "
+                                   "that file already exists. | open existing adapter: Element not found.)"),
     "5_slomalos": dict(BAZA, sost="slomalos",
                        beda="ядро не ответило за 45 секунд: FATAL[0000] start service: "
                             "initialize inbound/tun[0]: configure tun interface: "
@@ -290,7 +304,7 @@ SCENY = {
     # подменяет, а не показывает вперемешку с тем, что сейчас неправда.
     "18_avtorezhim_doma": dict(BAZA, sost="stoit", avtorezhim_vklyuchen=True,
                                avtorezhim_obstanovka="дома", ozhidanie_doma=True,
-                               zametka=ZAMETKI["ZametkaBezTunnelya"]),
+                               zametka=ZAMETKI["ZametkaVes"]),
     "19_avtorezhim_vne_doma": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                    vniz_bayt=204_800_000, vverh_bayt=9_961_472,
                                    avtorezhim_vklyuchen=True, avtorezhim_obstanovka="вне дома",
@@ -300,19 +314,17 @@ SCENY = {
     # 22.08: /api/sostoyanie отдавало k.Zametka из последней сборки конфига
     # независимо от того, поднята ли защита сейчас (sluzhba.go: s.kartina не
     # чистится в OpustitZashchitu). Человек выключил защиту вручную — не
-    # авторежимом, avtorezhim_vklyuchen=False — и всё равно читал «Защищены
-    # только браузеры», хотя не защищено было НИЧЕГО. rezhim="proksi" тут
-    # нарочно оставлен (сам по себе не враньё: он не показывается, пока
-    # sost != rabotaet, — врёт именно zametka), zametka — пустая: ровно то,
-    # что теперь честно отдаёт исправленная ручка.
-    "21_vyklyucheno_vruchnuyu": dict(BAZA, sost="stoit", rezhim="proksi",
-                                     mozhno_tun=True, zametka=""),
+    # авторежимом, avtorezhim_vklyuchen=False — и всё равно читал заметку про
+    # объём, хотя не шло НИЧЕГО. rezhim тут нарочно оставлен (он не
+    # показывается, пока sost != rabotaet, — врёт именно zametka), zametka —
+    # пустая: ровно то, что теперь честно отдаёт исправленная ручка.
+    "21_vyklyucheno_vruchnuyu": dict(BAZA, sost="stoit", rezhim="tunnel", zametka=""),
     # 25.08: список узлов в остальных сценах ниже не различает sredne/medlenno
     # (см. UZLY_VSE_GRADACII выше) — эта сцена единственная, где все пять
     # классов .uzel .signal стоят на экране разом, и щуп геометрии
     # (proverit_gradacii_signala) может их сравнить.
-    "24_uzly_vse_gradacii": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
-                                 zametka=ZAMETKI["ZametkaBezTunnelya"], uzly=UZLY_VSE_GRADACII),
+    "24_uzly_vse_gradacii": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                                 zametka=ZAMETKI["ZametkaVes"], uzly=UZLY_VSE_GRADACII),
     # 29.08: полоса режима и список узлов переехали с главного экрана в
     # шторку (.shtorka-fon), открывающуюся кликом по карточке «Выход» —
     # без своей сцены снимок никогда её не откроет, и новый экран не увидит
@@ -320,9 +332,9 @@ SCENY = {
     # Ручной режим: узел «Нидерланды 2» (см. UZLY выше) обязан нести и
     # рамку/цвет (.uzel.vybran), и явную галочку ✓ (жалоба 29.08: в ручном
     # режиме выбор узла сделан криво — рамки одной было мало).
-    "25_shtorka_ruchnoy": dict(BAZA, sost="rabotaet", pid="8124", rezhim="proksi",
+    "25_shtorka_ruchnoy": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                vniz_bayt=418_365_440, vverh_bayt=21_495_808,
-                               mozhno_tun=True, zametka=ZAMETKI["ZametkaBezPrav"]),
+                               zametka=ZAMETKI["ZametkaVes"]),
     # Авторежим: та же площадка, но ни один узел не смеет нести подсветку —
     # эталон телефона, HomeScreen.kt 424 (selected = !auto.auto && ch.selected).
     "26_shtorka_avto": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
@@ -370,13 +382,15 @@ SCENY.update({
 # заметку одной веткой), врала только сцена — но врала МНЕ: я смотрю снимки
 # глазами и полез искать беду в продукте. Прибор, который сам себе
 # противоречит, дороже пропущенной беды. Держим класс, а не одно место.
-NESOVMESTIMO = [("proksi", "ZametkaVes"), ("tunnel", "ZametkaBezTunnelya")]
+# С 0.6.77 режим один — туннель; сцена с rezhim="proksi" рисовала бы
+# состояние, которого продукт не умеет, а поля неполного режима окно больше
+# не читает.
 for _imya, _s in SCENY.items():
-    for _rezhim, _klyuch in NESOVMESTIMO:
-        if _s.get("rezhim") == _rezhim and _s.get("zametka") == ZAMETKI[_klyuch]:
-            raise SystemExit(
-                f"сцена «{_imya}» сама себе противоречит: rezhim={_rezhim!r} "
-                f"с заметкой {_klyuch} — на снимке круг и блок скажут разное")
+    if _s.get("rezhim") == "proksi":
+        raise SystemExit(f"сцена «{_imya}» несёт rezhim='proksi' — прокси-режима больше нет")
+    for _pole in ("chastichnaya", "mozhno_tun", "ruchnoy_proksi", "pochemu_chastichnaya"):
+        if _pole in _s:
+            raise SystemExit(f"сцена «{_imya}» несёт поле неполного режима {_pole}")
 
 # Автозапуск, смена кода и журнал переехали на вкладку «Настройки» (спека
 # 04.08: на «Сети» — только круг, заметка режима, кнопка полной защиты и
@@ -653,6 +667,9 @@ PEREVOD_ZHDEM = [
 # живых сценах смотрим, что в блоке беды лежит ЗАГОЛОВОК, а сырое спрятано.
 ZHDEM_V_OKNE = {
     "5_slomalos": "Windows не дал создать сетевой адаптер",
+    # Отказ подъёма связи: заголовок — готовая строка службы (s.otkaz).
+    "24_tunnel_ne_podnyalsya": OTKAZY["OshibkaTunnelNePodnyalsya"],
+    "25_adapter_zanyat": OTKAZY["OshibkaAdapterZanyat"],
     "11_beda_port": "Порт занят другой программой",
     "12_beda_seti": "Сервер не ответил",
     "13_beda_konfig": "Настройки по коду доступа не читаются",
@@ -1680,7 +1697,7 @@ def kontrol_zametki_obema(br, port):
     (до правки sluzhba.go отдавал бы k.Zametka безусловно). Молчит — щуп мёртв.
     """
     sostoyanie["tek"] = dict(SCENY["21_vyklyucheno_vruchnuyu"],
-                             zametka=ZAMETKI["ZametkaBezTunnelya"])
+                             zametka=ZAMETKI["ZametkaVes"])
     str_ = br.new_page(viewport={"width": SHIRINA, "height": VYSOTA})
     str_.goto(f"http://127.0.0.1:{port}/index.html")
     str_.wait_for_timeout(700)

@@ -229,7 +229,7 @@ type notifyIconDataW struct {
 // не было двух разных мест, решающих одну и ту же судьбу аварии.
 //
 // vyhod — канал, в который пишем ровно один раз при «Выход»: дальше
-// zhdatSignal должна довести дело до s.Yadro.Ostanovit()+proksi.Snyat(),
+// zhdatSignal должна довести дело до s.Yadro.Ostanovit()+proksi.UbratSled(),
 // а не эта горутина через os.Exit.
 func zapustitTrey(vyhod chan<- struct{}) {
 	// У GUI-потока Windows свой цикл сообщений, привязанный к потоку ОС:

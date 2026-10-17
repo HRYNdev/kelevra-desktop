@@ -47,6 +47,16 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 	// должен оставить запись вчерашней.
 	smenaVersii := s.zapomnitSvoyuVersiyu()
 
+	// Без прав туннеля у этой копии быть не может, значит живое ядро прошлой
+	// копии, поднятое тоже без прав, — прокси-режим старой версии (до 0.6.77).
+	// Принимать его нельзя: человек остался бы «подключён» через браузеры.
+	// Гасим и убираем его системный прокси — эта копия живёт в сеансе
+	// человека и до его ветки реестра дотягивается.
+	if !s.estPrava() {
+		s.ubratYadroBezPrav()
+		return
+	}
+
 	papka := hranenie.PapkaYadra()
 	p, est := yadro.ProchestPeredachu(papka)
 	if !est {
@@ -132,6 +142,29 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 			s.podnyatSvyazPosleSmenyVersii(ctx, adapter)
 		}
 	}
+}
+
+// ubratYadroBezPrav — живое ядро прошлой копии при отсутствии прав: гасим (по
+// записке и по образу — только процесс, чей образ ОС подтверждает нашим
+// бинарём) и убираем системный прокси старой версии.
+func (s *Sluzhba) ubratYadroBezPrav() {
+	papka := hranenie.PapkaYadra()
+	if p, est := yadro.ProchestPeredachu(papka); est {
+		if _, zhivo := yadro.ZhivoPoZapiske(papka); zhivo && yadro.ObrazNash(p.PID, s.Yadro.Bin) {
+			log.Printf("ядро прошлой копии живо (pid %d), а прав на туннель у этой копии нет — "+
+				"это прокси-режим старой версии, гашу его", p.PID)
+			pogasitChuzhoe(p.PID)
+		}
+		yadro.UbratPeredachu(papka)
+	}
+	for _, pid := range nashiYadra(s.Yadro.Bin) {
+		if !yadro.ObrazNash(pid, s.Yadro.Bin) {
+			continue
+		}
+		log.Printf("своё ядро без хозяина (pid %d) при отсутствии прав на туннель — гашу", pid)
+		pogasitChuzhoe(pid)
+	}
+	s.snyatProksi()
 }
 
 // prinyatSirotuPoObrazu ищет своё живое ядро среди процессов по образу и
@@ -297,7 +330,7 @@ func (s *Sluzhba) otpechatokZhelaemogoKonfiga() string {
 	if err != nil {
 		return ""
 	}
-	vybor := konfig.Vybor{Prava: s.estPrava()}
+	vybor := konfig.Vybor{}
 	s.dobavitPravilaIzKesha(&vybor, false)
 	gotovyy, _, err := konfig.Prigotovit(syroy, vybor)
 	if err != nil {

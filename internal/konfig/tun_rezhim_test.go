@@ -2,7 +2,6 @@ package konfig
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -81,26 +80,16 @@ func estDeystvieMarshruta(d map[string]any, deystvie string) bool {
 // туннельном режиме: прокси висит на порту, за которым в этом конфиге никого
 // нет, и у человека не грузится ни один сайт при живом туннеле.
 func TestSPravamiTunnelOstayotsyaILishnegoVhodaNet(t *testing.T) {
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, k, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if k.Rezhim != Tunnel {
 		t.Fatalf("права есть, а режим %q", k.Rezhim)
 	}
-	if k.Chastichnaya {
-		t.Fatal("туннель поднят, а картина говорит о половинной защите — окно нарисует жёлтое «частично» на полной защите")
-	}
-	if k.PochemuChastichnaya != "" {
-		t.Fatalf("защита полная, а причина половинчатости не пуста: %q", k.PochemuChastichnaya)
-	}
 	if k.TunImya != "tun125" {
 		t.Fatalf("имя адаптера туннеля = %q, в профиле interface_name=tun125 — "+
 			"без него след на диске (internal/tunnel) не сможет проверить адаптер после аварии", k.TunImya)
-	}
-	if k.ProksiAdres != "" {
-		t.Fatalf("в туннельном режиме отдан адрес прокси %q — по нему sluzhba.PodnyatZashchitu "+
-			"напишет метку «системный прокси поставили мы» и оставит её висеть", k.ProksiAdres)
 	}
 
 	d := razobrat(t, gotovyy)
@@ -124,85 +113,12 @@ func TestSPravamiTunnelOstayotsyaILishnegoVhodaNet(t *testing.T) {
 	}
 }
 
-// TestBezPravOstayotsyaMixedIChestnyyStatus — сценарий «прав нет». Прокси
-// остаётся (иначе подключаться нечем), но подпись обязана быть честной: до
-// 31.08 окно рисовало в этом режиме ровно тот же зелёный круг «подключено»,
-// что и при поднятом туннеле.
-func TestBezPravOstayotsyaMixedIChestnyyStatus(t *testing.T) {
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{Prava: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if k.Rezhim != Proksi {
-		t.Fatalf("прав нет, а режим %q", k.Rezhim)
-	}
-	if !k.Chastichnaya {
-		t.Fatal("прав нет, защищены только браузеры и только TCP — а картина молчит о половинной защите")
-	}
-	if k.PochemuChastichnaya != PrichinaBezPrav {
-		t.Fatalf("причина половинчатости = %q, ждали %q", k.PochemuChastichnaya, PrichinaBezPrav)
-	}
-	if k.ProksiAdres != "127.0.0.1:2412" {
-		t.Fatalf("адрес прокси = %q, ждали 127.0.0.1:2412", k.ProksiAdres)
-	}
-
-	d := razobrat(t, gotovyy)
-	estMixed := false
-	for _, vh := range vhody(d) {
-		switch tip, _ := vh["type"].(string); tip {
-		case "tun":
-			t.Fatal("прав нет, а вход-туннель остался — ядро упадёт на старте")
-		case "mixed":
-			estMixed = true
-			if sp, _ := vh["set_system_proxy"].(bool); !sp {
-				t.Fatal("прокси-режим без просьбы прописать себя в системе — ядро работает, а трафик идёт мимо")
-			}
-		}
-	}
-	if !estMixed {
-		t.Fatal("прав нет и входа mixed тоже нет — подключаться нечем")
-	}
-}
-
-// Профиль без туннеля вообще: нажимать нечего, просить права незачем, и
-// причина должна быть другой — иначе окно позовёт человека на кнопку, которая
-// ничего не изменит.
-func TestBezTunnelyaVProfilePrichinaDrugaya(t *testing.T) {
-	d := razobrat(t, profil(t))
-	var bezTunnelya []any
-	for _, v := range d["inbounds"].([]any) {
-		vh := v.(map[string]any)
-		if tip, _ := vh["type"].(string); tip == "tun" {
-			continue
-		}
-		bezTunnelya = append(bezTunnelya, vh)
-	}
-	d["inbounds"] = bezTunnelya
-	syroy, err := json.Marshal(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Права есть, а туннеля в ключе нет — режим всё равно половинный.
-	_, k, err := Prigotovit(syroy, Vybor{Prava: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if k.EstTunnel {
-		t.Fatal("туннель из профиля убран, а картина его видит")
-	}
-	if !k.Chastichnaya || k.PochemuChastichnaya != PrichinaBezTunnelya {
-		t.Fatalf("картина = (частичная %v, причина %q), ждали (true, %q)",
-			k.Chastichnaya, k.PochemuChastichnaya, PrichinaBezTunnelya)
-	}
-}
-
 // TestVRezhimeTunnelyaFakeipZhivoyISvyazkaTselaya — fakeip оживает только в
 // туннельном режиме, и связка обязана быть целой с ОБЕИХ сторон: сервер, на
 // который ссылаются из dns.rules, и перехват DNS в route.rules, без которого
 // запросы программ до ядра не доходят и выдуманные адреса не выдаются никогда.
 func TestVRezhimeTunnelyaFakeipZhivoyISvyazkaTselaya(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +160,7 @@ func TestVRezhimeTunnelyaPerehvatDnsDobavlyaetsyaEsliEgoNet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(syroy, Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +175,7 @@ func TestVRezhimeTunnelyaPerehvatDnsDobavlyaetsyaEsliEgoNet(t *testing.T) {
 // будущего правила, написанного не глядя; вместе с ним обязано погаснуть и
 // хранение его карты между запусками.
 func TestVRezhimeTunnelyaFakeipBezSsylokUhoditVmesteSHranilishchem(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true, BezSetevyhPravil: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{BezSetevyhPravil: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,72 +189,6 @@ func TestVRezhimeTunnelyaFakeipBezSsylokUhoditVmesteSHranilishchem(t *testing.T)
 	}
 }
 
-// TestVRezhimeProksiFakeipObezvrezhen — запасной режим. fakeip тут не работает
-// вовсе (DNS Windows делает мимо ядра), но опасен он не бездействием, а тем,
-// что может сработать НАПОЛОВИНУ: программа, спросившая DNS через сам прокси,
-// получит 198.18.x.x и пойдёт по этому адресу напрямую, мимо прокси, — в
-// никуда. Поэтому сервер убирается, а ссылки на него переводятся на обычный
-// резолвер: ядро на ссылку в никуда попросту не запустится.
-func TestVRezhimeProksiFakeipObezvrezhen(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := razobrat(t, gotovyy)
-	if serveryDns(t, d)["fakeip"] != nil {
-		t.Fatal("в прокси-режиме сервер fakeip остался — он может сработать наполовину и увести программу в никуда")
-	}
-	if naFakeipSsylayutsya(d, "fakeip") {
-		t.Fatal("сервера fakeip нет, а правила dns.rules всё ещё на него ссылаются — ядро не запустится")
-	}
-	if v, est := storeFakeip(t, d); !est || v {
-		t.Fatalf("store_fakeip = (%v, задан %v), ждали (false, true)", v, est)
-	}
-	// Ссылки должны быть переведены на обычный резолвер (dns.final), а не
-	// стёрты: правило без сервера означало бы другой маршрут запроса.
-	perevedeno := false
-	perebratDnsPravila(d, func(pr map[string]any) {
-		if srv, _ := pr["server"].(string); srv == "local" {
-			perevedeno = true
-		}
-	})
-	if !perevedeno {
-		t.Fatal("ни одно правило dns.rules не переведено на обычный резолвер — правила про два десятка rule_set потеряли сервер")
-	}
-}
-
-// TestVRezhimeProksiPryamoyResolverCherezSistemu — вторая половина беды 31.08.
-// route.final в профиле "direct", и всё, что не попало ни в один rule_set,
-// идёт напрямую; резолвит эти домены сервер "local", который на самом деле
-// tcp://1.1.1.1. В журнале ядра он умирал, и половина интернета переставала
-// открываться при зелёном круге. В прокси-режиме туннеля нет, системный
-// резолвер НЕ перехвачен — значит он по определению тот, который на этой сети
-// работает (домашний роутер человека, гостевой портал, корпоративный DNS).
-func TestVRezhimeProksiPryamoyResolverCherezSistemu(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	local := serveryDns(t, razobrat(t, gotovyy))["local"]
-	if local == nil {
-		t.Fatal("резолвер прямого выхода исчез из конфига целиком")
-	}
-	if tip, _ := local["type"].(string); tip != "local" {
-		t.Fatalf("резолвер прямого выхода = %q, ждали \"local\" (системный): зашитый tcp://1.1.1.1 — "+
-			"первая мишень провайдера, и когда он падает, вместе с ним падает всё, что не попало в rule_set", tip)
-	}
-	// Тип local полей tcp-сервера не знает, и ядро на них ругается: объект
-	// обязан быть новым, а не подправленным старым.
-	for _, lishnee := range []string{"server", "server_port", "detour"} {
-		if _, est := local[lishnee]; est {
-			t.Fatalf("у резолвера типа local осталось поле %q от прежнего tcp-сервера — ядро на нём заругается", lishnee)
-		}
-	}
-	if strings.Contains(string(gotovyy), "1.1.1.1") {
-		t.Fatal("в готовом конфиге прокси-режима остался адрес 1.1.1.1 — тот самый резолвер, который умирал в журнале")
-	}
-}
-
 // В туннельном режиме подменять резолвер прямого выхода на СИСТЕМНЫЙ (тип
 // "local") нельзя: с поднятым tun системный резолвер сам завёрнут в ядро, и
 // спрашивать его — замкнуть петлю на себя. Какой именно протокол (tcp/udp)
@@ -346,7 +196,7 @@ func TestVRezhimeProksiPryamoyResolverCherezSistemu(t *testing.T) {
 // TestVRezhimeTunnelyaPryamoyResolverStanovitsyaUdpNeTcp ниже; этот тест
 // сторожит только то, что это никогда не "local".
 func TestVRezhimeTunnelyaPryamoyResolverNeTrogaem(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +219,7 @@ func TestVRezhimeTunnelyaPryamoyResolverNeTrogaem(t *testing.T) {
 // нечего, каждый запрос — новый пакет; адрес и маршрут резолвера остаются
 // прежними.
 func TestVRezhimeTunnelyaPryamoyResolverStanovitsyaUdpNeTcp(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}

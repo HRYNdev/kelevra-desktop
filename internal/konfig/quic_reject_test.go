@@ -61,7 +61,7 @@ func schyotUdp443Pravil(pravila []map[string]any) int {
 }
 
 func TestPrigotovitDobavlyaetPraviloRezhaSchayeyeQuicOdinRaz(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestPrigotovitDobavlyaetPraviloRezhaSchayeyeQuicOdinRaz(t *testing.T) {
 // прогон) не должен дублировать правило про udp/443 и не должен портить его
 // место в списке.
 func TestPrigotovitPravilomQuicIdempotentno(t *testing.T) {
-	pervyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	pervyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestPrigotovitPravilomQuicIdempotentno(t *testing.T) {
 	// Второй прогон на уже подготовленном профиле: имитирует то, что
 	// случится, если Prigotovit случайно позовут дважды подряд на одном и
 	// том же теле (переоткрытие подключения, повторная попытка и т.п.).
-	vtoroy, _, err := Prigotovit(pervyy, Vybor{Prava: true})
+	vtoroy, _, err := Prigotovit(pervyy, Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestPrigotovitNeTrogayetSvoyeUdp443(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(syroy, Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestPraviloUdp443OgranichenoVhodamiPolzovatelya(t *testing.T) {
 	// поднятым туннелем это лишний открытый порт, на который может смотреть
 	// системный прокси, — ровно та авария 31.08, когда прокси остался висеть
 	// на мёртвом порту и у человека пропал интернет.
-	sPravami, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	sPravami, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,32 +253,6 @@ func TestPraviloUdp443OgranichenoVhodamiPolzovatelya(t *testing.T) {
 		t.Fatal("в туннельном режиме выброшенный mixed-in всё ещё упомянут в готовом конфиге")
 	}
 
-	// Без прав: tun-in выбрасывается целиком (Prigotovit, случай !estPrava).
-	// Если бы теги брались один раз ДО фильтрации входов, правило осталось
-	// бы со ссылкой на уже несуществующий tun-in — ровно та беда, которую
-	// pochistitPravila чинит для правил профиля.
-	bezPrav, _, err := Prigotovit(profil(t), Vybor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pravilaBezPrav := pravilaRoute(t, bezPrav)
-	idx = -1
-	for i, p := range pravilaBezPrav {
-		if praviloUdp443(p) {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		t.Fatal("правило про udp/443 не нашлось (без прав)")
-	}
-	hochuBezPrav := map[string]bool{"mixed-in": true}
-	if got := tegiMnozhestvom(t, pravilaBezPrav[idx]["inbound"]); !mapsRavny(got, hochuBezPrav) {
-		t.Fatalf("inbound правила про udp/443 без прав = %v, хочу %v — tun-in выброшен, ссылки на него быть не должно", got, hochuBezPrav)
-	}
-	if strings.Contains(string(bezPrav), `"tun-in"`) {
-		t.Fatal("выброшенный tun-in всё ещё где-то упомянут в готовом конфиге")
-	}
 }
 
 func mapsRavny(a, b map[string]bool) bool {

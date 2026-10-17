@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/kopiya"
 )
 
@@ -148,6 +149,16 @@ func zhdatZamenu(url, papka string, shag, srok time.Duration) (string, bool) {
 		}
 		if adres, est := kopiya.Nayti(papka); est && adres != url {
 			return adres, false
+		}
+		// Служба Windows живёт меткой в ОБЩЕЙ папке, а окно, открытое до её
+		// установки, знает папку человека (только этот случай — окно другой
+		// папки, стенд или проверка, в общую не смотрит). После «Дать права» служебное в
+		// сеансе человека уступает место службе (peredat_mesto.go) — и окно
+		// обязано найти её там, а не закрыться через минуту.
+		if obshchaya := hranenie.PapkaSluzhbyWindows(); obshchaya != "" && obshchaya != papka && papka == hranenie.PapkaLichnaya() {
+			if adres, est := kopiya.Nayti(obshchaya); est && adres != url {
+				return adres, false
+			}
 		}
 	}
 	return "", false

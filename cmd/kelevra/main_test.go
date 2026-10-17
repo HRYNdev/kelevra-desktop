@@ -3,8 +3,6 @@ package main
 import (
 	"errors"
 	"testing"
-
-	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
 
 // TestTihiyZapusk держит различие, которое я дважды подряд стирал (см.
@@ -15,7 +13,7 @@ import (
 // Наборы аргументов взяты не с потолка, а те, что приложение шлёт себе само:
 //
 //	cmd/kelevra/obnovlenie.go   zapustitSmenuPosleObnovleniya: --tiho --smena <pid>
-//	internal/prava/prava_windows.go  Poprosit:                        --smena <pid>
+//	(до 0.6.77) prava.Poprosit, кнопка прав:                          --smena <pid>
 //	internal/zapusk (автозапуск с Windows):                           --tiho
 //	человек щёлкнул по значку:                                        (без аргументов)
 func TestTihiyZapusk(t *testing.T) {
@@ -96,84 +94,53 @@ func TestPriStarteZapusk(t *testing.T) {
 	}
 }
 
-// TestNuzhnoSprositPravaNaStarte — заказ 29.08: подтверждение прав должно
-// вылезать при старте программы и больше не мешать. Функция решает,
-// не исполняет — тест покрывает все четыре сторожа разом, включая тот самый,
-// из-за которого автозапрос по коннекту у существующих установок молчит
-// (см. её комментарий и hranenie.Zagruzit).
-func TestNuzhnoSprositPravaNaStarte(t *testing.T) {
+// TestNuzhnoStavitSluzhbuNaStarte — решение 17.10: без службы Windows Kelevra
+// не работает, и запуск руками сразу просит права на её установку. Не просит
+// там, где человек приложение не открывал (автозапуск, смена после
+// обновления), где служба уже стоит или где рядом живая копия (клик по трею).
+func TestNuzhnoStavitSluzhbuNaStarte(t *testing.T) {
+	sbo := errors.New("диспетчер служб не ответил")
 	sluchai := []struct {
 		imya              string
-		estPrava          bool
+		os                string
+		sluzhbaEst        bool
+		oshibka           error
 		tiho              bool
 		smenaPID          int
 		estChuzhayaKopiya bool
 		hochet            bool
 	}{
-		{"чистый старт без прав — спросить", false, false, 0, false, true},
-		{"права уже есть — не спрашивать", true, false, 0, false, false},
-		{"тихий автозапуск/автообновление — не спрашивать", false, true, 0, false, false},
-		{"это уже смена режима — не спрашивать снова", false, false, 4321, false, false},
-		{"рядом висит живая копия — не мешать кликом по трею", false, false, 0, true, false},
+		{"первый запуск без службы — просить", "windows", false, nil, false, 0, false, true},
+		{"служба уже стоит — не просить", "windows", true, nil, false, 0, false, false},
+		{"диспетчер служб не ответил — не лезть", "windows", false, sbo, false, 0, false, false},
+		{"тихий автозапуск — не просить", "windows", false, nil, true, 0, false, false},
+		{"смена после обновления — своим путём", "windows", false, nil, true, 4321, false, false},
+		{"смена без --tiho — не просить второй раз", "windows", false, nil, false, 4321, false, false},
+		{"рядом живая копия — её окно покажет «Дать права»", "windows", false, nil, false, 0, true, false},
+		{"не Windows — служб нет", "linux", false, nil, false, 0, false, false},
 	}
 	for _, s := range sluchai {
 		t.Run(s.imya, func(t *testing.T) {
-			got := nuzhnoSprositPravaNaStarte(s.estPrava, s.tiho, s.smenaPID, s.estChuzhayaKopiya)
+			got := nuzhnoStavitSluzhbuNaStarte(s.os, s.sluzhbaEst, s.oshibka, s.tiho, s.smenaPID, s.estChuzhayaKopiya)
 			if got != s.hochet {
-				t.Errorf("nuzhnoSprositPravaNaStarte(%v,%v,%v,%v) = %v, ждали %v",
-					s.estPrava, s.tiho, s.smenaPID, s.estChuzhayaKopiya, got, s.hochet)
+				t.Errorf("nuzhnoStavitSluzhbuNaStarte = %v, ждали %v", got, s.hochet)
 			}
 		})
 	}
 }
 
-// TestSprositPravaNaStarteOtkazProdolzhaet — человек нажал «Нет» в UAC:
-// приложение обязано продолжить обычный запуск (прокси-режим), а не уйти,
-// как при согласии. Отметку «уже спрашивали» при этом всё равно обязано
-// сохранить — иначе тот же человек увидит второй попап при первом подключении
-// (см. sluzhba.zaprositPravaAvtomaticheskiEsliNado).
-func TestSprositPravaNaStarteOtkazProdolzhaet(t *testing.T) {
-	t.Setenv("KELEVRA_DIR", t.TempDir())
+// Отказ в окне Windows не валит запуск: окно откроется на «Нужны права».
+// Согласие — служба поставлена, запуск продолжается к ней.
+func TestPostavitSluzhbuNaStarteOtkazISoglasie(t *testing.T) {
+	staryy := poprositUstanovkuSluzhby
+	defer func() { poprositUstanovkuSluzhby = staryy }()
 
-	staryyHook := poprositPravaPriStarte
-	defer func() { poprositPravaPriStarte = staryyHook }()
-	poprositPravaPriStarte = func(smenaPID int) error {
-		return errors.New("права не выданы")
+	poprositUstanovkuSluzhby = func(okno uintptr) error { return errors.New("права не выданы") }
+	if postavitSluzhbuNaStarte() {
+		t.Fatal("при отказе в правах сказано «служба поставлена»")
 	}
-
-	uyti := sprositPravaNaStarte(hranenie.Papka())
-	if uyti {
-		t.Fatal("при отказе sprositPravaNaStarte велела уйти — приложение осталось бы без прав и без окна")
-	}
-
-	n, err := hranenie.Zagruzit()
-	if err != nil {
-		t.Fatalf("не прочитал настройки: %v", err)
-	}
-	if !n.UzheSprosiliPrava() {
-		t.Fatal("отказ не сохранил отметку «уже спрашивали» — автозапрос по коннекту спросит ещё раз")
-	}
-}
-
-// TestSprositPravaNaStarteSoglasieVelitUyti — согласие в UAC обязано вернуть
-// «уйти»: новая, уже повышенная копия поднимется сама, а эта — лишняя.
-func TestSprositPravaNaStarteSoglasieVelitUyti(t *testing.T) {
-	t.Setenv("KELEVRA_DIR", t.TempDir())
-
-	staryyHook := poprositPravaPriStarte
-	defer func() { poprositPravaPriStarte = staryyHook }()
-	poprositPravaPriStarte = func(smenaPID int) error { return nil }
-
-	uyti := sprositPravaNaStarte(hranenie.Papka())
-	if !uyti {
-		t.Fatal("при согласии sprositPravaNaStarte не велела уйти — на машине останутся две копии")
-	}
-
-	n, err := hranenie.Zagruzit()
-	if err != nil {
-		t.Fatalf("не прочитал настройки: %v", err)
-	}
-	if !n.UzheSprosiliPrava() {
-		t.Fatal("согласие не сохранило отметку «уже спрашивали»")
+	poprositUstanovkuSluzhby = func(okno uintptr) error { return nil }
+	if !postavitSluzhbuNaStarte() {
+		t.Fatal("при согласии сказано «служба не поставлена»")
 	}
 }

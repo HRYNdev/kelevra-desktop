@@ -29,11 +29,9 @@ func TestPodnimayushchiysyaTunnelSchitaetsyaStoyashchimNaPutiZondov(t *testing.T
 		{"работает в режиме туннеля", yadro.Rabotaet, konfig.Tunnel, true},
 		{"стоит", yadro.Stoit, konfig.Tunnel, false},
 		{"сломалось", yadro.Slomalos, konfig.Tunnel, false},
-		// В половинном режиме ядро прописано системным прокси, а зонды ходят
-		// мимо него (net.Resolver прокси не читает) — там они мерят
-		// настоящую сеть и слепыми не становятся.
-		{"поднимается в половинном режиме", yadro.Podnimaem, konfig.Proksi, false},
-		{"работает в половинном режиме", yadro.Rabotaet, konfig.Proksi, false},
+		// Конфиг ещё не собран (режим пуст) — туннеля нет, зонды мерят
+		// настоящую сеть.
+		{"конфиг не собран", yadro.Rabotaet, "", false},
 	}
 	for _, s := range sluchai {
 		t.Run(s.imya, func(t *testing.T) {

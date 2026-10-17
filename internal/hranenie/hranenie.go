@@ -74,6 +74,35 @@ func PapkaObshchaya() string {
 	return filepath.Join(d, "Kelevra")
 }
 
+// PapkaLichnaya — папка данных в профиле человека (%LOCALAPPDATA%\Kelevra),
+// где жили данные до службы Windows. Нужна уборке за старыми версиями: метка
+// системного прокси (internal/proksi) при переезде в общую папку не
+// переносится и остаётся лежать здесь. Пусто — такой папки на этой системе
+// не бывает, или задан KELEVRA_DIR: стенд и проверки живут в своей папке и
+// в настоящие папки человека не смотрят.
+func PapkaLichnaya() string {
+	if runtime.GOOS != "windows" || os.Getenv("KELEVRA_DIR") != "" {
+		return ""
+	}
+	d := os.Getenv("LOCALAPPDATA")
+	if d == "" {
+		return ""
+	}
+	return filepath.Join(d, "Kelevra")
+}
+
+// PapkaSluzhbyWindows — где служба Windows оставляет метку своего адреса:
+// общая папка. Пусто — службы на этой системе не бывает, или задан
+// KELEVRA_DIR: стенд и проверки не должны находить НАСТОЯЩУЮ службу машины,
+// на которой идут (17.10: проверка сторожа окна на ПК нашла живую службу и
+// «перевела окно» на неё).
+func PapkaSluzhbyWindows() string {
+	if os.Getenv("KELEVRA_DIR") != "" {
+		return ""
+	}
+	return PapkaObshchaya()
+}
+
 // PapkaYadra — куда кладётся бинарь sing-box и его рабочий конфиг.
 func PapkaYadra() string { return filepath.Join(Papka(), "yadro") }
 
@@ -370,4 +399,32 @@ func novyyID() string {
 		return "0000000000000000"
 	}
 	return hex.EncodeToString(b)
+}
+
+// imyaFlagaPodklyuchit — флаг «подключиться, как только служба Windows
+// встанет». Пишет его установщик службы (vinsluzhba.UstanovitPolnostyu) ДО
+// регистрации службы, снимает сама служба на первом старте
+// (sluzhba.PodklyuchitPosleUstanovki). Человек давал права ради того, чтобы
+// заработало, — значит после установки связь поднимается сама, без второго
+// нажатия.
+const imyaFlagaPodklyuchit = "podklyuchit_posle_ustanovki"
+
+// OtmetitPodklyuchitPosleUstanovki кладёт флаг в папку данных.
+func OtmetitPodklyuchitPosleUstanovki() error {
+	if err := os.MkdirAll(Papka(), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(Papka(), imyaFlagaPodklyuchit), []byte("1"), 0o600)
+}
+
+// ZabratFlagPodklyuchit — был ли флаг; снимает его в любом случае, чтобы
+// подключение после установки случилось ровно один раз.
+func ZabratFlagPodklyuchit() bool {
+	put := filepath.Join(Papka(), imyaFlagaPodklyuchit)
+	_, err := os.Stat(put)
+	if err != nil {
+		return false
+	}
+	_ = os.Remove(put)
+	return true
 }

@@ -42,6 +42,12 @@ func UstanovitPolnostyu(putExe string) error {
 			log.Printf("ВНИМАНИЕ: данные не перенеслись из %s: %v", staraya, err)
 		}
 	}
+	// Флаг «подключиться после установки» — до регистрации: служба стартует
+	// сразу после неё и на первом же старте его читает
+	// (sluzhba.PodklyuchitPosleUstanovki).
+	if err := hranenie.OtmetitPodklyuchitPosleUstanovki(); err != nil {
+		log.Printf("флаг подключения после установки не записан: %v", err)
+	}
 	return Ustanovit(putExe)
 }
 

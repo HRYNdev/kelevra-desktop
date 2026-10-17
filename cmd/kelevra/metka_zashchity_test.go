@@ -6,13 +6,9 @@ import (
 	"testing"
 )
 
-// Подсказка значка обязана различать полную защиту и половинную.
-//
-// До 31.08 она была константой «Kelevra: VPN включён» и звучала одинаково: и
-// когда через Kelevra шёл весь трафик машины, и когда шли только браузеры и
-// только TCP (весь UDP, а с ним QUIC и YouTube, — мимо), и когда защиты не
-// было вовсе. Копия висит в трее неделями, окно человек открывает редко —
-// эта строка и есть то, чем приложение отчитывается о себе.
+// Подсказка значка обязана говорить правду о состоянии связи: до 31.08 она
+// была константой «Kelevra: VPN включён» и висела и на опущенной защите.
+// Неполного режима с 0.6.77 нет — значит и половинной подсказки нет.
 
 // chistayaMetka возвращает обе метки (защиты и обновления) в исходное
 // состояние и делает это ПОСЛЕ теста тоже: обе живут в пакетных переменных, и
@@ -27,96 +23,54 @@ func chistayaMetka(t *testing.T) {
 	})
 }
 
-func TestPodskazkaRazlichaetObyomZashchity(t *testing.T) {
+func TestPodskazkaGovoritPravduOSvyazi(t *testing.T) {
 	chistayaMetka(t)
 
-	// Служба только поднялась: про защиту значку ещё ничего не сказали.
+	// Служба только поднялась: про связь значку ещё ничего не сказали.
 	if got := podskazkaTreya(); got != podskazkaBezObnovleniya {
-		t.Fatalf("до подъёма защиты подсказка = %q, ждали %q", got, podskazkaBezObnovleniya)
+		t.Fatalf("до подъёма связи подсказка = %q, ждали %q", got, podskazkaBezObnovleniya)
 	}
 
-	pometitZashchituBezZnachka(true, false, "")
-	polnaya := podskazkaTreya()
-	if polnaya != podskazkaPolnayaZashchita {
-		t.Fatalf("полная защита: подсказка = %q, ждали %q", polnaya, podskazkaPolnayaZashchita)
+	pometitZashchituBezZnachka(true)
+	if got := podskazkaTreya(); got != podskazkaPolnayaZashchita {
+		t.Fatalf("связь поднята: подсказка = %q, ждали %q", got, podskazkaPolnayaZashchita)
 	}
-
-	pometitZashchituBezZnachka(true, true, "Windows не дал Kelevra прав администратора")
-	polovinnaya := podskazkaTreya()
-	if polovinnaya == polnaya {
-		t.Fatalf("половинная защита говорит значку то же самое, что полная: %q — "+
-			"ровно эта неразличимость и есть беда 31.08", polovinnaya)
-	}
-	// Проверяем СМЫСЛ, а не букву: подсказка обязана назвать неполноту.
-	// Формулировка менялась дважды — 31.08 из неё ушло слово «защита»,
-	// 09.09 ушло и «частично» (владелец продукта: такого режима у него быть
-	// не должно, а слово «защита» неверно по сути). Поэтому маркером стоит
-	// «не полностью» — то, чем неполнота названа сейчас.
-	if !strings.Contains(polovinnaya, "не полностью") {
-		t.Fatalf("подсказка неполного подключения = %q — в ней не сказано, что подключено не всё", polovinnaya)
-	}
-	// Слова «защита» в подсказке быть не должно ни в одном состоянии — ровно
-	// то, про что спрашивали 22.08 и 23.08.
-	for _, p := range []string{podskazkaBezObnovleniya, podskazkaPolnayaZashchita, podskazkaChastichnayaZashchita} {
-		if strings.Contains(strings.ToLower(p), "защит") {
-			t.Errorf("подсказка значка снова говорит про «защиту»: %q", p)
+	// Ни «защиты», ни неполноты в подсказках быть не должно ни в одном
+	// состоянии.
+	for _, p := range []string{podskazkaBezObnovleniya, podskazkaPolnayaZashchita} {
+		nizhnie := strings.ToLower(p)
+		for _, slovo := range []string{"защит", "не полностью", "частично", "только браузеры"} {
+			if strings.Contains(nizhnie, slovo) {
+				t.Errorf("подсказка значка %q содержит «%s»", p, slovo)
+			}
 		}
 	}
 
-	// Защиту опустили — подсказка обязана вернуться к «защиты нет», а не
-	// пересказывать вчерашний режим.
-	pometitZashchituBezZnachka(false, true, "неважно")
+	// Связь опустили — подсказка обязана вернуться к «отключено».
+	pometitZashchituBezZnachka(false)
 	if got := podskazkaTreya(); got != podskazkaBezObnovleniya {
-		t.Fatalf("после опускания защиты подсказка = %q, ждали %q", got, podskazkaBezObnovleniya)
+		t.Fatalf("после опускания связи подсказка = %q, ждали %q", got, podskazkaBezObnovleniya)
 	}
 }
 
-// Обновление ждёт тычка днями. Раньше находка версии подменяла подсказку
-// ЦЕЛИКОМ — и всё это время значок молчал о том, половинная у человека защита
-// или полная. Ставить обновление важно, но не важнее, чем знать, что YouTube
-// идёт мимо VPN: обе вещи обязаны уместиться в одну строку.
-func TestObnovlenieNeVytesnyaetObyomZashchity(t *testing.T) {
+// Обновление ждёт тычка днями: находка версии не имеет права вытеснить из
+// подсказки состояние связи — обе вещи обязаны уместиться в одну строку.
+func TestObnovlenieNeVytesnyaetSostoyanieSvyazi(t *testing.T) {
 	chistayaMetka(t)
-	pometitZashchituBezZnachka(true, true, "")
+	pometitZashchituBezZnachka(true)
 	zapomnitObnovlenie("0.6.27")
 
 	podskazka := podskazkaTreya()
-	// «не полностью» — см. тот же довод в TestPodskazkaRazlichaetObyomZashchity.
-	if !strings.Contains(podskazka, "не полностью") {
-		t.Fatalf("подсказка = %q — обновление вытеснило объём подключения", podskazka)
+	if !strings.Contains(podskazka, "подключено") {
+		t.Fatalf("подсказка = %q — обновление вытеснило состояние связи", podskazka)
 	}
 	if !strings.Contains(podskazka, "0.6.27") || !strings.Contains(podskazka, "Обновить") {
 		t.Fatalf("подсказка = %q — из неё пропало обновление или указание, чем его ставить", podskazka)
 	}
 	// szTip у NOTIFYICONDATAW — 128 UTF-16 слов вместе с нулём, то есть 127
-	// знаков. Длинное kopirovatStrokuUTF16 режет само, но резать оно будет
-	// ХВОСТ — а в хвосте у нас как раз обновление. Сторож на глаза: если
-	// строка перестанет влезать, это надо увидеть тут, а не на машине человека.
+	// знаков: длинное режется по хвосту, а в хвосте как раз обновление.
 	if n := len([]rune(podskazka)); n > 127 {
 		t.Fatalf("подсказка длиной %d знаков не влезет в szTip (127): %q", n, podskazka)
-	}
-}
-
-// Причина половинчатости в szTip не влезает и туда не идёт, но потеряться
-// не должна: она уходит в журнал, а журнал — единственный способ узнать
-// правду с машины человека.
-func TestPrichinaPolovinnoyZashchityDostupnaOtdelno(t *testing.T) {
-	chistayaMetka(t)
-	const prichina = "Windows не дал Kelevra прав администратора: без них через неё проходят только браузеры."
-
-	pometitZashchituBezZnachka(true, true, prichina)
-	if got := prichinaChastichnoyZashchity(); got != prichina {
-		t.Fatalf("причина половинчатости = %q, ждали %q", got, prichina)
-	}
-	// Полная защита причины не имеет — выдумывать её нечего.
-	pometitZashchituBezZnachka(true, false, prichina)
-	if got := prichinaChastichnoyZashchity(); got != "" {
-		t.Fatalf("защита полная, а причина половинчатости = %q", got)
-	}
-	// Опущенная защита — тем более.
-	pometitZashchituBezZnachka(false, true, prichina)
-	if got := prichinaChastichnoyZashchity(); got != "" {
-		t.Fatalf("защита опущена, а причина половинчатости = %q", got)
 	}
 }
 
@@ -128,8 +82,8 @@ func TestMetkaZashchityPerezhivaetOdnovremennoeChtenieIZapis(t *testing.T) {
 	var gruppa sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		gruppa.Add(2)
-		go func() { defer gruppa.Done(); pometitZashchituBezZnachka(true, true, "причина") }()
-		go func() { defer gruppa.Done(); _ = podskazkaTreya(); _ = prichinaChastichnoyZashchity() }()
+		go func() { defer gruppa.Done(); pometitZashchituBezZnachka(true) }()
+		go func() { defer gruppa.Done(); _ = podskazkaTreya() }()
 	}
 	gruppa.Wait()
 }

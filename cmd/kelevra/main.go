@@ -27,21 +27,19 @@ import (
 )
 
 // argSluzhba/argTiho — режимы запуска этого же .exe (см. шапку файла).
-// argSmena — не режим, а сообщение от прошлой, ещё не повышенной копии:
-// значение после флага — её pid (см. prava.Poprosit и polnayaZashchita).
-// argPriStarte — сообщение той же природы, что и argSmena: новая, уже
-// повышенная копия узнаёт из него, что смена вызвана запросом прав СРАЗУ ПРИ
-// СТАРТЕ (sprositPravaNaStarte), а не кнопкой «Включить для всех программ»
-// (polnayaZashchita). Разница важна ровно в одном месте — vosstanovitPolnuyuZashchitu
-// не должна сама дёргать /api/podklyuchit: человек только открыл программу и
-// ничего подключать не просил.
+// argSmena — не режим, а сообщение от прошлой копии: значение после флага —
+// её pid (смена после обновления, zapustitSmenuPosleObnovleniya; перезапуск
+// значка). argPriStarte — сообщение старых версий (запрос прав всего
+// приложения при старте, до 0.6.77); новые его не шлют, разбор оставлен,
+// чтобы такая смена не открыла лишнего окна (pokazatLiOkno).
 const (
 	argSluzhba   = "--sluzhba"
 	argTiho      = "--tiho"
 	argSmena     = "--smena"
 	argPriStarte = "--pri-starte"
 	// Установка службы Windows: единственное действие, ради которого
-	// приложение просит администратора, и просит один раз за установку.
+	// приложение просит администратора (первый запуск, «Дать права», после
+	// обновления со старой версии без службы).
 	argPostavitSluzhbu = "--postavit-sluzhbu"
 	// Значок в трее без окна. Нужен вместе со службой Windows: она держит
 	// туннель, но показать значок из неё нельзя — у службы нет сеанса, в
@@ -64,6 +62,18 @@ const srokOzhidaniyaSmeny = 10 * time.Second
 // диске, а в реальном отказе (см. umeret ниже).
 const srokPodnyatiyaSluzhby = 20 * time.Second
 
+// srokUstanovkiSluzhby — сколько ждать копию с правами, которая ставит службу
+// Windows (--postavit-sluzhbu): создание общей папки, права на неё (icacls),
+// перенос данных, регистрация и запуск службы. Окно согласия Windows в этот
+// срок не входит — ShellExecuteExW возвращается уже после ответа человека.
+const srokUstanovkiSluzhby = 2 * time.Minute
+
+// poprositUstanovkuSluzhby — просьба прав и установка службы Windows с
+// ожиданием итога. Точка подмены для тестов: настоящий UAC в них не показать.
+var poprositUstanovkuSluzhby = func(okno uintptr) error {
+	return prava.PoprositIZhdat(okno, argPostavitSluzhbu, srokUstanovkiSluzhby)
+}
+
 func main() {
 	papka := hranenie.Papka()
 	putZhurnala, zakryt := otkrytZhurnal(papka)
@@ -71,10 +81,10 @@ func main() {
 
 	// Окно и служба — теперь РАЗНЫЕ процессы одного .exe (беда 20.08: окно и
 	// служба жили в одном процессе, и крестик на окне гасил ядро с прокси
-	// молча). Прокси ставит и снимает только служба, поэтому только она имеет
-	// право звать proksi.Snyat() из lovitPaniku — окну чужой прокси не трогать.
+	// молча). Системный прокси с 0.6.77 не ставит никто; уборку прокси старых
+	// версий (proksi.UbratSled) из lovitPaniku зовёт только служба.
 	// Исключение — snyatOsirotevshiySled ниже: это не «окно гасит прокси
-	// живой службы», а уборка за службой, которая уже доказанно мертва
+	// живой службы», а уборка за старой версией, которая уже доказанно мертва
 	// (без этого исключения жёсткая смерть процесса, которую не ловит ни
 	// один сигнал, оставляла бы прокси висеть навсегда — см. её комментарий).
 	//
@@ -146,11 +156,11 @@ func main() {
 		return
 	}
 
-	// Жёсткая смерть предыдущего запуска (Диспетчер задач, выключение или
-	// перезагрузка Windows, пропадание питания) не даёт службе дойти до
-	// proksi.Snyat() в конце zapustitSluzhbu — реестр остаётся с нашим прокси
-	// висеть без ядра за ним, и у человека НЕ грузится ни один сайт, пока он
-	// сам не откроет Kelevra и не выйдет аккуратно.
+	// Системный прокси, оставленный СТАРОЙ версией (прокси-режим до 0.6.77):
+	// жёсткая смерть её процесса или обновление из прокси-режима оставляют
+	// запись в реестре человека висеть без ядра за ней, и у человека НЕ
+	// грузится ни один сайт. Новые версии прокси не ставят; убрать чужой
+	// след — наше дело (snyatOsirotevshiySled).
 	snyatOsirotevshiySled(papka)
 	// То же самое для туннеля (вывод у проверки другой: там снимать нечего,
 	// там надо УБЕДИТЬСЯ, что после жёсткой смерти ничего не осталось) стоит
@@ -168,30 +178,37 @@ func main() {
 	// остаётся только уборка ХВОСТА прошлого обновления.
 	ubratHvostProshlogoObnovleniya()
 
-	// --smena <pid> — эта копия только что повышена через UAC из
-	// polnayaZashchita: старая копия (тот самый pid) ещё может быть жива и
-	// держит метку. adresKopii ждёт её смерти сама, а не идёт по обычной
+	// --smena <pid> — эта копия поднята сменой (после обновления): старая
+	// копия (тот самый pid) ещё может быть жива и держит метку. adresKopii
+	// ждёт её смерти сама, а не идёт по обычной
 	// ветке «нашёл чужую живую копию» (см. её комментарий).
 	smenaPID, _ := argSmenaPID()
 
 	tiho := tihiyZapusk(os.Args)
 	priStarte := priStarteZapusk(os.Args)
 
-	// Заказ 29.08: подтверждение прав должно вылезать при старте программы и
-	// больше не мешать — окно UAC теперь спрашивается сразу тут,
-	// ДО adresKopii (иначе уже открытое окно мигнуло бы поверх запроса прав).
-	// nuzhnoSprositPravaNaStarte и её комментарий держат все условия разом.
+	// Службы Windows нет — сперва просим права на её установку (решение
+	// владельца 17.10: «скачал, дал права админа, ВСЁ, РАБОТАЕТ»). Неполного
+	// режима без прав больше нет, и открыть окно без службы значит открыть его
+	// на «Не подключено». Просим ДО adresKopii: иначе уже открытое окно
+	// мигнуло бы поверх запроса прав, а своё служебное без прав поднялось бы
+	// впустую. Отказ — окно откроется на «Для работы Kelevra нужны права
+	// администратора» с кнопкой «Дать права».
+	//
 	// estChuzhayaKopiya считаем, только когда остальные условия уже пройдены:
 	// kopiya.Nayti при мёртвой метке ждёт ответа до kopiya.Skolko, и платить
-	// эту цену на КАЖДОМ обычном запуске (когда права и так уже есть) незачем.
-	estPrava := prava.Est()
+	// эту цену на КАЖДОМ обычном запуске незачем.
+	sluzhbaEst, errSluzhby := vinsluzhba.Ustanovlena()
 	estChuzhayaKopiya := false
-	if !estPrava && !tiho && smenaPID == 0 {
+	if !sluzhbaEst && errSluzhby == nil && !tiho && smenaPID == 0 {
 		_, estChuzhayaKopiya = kopiya.Nayti(papka)
 	}
-	if nuzhnoSprositPravaNaStarte(estPrava, tiho, smenaPID, estChuzhayaKopiya) {
-		if sprositPravaNaStarte(papka) {
-			return
+	if nuzhnoStavitSluzhbuNaStarte(runtime.GOOS, sluzhbaEst, errSluzhby, tiho, smenaPID, estChuzhayaKopiya) {
+		if postavitSluzhbuNaStarte() {
+			// Общая папка только что заведена — с этой секунды данные и метка
+			// службы живут там (hranenie.Papka смотрит туда сама).
+			papka = hranenie.Papka()
+			zapustitZnachok()
 		}
 	}
 
@@ -219,18 +236,10 @@ func main() {
 		// новая версия работает.
 		ubratHvostPosleSmeny()
 	}
-	// Смена прав по кнопке «Включить для всех программ» (--smena БЕЗ --tiho и
-	// БЕЗ --pri-starte) обязана не просто перезапустить приложение, а довести
-	// до конца то, ради чего её позвали: человек просил защиту, а не рестарт
-	// (см. vosstanovitPolnuyuZashchitu). Автообновление (--tiho --smena) и
-	// запрос прав при старте (--smena --pri-starte, sprositPravaNaStarte) сюда
-	// не попадают — ни то, ни другое не значит «человек нажал Подключить».
-	if smenaPID > 0 && !tiho && !priStarte {
-		vosstanovitPolnuyuZashchitu(adres)
-	}
-	// Обновление (--tiho --smena, см. zapustitSmenuPosleObnovleniya) — тот
-	// самый и единственный момент, когда служба Windows может прийти к
-	// человеку сама. Решение владельца 08.09; разбор — sluzhba_pri_obnovlenii.go.
+	// Обновление (--tiho --smena, см. zapustitSmenuPosleObnovleniya) со старой
+	// версии, у которой службы не было (прокси-режим): та же просьба прав, что
+	// при первом запуске. Служебное этой копии, увидев службу, уступит ей
+	// место само (peredatMestoSluzhbeWindows). Разбор — sluzhba_pri_obnovlenii.go.
 	if smenaPID > 0 && tiho && !priStarte {
 		postavitSluzhbuPosleObnovleniya()
 		rasskazatChtoObnovilis(adres)
@@ -314,7 +323,7 @@ func adresKopii(papka, putZhurnala string, smenaPID int, posleUstupki bool) (str
 
 	var itogOkna itogSmenyOkna
 	if smenaPID > 0 {
-		// Смена режима (см. polnayaZashchita): старая копия жива и держит
+		// Смена (после обновления): старая копия жива и держит
 		// метку нарочно. Ждём её смерти вместо того, чтобы, как обычная
 		// вторая копия, открыть её (умирающее) окно.
 		zhdatSmenu(smenaPID)
@@ -422,8 +431,8 @@ func argSmenaPID() (int, bool) {
 
 // zhdatSmenu ждёт смерть старой копии (её pid передан аргументом --smena),
 // прежде чем эта, уже повышенная копия займёт её место. Замена гонки
-// (фиксированный time.Sleep(300ms) на стороне СТАРОЙ копии из прежней
-// polnayaZashchita, без всякой обратной связи от новой) явным опросом:
+// (фиксированный time.Sleep(300ms) на стороне СТАРОЙ копии, без всякой
+// обратной связи от новой) явным опросом:
 // новая копия — та, что реально должна знать правду о смерти старой, а не
 // наоборот. Не дождалась за srokOzhidaniyaSmeny — не виснем вечно, старая
 // копия и правда могла зависнуть, но след в журнале обязателен: молчать о
@@ -440,37 +449,35 @@ func zhdatSmenu(pid int) {
 	log.Printf("смена режима: старая копия (pid %d) завершилась, занимаю её место", pid)
 }
 
-// snyatOsirotevshiySled чинит жёсткую смерть предыдущего запуска: Диспетчер
-// задач, выключение/перезагрузка Windows (оконная сборка без консоли не
-// получает SIGTERM) или пропадание питания не дают службе дойти до
-// proksi.Snyat() в конце zapustitSluzhbu — реестр остаётся с ProxyEnable=1
-// и нашим адресом, а ядра за ним уже нет. Жалоба 20.08 10:23 про закрытие
-// приложения — эта же дыра, только для смерти без выхода.
+// snyatOsirotevshiySled убирает системный прокси, оставленный СТАРОЙ версией
+// Kelevra (прокси-режим до 0.6.77). Новые версии прокси не ставят никогда;
+// запись остаётся у тех, кто обновился из прокси-режима или у кого старая
+// версия умерла жёстко (Диспетчер задач, выключение, пропадание питания —
+// жалоба 20.08: после этого не грузится ни один сайт).
 //
-// Три проверки подряд, и снимаем только если прошли все три:
-//  1. metka.est — метка на диске есть: кто-то когда-то поставил прокси нашей
-//     рукой или рукой ядра с нашим подтверждением (см. internal/proksi.Otmetit).
-//     Нет метки — нам сюда вообще нечего смотреть, чужой прокси не наше дело.
-//  2. !zhiva — живой копии службы нет. Если служба жива, прокси её и
-//     трогать его отсюда, из процесса окна, — та самая дыра из 20.08.
-//  3. proksi.Stoit(adres) — то, что СЕЙЧАС стоит в реестре, совпадает именно
-//     с адресом из метки. Не совпадает (человек успел прописать свой прокси
-//     после смерти нашей службы) — снимать НЕЧЕГО, чужой прокси не трогаем
-//     никогда; метку при этом всё равно убираем, она устарела.
+// Две проверки, и снимаем, только если прошли обе:
+//  1. живой старой копии рядом нет. Живая копия старой версии свой прокси
+//     держит сама и снимет его сама, когда уступит место (ustupit_mesto);
+//     трогать его из окна при живом ядре — дыра 20.08. Живая копия этой или
+//     более новой версии прокси не держит — ей не мешаем.
+//  2. в реестре стоит НАШ адрес (из метки старой версии или 127.0.0.1:2412) —
+//     это проверяет сама proksi.UbratSled. Чужой прокси не трогаем никогда.
 func snyatOsirotevshiySled(papka string) {
-	adres, est := proksi.ProchestMetku()
-	if !est {
+	if adres, zhiva := kopiya.Nayti(papka); zhiva && !kopiyaBezProksi(adres) {
 		return
 	}
-	if _, zhiva := kopiya.Nayti(papka); zhiva {
-		return
-	}
-	if !proksi.Stoit(adres) {
-		proksi.UbratMetku()
-		return
-	}
-	log.Printf("прошлый запуск умер жёстко и не снял системный прокси (%s), снимаю сам", adres)
-	proksi.Snyat()
+	proksi.UbratSled()
+}
+
+// versiyaBezProksi — первая версия, которая системный прокси не ставит.
+const versiyaBezProksi = "0.6.77"
+
+// kopiyaBezProksi — живая копия по этому адресу той версии, что прокси уже не
+// ставит (versiyaBezProksi или новее). Не ответила о версии — считаем старой: её
+// прокси не трогаем.
+func kopiyaBezProksi(adres string) bool {
+	v := versiyaChuzhoyKopii(adres)
+	return v != "" && obnovlenie.Sravnit(v, versiyaBezProksi) >= 0
 }
 
 // snyatOsirotevshiySledTunnelya — та же беда, что чинит snyatOsirotevshiySled
@@ -597,63 +604,54 @@ func estArg(arg string) bool {
 	return false
 }
 
-// nuzhnoSprositPravaNaStarte решает, спросить ли права администратора сразу
-// на обычном старте (заказ 29.08: подтверждение прав должно вылезать при
-// старте программы и больше не мешать), а не откладывать до первого
-// подключения (internal/sluzhba.zaprositPravaAvtomaticheskiEsliNado — этот
-// путь у СУЩЕСТВУЮЩИХ установок не сработает никогда: hranenie.Zagruzit
-// метит их «уже спрашивали» ещё на миграции) или до клика по кнопке
-// «Включить для всех программ».
+// nuzhnoStavitSluzhbuNaStarte решает, просить ли на этом старте права на
+// установку службы Windows. Чистая функция — решение проверяется тестом без
+// настоящего UAC:
 //
-// Чистая функция — решение проверяется тестом без настоящего UAC и без сети:
-//
-//	estPrava          — права уже есть (prava.Est()), спрашивать нечего.
+//	os                — службы Windows есть только в Windows.
+//	sluzhbaEst/oshibka — служба уже стоит, или диспетчер служб не ответил
+//	                     (не зная положения, лезть ставить хуже, чем не
+//	                     делать ничего: окно покажет «Дать права»).
 //	tiho              — автообновление (--tiho --smena) или автозапуск с
-//	                     Windows (--tiho) — не человек только что открыл окно.
-//	smenaPID          — эта копия уже И ЕСТЬ смена режима (после UAC либо
-//	                     после обновления), спрашивать второй раз подряд нельзя.
+//	                     Windows (--tiho): не человек только что открыл окно.
+//	                     После обновления служба ставится своим путём
+//	                     (postavitSluzhbuPosleObnovleniya).
+//	smenaPID          — эта копия уже И ЕСТЬ смена (после обновления).
 //	estChuzhayaKopiya — рядом уже висит живая копия: человек кликнул значок
-//	                     в трее у неё, а не запустил программу с нуля —
-//	                     показывать UAC в ответ на клик по трею нельзя.
-func nuzhnoSprositPravaNaStarte(estPrava, tiho bool, smenaPID int, estChuzhayaKopiya bool) bool {
-	if estPrava || tiho || smenaPID > 0 || estChuzhayaKopiya {
+//	                     в трее у неё. Её окно само покажет «Дать права».
+//
+// Отметки «уже спрашивали» тут нет нарочно: без прав приложение не работает
+// вовсе, и каждый новый запуск руками — та же просьба, что и первый.
+func nuzhnoStavitSluzhbuNaStarte(os string, sluzhbaEst bool, oshibka error, tiho bool, smenaPID int, estChuzhayaKopiya bool) bool {
+	if os != "windows" || sluzhbaEst || oshibka != nil {
 		return false
 	}
+	return !tiho && smenaPID == 0 && !estChuzhayaKopiya
+}
+
+// postavitSluzhbuNaStarte исполняет решение nuzhnoStavitSluzhbuNaStarte:
+// просит права (окно UAC) и ждёт, пока копия с правами поставит службу.
+// true — служба поставлена.
+func postavitSluzhbuNaStarte() bool {
+	log.Printf("служба Windows не установлена — прошу права администратора на её установку")
+	if err := poprositUstanovkuSluzhby(0); err != nil {
+		log.Printf("служба Windows при старте не поставлена (%v) — окно откроется с кнопкой «Дать права»", err)
+		return false
+	}
+	log.Printf("служба Windows поставлена при старте")
 	return true
 }
 
-// poprositPravaPriStarte — хук вместо прямого internal/prava.PoprositPriStarte,
-// подменяется в тесте (см. main_test.go), чтобы не дёргать настоящий UAC.
-var poprositPravaPriStarte = prava.PoprositPriStarte
-
-// sprositPravaNaStarte исполняет решение nuzhnoSprositPravaNaStarte: просит
-// права и в любом случае (согласие или отказ) метит настройки «уже
-// спрашивали» — тем же порядком, что и автозапрос при первом подключении
-// (sluzhba.go: zaprositPravaAvtomaticheskiEsliNado) — отметку пишем ДО ухода,
-// иначе следующий, уже обычный запуск снова увидит файл без отметки и
-// спросит ещё раз, а человек просил ровно один раз.
+// zapustitZnachok поднимает значок в трее отдельным процессом (--trey): у
+// службы Windows значка нет (нет сеанса), а без значка человек, закрыв окно,
+// не видит, что приложение работает. При входе в систему значок поднимает
+// автозапуск; сразу после установки службы — мы.
 //
-// Возвращает true, если эта копия должна немедленно уйти: человек согласился
-// в UAC, новая, уже повышенная копия поднимется сама. В этой точке main ещё
-// не открыл окно и не поднял службу (вызов стоит ДО adresKopii) — уйти можно
-// простым return, снимать нечего.
-func sprositPravaNaStarte(papka string) bool {
-	nastroyki, err := hranenie.Zagruzit()
-	if err != nil {
-		log.Printf("запрос прав при старте: не прочитал настройки, не спрашиваю: %v", err)
-		return false
+// Переменная — точка подмены для тестов: настоящий вызов порождает процесс.
+var zapustitZnachok = func() {
+	if put, err := zapustitSebyaZanovo(argTrey); err != nil {
+		log.Printf("значок после установки службы не запущен (%s): %v", put, err)
 	}
-	oshibka := poprositPravaPriStarte(os.Getpid())
-	if oshibka != nil {
-		log.Printf("запрос прав администратора при старте: отказ или ошибка: %v — продолжаю без прав", oshibka)
-	} else {
-		log.Printf("человек согласился на права администратора при старте, перезапускаюсь")
-	}
-	nastroyki.OtmetitPravaZaprosheny()
-	if err := hranenie.Sohranit(nastroyki); err != nil {
-		log.Printf("запрос прав при старте: не сохранил отметку об автозапросе: %v", err)
-	}
-	return oshibka == nil
 }
 
 // podnyatSluzhbuOtdelno запускает службу отдельным процессом (zapusk_windows.go
@@ -710,6 +708,10 @@ func zhitZnachkom(papka, putZhurnala string) {
 			}
 		}
 	}
+	// Значок живёт в сеансе человека — ему и убирать системный прокси старой
+	// версии: служба Windows до ветки реестра человека не дотягивается, а
+	// окно после обновления могут не открыть днями.
+	snyatOsirotevshiySled(papka)
 	// Адрес службы значку нужен, чтобы показывать состояние и открывать окно.
 	// Не дождались — значок всё равно ставим: без него человек не поймёт, что
 	// приложение вообще запущено, и полезет запускать второе.
@@ -785,7 +787,6 @@ func zhdatMetkuSluzhbyDo(papka string, srok time.Duration) (string, error) {
 	return "", fmt.Errorf("служба Windows не оставила метку за %s", srok)
 }
 
-
 // postavitSluzhbuIUyti — тело режима --postavit-sluzhbu.
 //
 // Отдельной функцией, а не строчкой в main: у неё своя ответственность и свой
@@ -799,8 +800,8 @@ func postavitSluzhbuIUyti(putZhurnala string) {
 	log.Printf("ставлю службу Windows из %s", put)
 	if err := vinsluzhba.UstanovitPolnostyu(put); err != nil {
 		log.Printf("служба не установилась: %v", err)
-		skazat("Kelevra не смогла установить службу",
-			"Без неё туннель будет просить подтверждение при каждом входе в систему."+
+		skazat("Служба Kelevra не установлена",
+			"Без службы Kelevra подключение невозможно."+
 				"\n\n"+err.Error())
 		os.Exit(1)
 	}
@@ -856,15 +857,12 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// пакете main, поэтому здесь имя одно и то же независимо от ОС.
 	s.OblachkoObnovleniya = pokazatOblachkoObnovleniya
 	s.MetkaObnovleniya = pometitObnovlenie
-	// Значок обязан различать полную защиту и половинную (31.08, «впн не
-	// выполняет свою основную функцию»): подсказка была константой и звучала
-	// одинаково в обоих режимах — см. cmd/kelevra/metka_zashchity.go.
+	// Значок говорит, поднята ли связь — см. cmd/kelevra/metka_zashchity.go.
 	s.MetkaZashchity = pometitZashchitu
-	// Кнопка «работать без подтверждений» в настройках. Просит права и ставит
-	// службу — единственное место, где приложение вообще заводит разговор об
-	// администраторе после того, как служба один раз установлена.
+	// Кнопка «Дать права» (ручка /api/dat_prava, если окно позвало её, а не
+	// свою привязку kelevraDatPrava): просит права и ставит службу.
 	s.PostavitSluzhbuWindows = func() error {
-		return prava.PoprositDlya(argPostavitSluzhbu)
+		return poprositUstanovkuSluzhby(0)
 	}
 	s.SluzhbaWindowsEst = func() bool {
 		est, _ := vinsluzhba.Ustanovlena()
@@ -919,6 +917,17 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// состояние, и запусти мы приём параллельно, он успел бы увидеть
 	// «ничего не поднято» и поднять второе ядро рядом с живым.
 	s.PrinyatZhivoeYadro(ctx, sledTunnelyaPriStarte)
+	if !sTreem {
+		// Служба Windows только что поставлена по просьбе человека — связь
+		// поднимается сама (флаг кладёт установщик, см. hranenie).
+		go s.PodklyuchitPosleUstanovki(ctx)
+	}
+	// Служебное в сеансе человека уступает место службе Windows, как только
+	// та поставлена и работает («Дать права», установка после обновления).
+	vyhodIzTreya := make(chan struct{}, 1)
+	if sTreem {
+		go peredatMestoSluzhbeWindows(ctx, s, url, vyhodIzTreya)
+	}
 
 	go s.ObnovlyatProfil(ctx)
 	// Своя сеть: переход по очереди узлов профиля (пакет ochered). У профиля с одним узлом — молчит.
@@ -963,7 +972,6 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// трея (включая Windows без explorer.exe, как на моём стенде под wine)
 	// не имеет права уронить службу с прокси.
 	if sTreem {
-		vyhodIzTreya := make(chan struct{}, 1)
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -991,12 +999,11 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 
 	_ = s.Yadro.Ostanovit()
 	if sTreem {
-		// Ядро гасится жёстко и откатить системный прокси за собой не успевает.
-		// Без этой строки после закрытия приложения у человека перестают
-		// открываться сайты (жалоба 20.08).
-		proksi.Snyat()
+		// Системный прокси старой версии (прокси-режим до 0.6.77), если он
+		// ещё висит: уборка в сеансе человека. Чужой прокси не трогается.
+		proksi.UbratSled()
 		// В службе Windows этой строки нет намеренно: системный прокси лежит
-		// в ветке реестра ПОЛЬЗОВАТЕЛЯ, и снимать его из-под системной учётной
+		// в ветке реестра ПОЛЬЗОВАТЕЛЯ, и убирать его из-под системной учётной
 		// записи значит промахнуться мимо профиля человека.
 	}
 	// След туннеля — той же природы: ядро ушло, адаптер вместе с ним, и
@@ -1067,7 +1074,7 @@ func lovitPaniku(putZhurnala string, snyatProksi bool) {
 		// os.Exit минует код после lovitPaniku в main (там же снимается
 		// прокси), а авария ядра оставляет системный прокси включённым точно
 		// так же, как обычное закрытие окна — снимаем его и на этом пути.
-		proksi.Snyat()
+		proksi.UbratSled()
 		// Метку туннеля НЕ снимаем: этот путь заканчивается os.Exit(2), то
 		// есть ядро остаётся жить сиротой ровно до тех пор, пока его не
 		// прибьёт ОС. Снятый след соврал бы следующему запуску, что туннеля
@@ -1108,8 +1115,8 @@ func tihiyZapusk(args []string) bool {
 }
 
 // priStarteZapusk — тот же разбор, что и tihiyZapusk, но для argPriStarte:
-// эта копия поднята запросом прав СРАЗУ ПРИ СТАРТЕ (sprositPravaNaStarte), а
-// не кнопкой «Включить для всех программ» (см. её комментарий у константы).
+// эта копия поднята запросом прав всего приложения при старте — так делали
+// версии до 0.6.77 (см. комментарий у константы).
 func priStarteZapusk(args []string) bool {
 	for _, a := range args {
 		if a == argPriStarte {

@@ -20,7 +20,7 @@ func adresaTunVhoda(t *testing.T, gotovyy []byte) []string {
 // («set ipv4 address: The object already exists»). Остаток прошлой попытки
 // держит имя и адрес вместе, поэтому адрес обязан ехать за именем.
 func TestSdvigAdresaDoezzhaetDoYadra(t *testing.T) {
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{Prava: true, TunImya: "tun126", TunSdvigAdresa: 1})
+	gotovyy, k, err := Prigotovit(profil(t), Vybor{TunImya: "tun126", TunSdvigAdresa: 1})
 	if err != nil {
 		t.Fatalf("конфиг со сдвинутым адресом не собрался: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestSdvigAdresaDoezzhaetDoYadra(t *testing.T) {
 
 // Обычный путь: сдвига нет — адреса профиля не трогаем вовсе.
 func TestBezSdvigaAdresaBerutsyaIzProfilya(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}

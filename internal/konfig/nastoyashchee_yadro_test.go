@@ -81,12 +81,11 @@ func TestYadroPrinimaetGotovyyKonfig(t *testing.T) {
 	if bin == "" {
 		t.Skipf("настоящего ядра рядом нет — щуп пропущен. Искал: %s", mestaPoiskaYadra())
 	}
-	// Оба режима: с правами (туннель) и без них (прокси). Падало ядро в своё
-	// время именно на одном из них, а не на обоих сразу.
+	// Режим один — туннель (0.6.77); плюс упрощённый без сетевых правил:
+	// он тоже собирается сборкой и тоже должен приниматься ядром.
 	for imya, v := range map[string]Vybor{
-		"с правами":             {Prava: true},
-		"без прав":              {Prava: false},
-		"без системного прокси": {Prava: false, BezSistemnogoProksi: true},
+		"туннель":            {},
+		"без сетевых правил": {BezSetevyhPravil: true},
 	} {
 		t.Run(imya, func(t *testing.T) {
 			gotovyy, _, err := Prigotovit(profil(t), v)

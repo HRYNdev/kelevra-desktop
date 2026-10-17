@@ -3,7 +3,6 @@ package sluzhba
 import (
 	"testing"
 
-	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 )
 
@@ -54,61 +53,19 @@ func TestOpuskanieZashchitySnimaetSled(t *testing.T) {
 	}
 }
 
-// TestZnachokUznaetProPolovinnuyuZashchitu — подсказка значка в трее до 31.08
-// была константой «Kelevra: VPN включён» и звучала одинаково в обоих режимах.
-// Копия висит в трее неделями, и наведённая мышь — единственное, что человек
-// видит, не открывая окна. Хук обязан получать РАЗНОЕ в разных режимах и
-// «защиты нет» при её опускании.
-func TestZnachokUznaetProPolovinnuyuZashchitu(t *testing.T) {
+// TestZnachokUznaetPodnyataLiSvyaz — подсказка значка в трее до 31.08 была
+// константой «Kelevra: VPN включён» и висела и на опущенной защите. Хук
+// обязан получать «поднята» на подъёме и «не поднята» на опускании.
+func TestZnachokUznaetPodnyataLiSvyaz(t *testing.T) {
 	s := stend(t)
-	type skazano struct {
-		podnyata, chastichnaya bool
-		pochemu                string
-	}
-	var slyshal []skazano
-	s.MetkaZashchity = func(podnyata, chastichnaya bool, pochemu string) {
-		slyshal = append(slyshal, skazano{podnyata, chastichnaya, pochemu})
-	}
+	var slyshal []bool
+	s.MetkaZashchity = func(podnyata bool) { slyshal = append(slyshal, podnyata) }
 
-	// Половинная защита поднята.
-	s.zamok.Lock()
-	s.kartina = konfig.Kartina{
-		Rezhim:              konfig.Proksi,
-		Chastichnaya:        true,
-		PochemuChastichnaya: konfig.PrichinaBezPrav,
-	}
-	s.zamok.Unlock()
 	s.soobshchitTreyuProZashchitu(true)
-
-	// Полная защита поднята.
-	s.zamok.Lock()
-	s.kartina = konfig.Kartina{Rezhim: konfig.Tunnel}
-	s.zamok.Unlock()
-	s.soobshchitTreyuProZashchitu(true)
-
-	// Защиту опустили — картина на месте (её никто не чистит), но значок
-	// обязан сказать «защиты нет», а не пересказать вчерашний режим.
-	s.zamok.Lock()
-	s.kartina = konfig.Kartina{
-		Rezhim:              konfig.Proksi,
-		Chastichnaya:        true,
-		PochemuChastichnaya: konfig.PrichinaBezPrav,
-	}
-	s.zamok.Unlock()
 	s.soobshchitTreyuProZashchitu(false)
 
-	zhdali := []skazano{
-		{true, true, konfig.PrichinaBezPrav},
-		{true, false, ""},
-		{false, false, ""},
-	}
-	if len(slyshal) != len(zhdali) {
-		t.Fatalf("значку сказали %d раз, ждали %d: %+v", len(slyshal), len(zhdali), slyshal)
-	}
-	for i := range zhdali {
-		if slyshal[i] != zhdali[i] {
-			t.Fatalf("значку сказали %+v, ждали %+v (шаг %d)", slyshal[i], zhdali[i], i+1)
-		}
+	if len(slyshal) != 2 || !slyshal[0] || slyshal[1] {
+		t.Fatalf("значку сказали %v, ждали [true false]", slyshal)
 	}
 }
 

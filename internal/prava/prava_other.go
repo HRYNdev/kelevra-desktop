@@ -4,8 +4,8 @@ package prava
 
 import (
 	"errors"
-	"fmt"
 	"os"
+	"time"
 )
 
 // Est — на не-Windows системах (сервер, где приложение проверяется) правами
@@ -21,21 +21,13 @@ func Est() bool {
 	return os.Geteuid() == 0
 }
 
-// Poprosit — окно UAC есть только на Windows. smenaPID сохраняет ту же
-// сигнатуру, что и windows-версия (см. prava_windows.go), чтобы sluzhba.go
-// собиралась одинаково на обеих платформах.
-func Poprosit(smenaPID int) error {
-	return fmt.Errorf("запросить права можно только на Windows")
-}
-
-// PoprositPriStarte — та же заглушка для запроса прав сразу при старте (см.
-// prava_windows.go), нужна только чтобы cmd/kelevra собирался и на не-Windows.
-func PoprositPriStarte(smenaPID int) error {
-	return fmt.Errorf("запросить права можно только на Windows")
-}
-
 // PoprositDlya — на не-Windows правами так не управляют: там либо запущено от
 // root, либо нет, и окна с подтверждением не существует.
 func PoprositDlya(argumenty string) error {
+	return errors.New("запрос прав есть только в Windows")
+}
+
+// PoprositIZhdat — та же заглушка с ожиданием (см. prava_windows.go).
+func PoprositIZhdat(okno uintptr, argumenty string, srok time.Duration) error {
 	return errors.New("запрос прав есть только в Windows")
 }

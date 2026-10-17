@@ -30,7 +30,7 @@ func mtuTunVhoda(t *testing.T, gotovyy []byte) float64 {
 // Правка живёт в клиенте, а НЕ на сервере: конфиг общий для всей семьи, и
 // менять его ради одной платформы значит чинить одно, ломая другое.
 func TestMtuSbivaetsyaPodInternet(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatalf("конфиг не собрался: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestMtuSbivaetsyaPodInternet(t *testing.T) {
 // знать про сеть человека больше нашего.
 func TestMenshiyMtuNeTrogaem(t *testing.T) {
 	syroy := podmenitMtu(t, profil(t), 1280)
-	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(syroy, Vybor{})
 	if err != nil {
 		t.Fatalf("конфиг не собрался: %v", err)
 	}

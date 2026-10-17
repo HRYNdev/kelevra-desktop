@@ -305,7 +305,7 @@
      съехавший круг прочли как уезд за верхний край при прокрутке и приклеили
      блок сверху. Приклеенный блок — непрозрачный прямоугольник 210x220 с
      background:var(--fon), едущий над списком: он накрывал собой «нажмите,
-     чтобы выключить», «Ключ доступа», «Включить для всех программ», «Выбор
+     чтобы выключить», «Ключ доступа», «Дать права», «Выбор
      узла» (замер 27.08, перекрытие 15-44px). Жалоба 27.08 10:29: при
      прокрутке круг ездит, закрывает собой надписи и едет видимым квадратом,
      а не кругом. Круг снова обычная часть потока — уезжает вместе со списком и
@@ -404,18 +404,6 @@
      трафик, а дома через Kelevra не идёт ни байта. */
   .krug-blok.ozhidanie .krug-koltso { stroke:var(--akcent); color:var(--akcent); }
   .krug-blok.ozhidanie .krug-slovo { color:var(--akcent); }
-  /* Частичная защита (chastichnaya, sluzhba.go): ядро РАБОТАЕТ, но через него
-     идут только программы, уважающие системный прокси, и только TCP — весь
-     UDP, а с ним QUIC и YouTube, уходит к провайдеру мимо. До 31.08 круг в
-     этом состоянии был ровно тем же зелёным «подключено», что и у полного
-     туннеля (диагноз хозяина: VPN не выполняет свою основную функцию).
-     Цвет «ждём», как у ozhidanie: это не беда (защита есть) и не полная
-     работа. Дыхание кольца оставляем — трафик правда идёт. Правило стоит
-     ПОСЛЕ .rabotaet, поэтому побеждает его цветом при том же s.sost. */
-  .krug-blok.chastichno .krug-koltso { stroke:var(--zhdem); color:var(--zhdem);
-    animation:krug-dyshit 3.6s ease-in-out infinite; }
-  .krug-blok.chastichno .krug-slovo { color:var(--zhdem); }
-
   /* margin 13px, не 2px: слева от текста должен быть тот же отступ, что и у
      карточек/узлов ниже (их padding 13-16px от края .lenta) — раньше «ВЫБОР
      УЗЛА» торчал на 11px левее собственного списка, рваный левый край.
@@ -979,7 +967,7 @@
      тихая строка по центру.
      order переставляет её ПОД КРУГ, к подсказке, не трогая разметку: в
      разметке блок обязан остаться там же, где стоит всегда, — рядом с
-     кнопкой «Включить для всех программ», которую он объясняет в остальных
+     кнопкой «Дать права», которую он объясняет в остальных
      состояниях. Явные order у круга и подсказки нужны только затем, чтобы
      отрицательный order подписи не выкинул её ВЫШЕ круга (у остальных детей
      колонки order:0). */
@@ -999,7 +987,7 @@
      рамка, когда срок на исходе.
      ПОЧЕМУ ЭТОТ ЭКРАН ПРИШЛОСЬ УЖИМАТЬ (02.09, вечер). Карточка выше строки,
      которую она заменила, на 68px — и главный экран перестал влезать в окно
-     420x660: заметка внизу срезалась, до «Включить для всех программ» надо
+     420x660: заметка внизу срезалась, до кнопки под ней надо
      было скроллить. Жалоба: главный экран снова приходится прокручивать,
      а масштаб на нём не сделан по-человечески.
      Карточку не убираем (по ней открывается шторка со списком устройств —
@@ -1186,7 +1174,11 @@
       <div class="beda" id="beda-svyazi"></div>
       <div class="beda" id="zametka"></div>
 
-      <button class="tihaya zovyot" id="knopka-polnaya" hidden>Включить для всех программ</button>
+      <!-- «Дать права»: только в состоянии без прав (nuzhny_prava, sluzhba.go).
+           Просит права окном Windows и ставит службу — тот же путь, что запрос
+           при первом запуске. Прежней кнопки неполного режима больше нет:
+           неполного режима, из которого она выводила, нет (решение 17.10). -->
+      <button class="tihaya zovyot" id="knopka-polnaya" hidden>Дать права</button>
 
       <!-- Тихая строка обстановки («сейчас: дома») — состояние, не настройка,
            поэтому осталась на главном экране (жалоба 28.08: настройки
@@ -1356,16 +1348,6 @@
           </button>
         </div>
         <div class="beda" id="beda-avtozapusk"></div>
-        <!-- Служба Windows. Строка живёт, только пока службы нет: после
-             установки говорить не о чем, подтверждение больше не спрашивают.
-             Оформлена как «Подключить по коду» — то же действие в один тычок,
-             а не переключатель: включить и выключить это не симметричные вещи. -->
-        <button class="tihaya nastroyki-ryad" id="knopka-sluzhba" hidden>
-          <span class="tihaya-tekst">
-            <span class="tihaya-zagolovok">Работать без подтверждений</span>
-            <span class="tihaya-podpis" id="podpis-sluzhba">Сейчас Windows спрашивает разрешение при каждом входе</span>
-          </span>
-        </button>
       </div>
 
       <!-- Рубрика «Приложение» — про саму программу: её версию и её журнал.
@@ -1491,6 +1473,12 @@ async function api(put, telo) {
 // комнаты тут нет.
 const podpisi = {stoit:"Отключено", podnimaem:"Подключение", rabotaet:"Подключено", slomalos:"Связи нет"};
 
+// Без прав администратора (служба Windows не поставлена, человек отказал в
+// запросе прав) Kelevra не работает вовсе: круг «Не подключено», одна строка
+// и кнопка «Дать права». Текст — тот же, что sluzhba.OshibkaNetPrav.
+const TEKST_NET_PRAV = "Для работы Kelevra нужны права администратора.";
+function bezPrav(s) { return !!s.nuzhny_prava && s.sost !== "rabotaet" && s.sost !== "podnimaem"; }
+
 // Переходное слово на время СВОЕГО запроса: пока /api/otklyuchit в полёте,
 // ядро всё ещё «rabotaet», и круг до 02.09 продолжал писать «Подключено» —
 // нажатие выглядело потерянным. Телефонное «Отключаюсь» закрывает ровно эту
@@ -1515,14 +1503,8 @@ function podzagolovok(s) {
   // роутер, VPN и не нужен (правка 27.08).
   if (s.ozhidanie_doma) return "обход выполняет роутер";
   if (s.sost === "rabotaet") {
-    // Неполная защита: туннель не поднялся, и часть трафика идёт вне Kelevra.
-    // Строка называет именно это, а не то, что защищено: жалоба 31.08 была на
-    // молчание о незащищённом (YouTube по QUIC).
-    // Без слова «туннель»: оно машинное, а в круг шириной 144px длинная пара
-    // не влезала и резалась многоточием («туннель не поднят, идут только…»).
-    // Почему так вышло, человек читает в заметке под кругом.
-    if (s.chastichnaya) return "идут только браузеры";
-    return s.rezhim === "tunnel" ? "весь трафик" : "только браузеры";
+    // Режим один — туннель (0.6.77): через Kelevra идёт весь трафик.
+    return "весь трафик";
   }
   // Во время подключения и при поломке подпись пустая.
   //
@@ -1531,6 +1513,9 @@ function podzagolovok(s) {
   // строкой ниже. Требование владельца продукта 09.09: бесполезные подписи
   // убрать, остальные привести к официальному тону.
   if (s.sost === "podnimaem" || s.sost === "slomalos") return "";
+  // Без прав и после отказа подъёма причина стоит строкой под кругом, а
+  // «трафик идёт вне Kelevra» тут было бы советом выключенному VPN.
+  if (bezPrav(s) || s.otkaz) return "";
   return "трафик идёт вне Kelevra";
 }
 
@@ -1544,8 +1529,7 @@ function podzagolovok(s) {
 const PRIMETY = [
   {kogda: /permission denied|operation not permitted|access is denied|отказано в доступе/i,
    chto: "Windows не дал создать сетевой адаптер",
-   delat: "Требуются права администратора: закройте Kelevra и запустите её через «Запуск от имени администратора». " +
-          "Режим «только браузеры» работает без них."},
+   delat: "Для работы Kelevra нужны права администратора."},
   // Занятое сетевое устройство — ОТДЕЛЬНАЯ примета, и стоит она раньше сетевой.
   //
   // До 08.09 эта беда попадала под общую примету про сервер, и человек читал
@@ -1553,9 +1537,8 @@ const PRIMETY = [
   // осталось от прошлого запуска на его же машине. Совет проверить сайты и
   // выбрать другой выход отправлял чинить несломанное.
   {kogda: /create adapter|configure tun interface|object already exists/i,
-   chto: "Сетевое устройство занято прошлым запуском",
-   delat: "Windows освобождает устройство не сразу. Повторите подключение через минуту. " +
-          "Если результат не изменится, перезагрузите компьютер."},
+   chto: "Сетевое устройство занято прошлым подключением",
+   delat: "Требуется перезагрузка компьютера."},
   {kogda: /address already in use|only one usage of each socket address|bind: /i,
    chto: "Порт занят другой программой",
    delat: "Чаще всего порт удерживает другой VPN-клиент. Завершите его работу и повторите подключение."},
@@ -1598,7 +1581,7 @@ function perevestiBedu(syroe) {
 // пределе — см. комментарий у podpisi чуть выше, третий смысл в него не
 // внести). Человек, не видя разницы, решает, что приложение сломалось.
 // Показываем причину не в круге, а в заметке под ключом доступа — том же
-// блоке, что уже объясняет режим защиты (ZametkaBezPrav и соседи,
+// блоке, что уже говорит, что идёт через Kelevra (ZametkaVes и соседи,
 // internal/konfig/konfig.go).
 function zametkaAvtorezhima(s) {
   // Обстановку (дома/не дома) кнопка «Подключиться» спрашивает САМА, одним
@@ -1652,8 +1635,11 @@ function zametkaAvtorezhima(s) {
 // идёт по таймеру, а раскрытые «подробности» не должны схлопываться каждый тик.
 let bedaNaEkrane = null;
 
-function pokazatBeduSvyazi(syroe, spokoyno) {
-  const klyuch = (syroe || "") + "|" + (spokoyno ? 1 : 0);
+// gotovoe — готовый заголовок от службы (s.otkaz): с ним приметы не нужны,
+// совета нет, а сырой текст ядра (если он не совпадает с заголовком) уходит
+// под «подробности».
+function pokazatBeduSvyazi(syroe, spokoyno, gotovoe) {
+  const klyuch = (syroe || "") + "|" + (spokoyno ? 1 : 0) + "|" + (gotovoe || "");
   if (klyuch === bedaNaEkrane) return;
   bedaNaEkrane = klyuch;
   const uzel = $("beda-svyazi");
@@ -1663,11 +1649,15 @@ function pokazatBeduSvyazi(syroe, spokoyno) {
   if (!syroe) return;
   if (spokoyno) { uzel.textContent = syroe; return; }   // это не беда, а уведомление
 
-  const p = perevestiBedu(syroe);
+  const p = gotovoe ? {chto: gotovoe, delat: ""} : perevestiBedu(syroe);
   const zag = document.createElement("div");
   zag.className = "beda-zagolovok"; zag.textContent = p.chto;
+  if (gotovoe && syroe === gotovoe) {   // подробностей нет — только заголовок
+    uzel.append(zag);
+    return;
+  }
   const sovet = document.createElement("div");
-  sovet.className = "beda-sovet"; sovet.textContent = p.delat;
+  sovet.className = "beda-sovet"; sovet.textContent = p.delat; sovet.hidden = !p.delat;
   const syr = document.createElement("div");
   syr.className = "beda-syroe"; syr.textContent = syroe; syr.hidden = true;
   const knopka = document.createElement("button");
@@ -2133,29 +2123,23 @@ async function obnovit() {
   $("vkladki").hidden = nuzhenKod;
   $("lenta").classList.toggle("bez-nizhney", nuzhenKod);
   primenitVkladku();
-  obnovitStrokuSluzhby(s);
   pokazatRasskazObObnovlenii(s);
 
   // Ожидание дома — класс ДОПОЛНИТЕЛЬНЫЙ к s.sost (обычно "stoit"), а не
   // замена: .krug-blok.ozhidanie CSS-правило (см. выше .stoit) стоит позже в
   // таблице стилей и побеждает цветом --zhdem.
-  // «частично» — ДОПОЛНИТЕЛЬНЫЙ класс к s.sost ("rabotaet"), как и ozhidanie
-  // рядом: ядро правда работает, спор идёт только про объём защиты. Признак
-  // берём готовым полем s.chastichnaya (konfig.Kartina.Chastichnaya через
-  // sluzhba.go), а не выводим из s.rezhim: решение о полноте защиты принимает
-  // тот же код, что собирает конфиг, иначе окно и конфиг разъедутся в день
-  // появления третьего режима.
-  const chastichno = !!s.chastichnaya && s.sost === "rabotaet" && !s.ozhidanie_doma;
+  // Неполного режима с 0.6.77 нет. Вместо него
+  // два честных состояния без связи: «Не подключено» без прав (bezPrav) и
+  // «Нет подключения» с причиной, когда туннель не поднялся (s.otkaz).
+  const netPrav = bezPrav(s);
+  const otkaz = !netPrav && !!s.otkaz && s.sost !== "rabotaet" && s.sost !== "podnimaem";
   $("krug-blok").className = "krug-blok " + s.sost +
-      (s.ozhidanie_doma ? " ozhidanie" : "") + (chastichno ? " chastichno" : "");
+      (s.ozhidanie_doma ? " ozhidanie" : "");
   // «Дома» вместо прежнего «ожидание» — прямая жалоба 02.09: дома круг
   // писал «ожидание», хотя на телефоне в этом месте «Дома». Слово
   // «ожидание» отвечало на вопрос «что делает программа», а человек смотрит
   // на круг с другим вопросом —
   // «что сейчас со мной»; ответ на него телефон уже выверил.
-  // «Частично» — своё, десктопное, такого состояния на телефоне нет вовсе:
-  // это про объём защиты (игры идут мимо), и слово остаётся тем же, ему
-  // подравнивается только регистр, чтобы оно не выпадало из соседей.
   // «Отключаюсь» стоит ПЕРЕД веткой ozhidanie_doma, и только поэтому дома
   // нажатие вообще видно: s.ozhidanie_doma истинно всё время запроса, и
   // слово «Дома» перекрывало бы любой ответ круга — человек нажал бы и не
@@ -2168,7 +2152,9 @@ async function obnovit() {
   const zvanie = deystvieKruga === "otklyuchaem" ? "Отключаюсь"
       : s.ozhidanie_doma ? "Дома"
       : deystvieKruga === "podklyuchaem" ? "Подключение"
-      : chastichno ? "Частично" : (podpisi[s.sost] || s.sost);
+      : netPrav ? "Не подключено"
+      : otkaz ? "Нет подключения"
+      : (podpisi[s.sost] || s.sost);
   $("zvanie").textContent = zvanie;
   $("zvanie").classList.toggle("dlinnoe", zvanie.length > 9);
   $("podzagolovok").textContent = podzagolovok(s);
@@ -2230,7 +2216,10 @@ async function obnovit() {
   // Почему дома и без Kelevra всё открыто, по-прежнему говорит заметка под
   // кругом (zametkaAvtorezhima: обход делает роутер) — тут повторять её
   // незачем, места на этом экране в обрез.
-  $("podskazka").textContent = s.ozhidanie_doma || s.sost === "rabotaet"
+  // Без прав подсказки нет: причина и кнопка «Дать права» стоят ниже, а
+  // третья строка про то же самое была бы повтором.
+  $("podskazka").textContent = netPrav ? ""
+      : s.ozhidanie_doma || s.sost === "rabotaet"
       ? "нажмите, чтобы выключить"
       : s.sost === "podnimaem" ? "подождите"
       : "нажмите, чтобы включить";
@@ -2247,26 +2236,18 @@ async function obnovit() {
   let zametkaTekst = !avtoZametka ? (s.zametka || "")
       : s.avtorezhim_obstanovka === "вне дома" ? (s.zametka ? s.zametka + " " : "") + avtoZametka
       : avtoZametka;
-  // Здесь до 31.08 стояло гашение заметки: когда s.mozhno_tun показывал
-  // кнопку «Включить для всех программ», текст над ней («Чтобы пустить через
-  // VPN все программы, нажмите ниже.») считался повтором кнопки и убирался
-  // (диагноз по снимку 4_rabotaet.png, 24.08). Тогда это было верно: заметка
-  // говорила РОВНО то же, что кнопка. Теперь она говорит другое — что человек
-  // прямо сейчас НЕ получает (konfig.ZametkaBezPrav: «Через Kelevra идут
-  // только браузеры — игры и видео Windows пускает мимо»), и это единственное
-  // место в окне, где половинчатость названа словами. Гасить её больше нельзя:
-  // ровно из-за этого гашения человек не узнавал о ней ниоткуда.
+  // Без прав — одна строка, официальным тоном (sluzhba.OshibkaNetPrav).
+  if (netPrav) zametkaTekst = TEKST_NET_PRAV;
   zametka.textContent = zametkaTekst;
-  // Жёлтым — не только ручной прокси. Частичная защита того же порядка: без
-  // нажатия на кнопку ниже игры и видео идут мимо Kelevra, и показывать это
-  // серой сноской под цифрами значит спрятать главное.
+  // Жёлтым — строка «нужны права»: без нажатия на кнопку ниже Kelevra не
+  // работает вовсе, и серая сноска спрятала бы главное.
   // Подмена (дома, «ещё смотрю, что за сеть», слепота) — это рассказ про
   // положение дел, а не про объём защиты, и выглядеть он обязан подписью под
   // кругом, как KHint на телефоне: без рамки, без фона, по центру (см.
   // #zametka.pod-krugom в стилях). В остальных состояниях блок остаётся
   // карточкой на своём месте — он там объясняет кнопку под собой.
   zametka.className = "beda" + (zametkaTekst ? " vidno" : "") +
-      (s.ruchnoy_proksi || chastichno ? " vnimanie" : " spokoyno") +
+      (netPrav ? " vnimanie" : " spokoyno") +
       (podmena && zametkaTekst ? " pod-krugom" : "");
 
   // Подписка целиком (и карточка под кругом, и содержимое шторки) рисуется
@@ -2274,34 +2255,22 @@ async function obnovit() {
   // кругом и там для вкладки, — и две копии одного расчёта разъехались бы в
   // первый же день, когда правило «на исходе» сменится.
   narisovatPodpisku(s);
-  const knopkaPolnaya = $("knopka-polnaya");
-  // Кнопка прячется и когда стоит служба Windows: полный режим держит она,
-  // причём с загрузки компьютера и без единого подтверждения. Кнопка же —
-  // старый способ: она просит права окном Windows и живёт до перезапуска.
-  // Оставлять её при живой службе значит предлагать человеку сделать хуже то,
-  // что уже сделано лучше.
-  knopkaPolnaya.hidden = !s.mozhno_tun || !!s.sluzhba_est;
-  // Причина половинчатости (konfig.PrichinaBezPrav) — подсказкой при наведении,
-  // а не ещё одной строкой на экране: словами о том, что идёт мимо, уже
-  // сказала заметка над кнопкой, и повторять её третий раз незачем. Но сама
-  // причина («Windows не дал прав администратора») в заметке не названа — а
-  // человеку, который жмёт кнопку и видит окно UAC, полезно знать заранее,
-  // почему его спрашивают.
-  if (s.pochemu_chastichnaya) knopkaPolnaya.title = s.pochemu_chastichnaya;
-  else knopkaPolnaya.removeAttribute("title");
+  // «Дать права» — только без прав (bezPrav). Подсказки при наведении нет:
+  // строка над кнопкой уже сказала, зачем она.
+  $("knopka-polnaya").hidden = !netPrav;
 
   // Автозапуск: на не-Windows сборке (стенд, будущий Linux-порт) тумблер
   // прячем целиком — показывать переключатель, который ничего не делает,
   // хуже, чем не показывать его вовсе.
   const ryadAvt = $("ryad-avtozapusk"), bedaAvt = $("beda-avtozapusk"), podpisAvt = $("podpis-ustarela");
   ryadAvt.hidden = !s.avtozapusk_podderzhivaetsya;
-  // Рубрика «Сеть» держит ровно две строки, и обе умеют исчезнуть: автозапуск
-  // — на не-Windows сборке (стенд, будущий Linux-порт), строка службы — как
-  // только служба поставлена (obnovitStrokuSluzhby ниже). Когда исчезли обе,
-  // прячем и заголовок, и карточку: заголовок над пустой рамкой — тот же
-  // мусор на экране, что и мёртвая кнопка. Рубрику «Приложение» ниже это не
+  // Рубрика «Сеть» держит строку автозапуска, а та умеет исчезнуть — на
+  // не-Windows сборке (стенд, будущий Linux-порт). Тогда прячем и заголовок,
+  // и карточку: заголовок над пустой рамкой — тот же мусор на экране, что и
+  // мёртвая кнопка. (Строки «Работать без подтверждений» больше нет: служба
+  // ставится при первом запуске или кнопкой «Дать права».) Рубрику «Приложение» ниже это не
   // касается — её строки («Проверить обновление», журнал) есть всегда.
-  const setPusta = !s.avtozapusk_podderzhivaetsya && !!s.sluzhba_est;
+  const setPusta = !s.avtozapusk_podderzhivaetsya;
   $("zag-set").hidden = setPusta;
   $("karta-set").hidden = setPusta;
   if (s.avtozapusk_podderzhivaetsya) {
@@ -2367,7 +2336,13 @@ async function obnovit() {
   let beda = s.beda || "", spokoyno = false;
   if (s.kachaem_yadro) { beda = "Докачиваю рабочий файл — это разово, пара минут."; spokoyno = true; }
   else if (!s.yadro_est) { beda = "Всё нужное докачается само при первом подключении."; spokoyno = true; }
-  pokazatBeduSvyazi(beda, spokoyno);
+  // Без прав беды нет: состояние объяснено строкой над кнопкой «Дать права».
+  if (bezPrav(s)) { beda = ""; spokoyno = false; }
+  // Туннель не поднялся — заголовок беды говорит служба (s.otkaz, официальным
+  // тоном, без советов «попробуйте ещё раз»), сырой текст ядра — под
+  // «подробностями».
+  const otkazSvyazi = !bezPrav(s) && s.otkaz && s.sost !== "rabotaet" && s.sost !== "podnimaem" ? s.otkaz : "";
+  pokazatBeduSvyazi(otkazSvyazi ? (beda || otkazSvyazi) : beda, spokoyno, otkazSvyazi);
 }
 
 // Выбор узла. Список перерисовывается только когда он ДЕЙСТВИТЕЛЬНО изменился:
@@ -2661,6 +2636,8 @@ $("krug-blok").onclick = async () => {
   // выключить. Обратный ход при этом не потерян: следующее нажатие идёт по
   // ветке «ручной режим» (RuchnoyVybor уже стоит) и поднимает защиту
   // безусловно, ничего не переспрашивая.
+  // Без прав подключаться нечем: нажатие круга — та же просьба прав.
+  if (poslednee && bezPrav(poslednee)) { datPrava(); return; }
   const otklyuchit = !!(poslednee &&
       (poslednee.sost === "rabotaet" || poslednee.ozhidanie_doma));
   deystvieKruga = otklyuchit ? "otklyuchaem" : "podklyuchaem";
@@ -2673,50 +2650,25 @@ $("krug-blok").onclick = async () => {
   knopka.disabled = false; obnovit();
 };
 
-// Полная защита = туннель, а он требует прав администратора: приложение
-// перезапускается через окно UAC, эта копия закрывается сама.
-$("knopka-polnaya").onclick = async () => {
+// «Дать права»: окно Windows с запросом прав показывает ПРОЦЕСС ОКНА
+// (привязка kelevraDatPrava, cmd/kelevra okno_windows.go) — запрос от фонового
+// процесса Windows прячет на панели задач. Без привязки (стенд облика в
+// браузере) — ручка службы. Итог виден по состоянию: служба поставлена →
+// окно само переходит на неё, связь поднимается.
+async function datPrava() {
   const knopka = $("knopka-polnaya");
   knopka.disabled = true; pokazatBedu($("beda-svyazi"), "");
   try {
-    const d = await api("polnaya_zashchita", {});
-    if (d.perezapusk) pokazatBedu($("beda-svyazi"), "Перезапускаюсь с правами администратора…", true);
+    if (typeof window.kelevraDatPrava === "function") await window.kelevraDatPrava();
+    else await api("dat_prava", {});
   } catch (e) { pokazatBedu($("beda-svyazi"), e.message); }
-  knopka.disabled = false;
-};
+  setTimeout(() => { knopka.disabled = false; }, 3000);
+}
+$("knopka-polnaya").onclick = datPrava;
 
 // Клик всегда делает «правильную» вещь для того, что видно на экране:
 // выключено → включить, включено и свежо → выключить, включено но
 // устарело → включить заново (Vklyuchit перезаписывает путь).
-// Строка «Работать без подтверждений» показывается ровно в одном случае:
-// сервер сказал, что служба поддерживается и НЕ установлена.
-//
-// Проверка «строго равно false», а не «не истина», не придирка. Сборка без
-// поддержки службы поля не присылает вовсе, и «не истина» показала бы строку
-// там, где нажимать её некуда: ручка ответит отказом, а человек прочитает это
-// как поломку. Молчание сервера тут значит «такого тут нет», а не «нет, не
-// установлена».
-function obnovitStrokuSluzhby(sost) {
-  const knopka = $("knopka-sluzhba");
-  if (!knopka) return;
-  knopka.hidden = sost.sluzhba_est !== false;
-}
-
-$("knopka-sluzhba").onclick = async () => {
-  const podpis = $("podpis-sluzhba");
-  podpis.textContent = "Подтвердите в окне Windows…";
-  try {
-    const otvet = await api("sluzhba_postavit", {});
-    if (otvet && otvet.gotovo) {
-      podpis.textContent = "Готово, подтверждение больше не понадобится";
-    } else {
-      podpis.textContent = (otvet && otvet.pochemu) || "Не получилось";
-    }
-  } catch (e) {
-    podpis.textContent = "Не получилось";
-  }
-};
-
 // устарело → включить заново (Vklyuchit перезаписывает путь).
 $("perekl-avtozapusk").onclick = async () => {
   const perekl = $("perekl-avtozapusk");

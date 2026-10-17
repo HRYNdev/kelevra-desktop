@@ -8,7 +8,9 @@ package konfig
 // думает о своей структуре наш собственный код.
 //
 // Зачем именно так, а не через tun: на этой машине нет прав на tun inbound —
-// поднять его нельзя. mixed-inbound (socks5) даёт то же самое решение
+// поднять его нельзя. Приложение mixed-вход больше не держит (0.6.77, только
+// туннель), поэтому вход щупа вставляет сам щуп поверх готового конфига
+// (vstavitVhodShchupa). mixed-inbound (socks5) даёт то же самое решение
 // маршрутизатора (network/port/rule_set у route.rules) и поддерживает UDP
 // через UDP ASSOCIATE — этого достаточно, чтобы пропустить настоящий
 // UDP-пакет с портом назначения 443 и настоящий TCP-пакет с портом
@@ -150,11 +152,13 @@ func spisokZablokirovannogo(t *testing.T, dom string) string {
 func profilDlyaZhivogo(mixedPort int, putSpiska string) []byte {
 	d := map[string]any{
 		"log": map[string]any{"level": "info", "timestamp": true},
+		// Туннель — потому что без него Prigotovit конфиг не соберёт
+		// (OshibkaBezTunnelya). Поднять его щупу нельзя — прав нет; вход
+		// щупа (mixed) ставит vstavitVhodShchupa уже ПОСЛЕ сборки.
 		"inbounds": []any{
 			map[string]any{
-				"type": "mixed", "tag": "mixed-in",
-				"listen": "127.0.0.1", "listen_port": mixedPort,
-				"set_system_proxy": false,
+				"type": "tun", "tag": "tun-in", "interface_name": "tun125",
+				"address": []any{"172.19.0.1/30"},
 			},
 		},
 		"outbounds": []any{
@@ -178,6 +182,41 @@ func profilDlyaZhivogo(mixedPort int, putSpiska string) []byte {
 		},
 	}
 	b, _ := json.Marshal(d)
+	return b
+}
+
+// vstavitVhodShchupa меняет в готовом конфиге туннель на вход щупа (mixed без
+// системного прокси): туннель щупу не поднять, а решение маршрутизатора у
+// обоих входов одно и то же. Правила, ограниченные входом tun-in, получают
+// и вход щупа — иначе щуп проверял бы правило, которое к его трафику не
+// относится.
+func vstavitVhodShchupa(t *testing.T, gotovyy []byte, mixedPort int) []byte {
+	t.Helper()
+	d := razobrat(t, gotovyy)
+	d["inbounds"] = []any{map[string]any{
+		"type": "mixed", "tag": "mixed-in",
+		"listen": "127.0.0.1", "listen_port": mixedPort,
+		"set_system_proxy": false,
+	}}
+	r := d["route"].(map[string]any)
+	spisok, _ := r["rules"].([]any)
+	for _, p := range spisok {
+		pr, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		vhody, _ := pr["inbound"].([]any)
+		for _, v := range vhody {
+			if v == "tun-in" {
+				pr["inbound"] = append(vhody, "mixed-in")
+				break
+			}
+		}
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("не собрал конфиг щупа: %v", err)
+	}
 	return b
 }
 
@@ -424,13 +463,11 @@ func TestMarshrutizatorZhivymYadromRezhetQuicTochechno(t *testing.T) {
 	dom := t.TempDir()
 	mixedPort := svobodnyPort(t)
 	syroy := profilDlyaZhivogo(mixedPort, spisokZablokirovannogo(t, dom))
-	// BezSistemnogoProksi: true — иначе Prigotovit включит set_system_proxy
-	// на mixed-inbound (см. Prigotovit, ветка Proksi), а щуп не имеет права
-	// трогать настройки сети машины, на которой он идёт.
-	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: false, BezSistemnogoProksi: true})
+	gotovyy, _, err := Prigotovit(syroy, Vybor{})
 	if err != nil {
 		t.Fatalf("Prigotovit: %v", err)
 	}
+	gotovyy = vstavitVhodShchupa(t, gotovyy, mixedPort)
 
 	// Живой конфиг обязан содержать ровно наше правило, и обязан содержать
 	// его СУЖЕННЫМ — иначе щуп ниже проверял бы что-то другое.

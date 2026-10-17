@@ -35,7 +35,7 @@ from oblik_snimok import Ruchki, BAZA, ZAMETKI, sostoyanie, SHIRINA, VYSOTA  # n
 SCENY = {
     "1_dvoynik": dict(BAZA, sost="stoit", avtorezhim_vklyuchen=True,
                        avtorezhim_obstanovka="дома",
-                       zametka=ZAMETKI["ZametkaBezTunnelya"]),
+                       zametka=ZAMETKI["ZametkaVes"]),
     "2_tihaya_zhiva": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                             avtorezhim_vklyuchen=True, avtorezhim_obstanovka="дома",
                             zametka=ZAMETKI["ZametkaVes"]),

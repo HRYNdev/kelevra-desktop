@@ -55,13 +55,9 @@ type Sluzhba struct {
 	Yadro     *yadro.Yadro
 	Podpiska  *podpiska.Klient
 
-	// poprositPrava — точка подмены для стенда: настоящее окно UAC на linux
-	// не показать, а то, что новая копия получает pid этой, ещё не повышенной
-	// (передачу смены, а не гонку — см. polnayaZashchita), проверять надо
-	// именно тут.
-	poprositPrava func(smenaPID int) error
-	// vyhod — как эта копия уходит после согласия на права. По умолчанию
-	// os.Exit(0); на стенде подменяется, иначе тест убил бы сам себя.
+	// vyhod — как эта копия уходит, уступив место (обновление, новая копия).
+	// По умолчанию os.Exit(0); на стенде подменяется, иначе тест убил бы сам
+	// себя.
 	vyhod func()
 	// zapustitYadro — точка подмены для тестов лестницы подстраховок в
 	// PodnyatZashchitu (23-24.08): Yadro.Zapustit порождает настоящий
@@ -110,25 +106,6 @@ type Sluzhba struct {
 	// (8с, см. там же, почему именно столько) — своё поле только ради
 	// теста «заход завис», чтобы не ждать боевые 8с на каждый прогон.
 	avtorezhimKnopkaTaimaut time.Duration
-	// posleAvtozaprosaPrav — сигнал стенду, что zaprositPravaAvtomaticheskiEsliNado
-	// дописала отметку на диск (успех или отказ — не важно). Фоновая
-	// горутина не отдаёт своего результата вызвавшему, а тест не должен
-	// узнавать о её завершении опросом незащищённого поля (так и была
-	// поймана гонка 27.08 — busy-poll по s.Nastroyki.UzheSprosiliPrava() без
-	// синхронизации). nil в бою — ничего не подмешивает.
-	posleAvtozaprosaPrav func()
-	// sohranitNastroyki и priUhode — две точки подмены ТОЛЬКО для доказательства
-	// ПОРЯДКА в zaprositPravaAvtomaticheskiEsliNado (правка 27.08: сохранение
-	// отметки обязано случиться раньше ухода). Временем этот порядок не
-	// поймать: настоящий os.Exit откладывается на 300 мс в uydiPosleSoglasiyaNaPrava,
-	// а Sohranit на t.TempDir() исполняется за микросекунды что до, что после
-	// спавна той горутины — обе версии кода одинаково «успевают» с большим
-	// запасом. Метки пишутся синхронно в момент вызова, отдельно от времени.
-	// По умолчанию nil — sohranitNastroyki вызывает hranenie.Sohranit(s.Nastroyki)
-	// напрямую, priUhode ничего не делает.
-	sohranitNastroyki func() error
-	priUhode          func()
-
 	// OblachkoObnovleniya — как сказать о находке пузырём в трее (cmd/kelevra/
 	// trey_windows.go: pokazatOblachkoObnovleniya), подключается снаружи из
 	// main.go: пакет sluzhba про Windows-трей ничего не знает и знать не
@@ -151,28 +128,18 @@ type Sluzhba struct {
 	// подключён (стенд-тесты внутри пакета).
 	MetkaObnovleniya func(versiya string)
 
-	// MetkaZashchity — как показать на значке трея, ЧТО именно сейчас
-	// защищено (cmd/kelevra/metka_zashchity.go: pometitZashchitu). Той же
-	// природы, что MetkaObnovleniya выше: состояние, а не событие.
-	//
-	// Зачем вообще. Подсказка значка до 31.08 была константой «Kelevra: VPN
-	// включён» и говорила её одинаково в обоих режимах. В прокси-режиме это
-	// прямая ложь: через Kelevra идут только программы, уважающие системный
-	// прокси, и только TCP — весь UDP, а значит и QUIC, а значит и YouTube,
-	// уходит к провайдеру мимо. Копия висит в трее неделями, и подсказка —
-	// единственное, что человек видит, не открывая окна. Она обязана
-	// различать полную защиту и половинную.
-	//
-	// chastichnaya — защита половинная (konfig.Kartina.Chastichnaya),
-	// pochemu — почему, словами человека (konfig.Kartina.PochemuChastichnaya).
-	// podnyata=false — защиты сейчас нет вовсе. nil — хук не подключён
-	// (стенд-тесты внутри этого пакета).
-	MetkaZashchity func(podnyata, chastichnaya bool, pochemu string)
+	// MetkaZashchity — как показать на значке трея, поднята ли связь
+	// (cmd/kelevra/metka_zashchity.go: pometitZashchitu). Той же природы, что
+	// MetkaObnovleniya выше: состояние, а не событие. Подсказка значка до 31.08
+	// была константой «Kelevra: VPN включён» и висела и на опущенной защите.
+	// Неполного режима с 0.6.77 нет, и говорить значку про «половину» нечего.
+	// nil — хук не подключён (стенд-тесты внутри этого пакета).
+	MetkaZashchity func(podnyata bool)
 
 	// PerezapuskPosleObnovleniya — как поднять новую копию после того, как
-	// PostavitNaydennoe заменила .exe на диске: та же передача смены, что уже
-	// работает у prava.Poprosit после согласия на UAC (cmd/kelevra/main.go:
-	// zapustitSmenuPosleObnovleniya, --smena, zhdatSmenu) — новая копия сама
+	// PostavitNaydennoe заменила .exe на диске: передача смены
+	// (cmd/kelevra/main.go: zapustitSmenuPosleObnovleniya, --smena,
+	// zhdatSmenu) — новая копия сама
 	// дожидается смерти этого pid, а не гонка на фиксированной паузе.
 	// Подключается снаружи из main.go по тому же принципу, что и
 	// OblachkoObnovleniya выше: пакет sluzhba не порождает процессы сам. nil —
@@ -192,9 +159,10 @@ type Sluzhba struct {
 	PerezapuskPosleObnovleniya func(put string, pid int) error
 
 	// PostavitSluzhbuWindows — попросить у человека права и поставить службу
-	// Windows. Хук, а не прямой вызов: решение о том, как именно просить права
-	// и что при этом запускать, живёт в cmd/kelevra, где известен режим запуска.
-	// nil означает «на этой системе службы нет» — ручка тогда честно откажет.
+	// Windows (кнопка «Дать права», ручка /api/dat_prava). Хук, а не прямой
+	// вызов: решение о том, как именно просить права и что при этом
+	// запускать, живёт в cmd/kelevra, где известен режим запуска. nil
+	// означает «на этой системе службы нет» — ручка тогда честно откажет.
 	PostavitSluzhbuWindows func() error
 	// SluzhbaWindowsEst — установлена ли служба. Тоже хук: пакету незачем
 	// знать, как устроен диспетчер служб, ему нужен ответ да или нет.
@@ -205,6 +173,10 @@ type Sluzhba struct {
 	klyuch     string
 	kachaemBin bool // идёт скачивание ядра
 	kartina    konfig.Kartina
+	// otkaz — почему последняя попытка не подняла связь, словами человека
+	// (Oshibka* из PodnyatZashchitu). Пусто — связь поднята или её не
+	// поднимали. Окно показывает строку в состоянии «Нет подключения».
+	otkaz string
 
 	// naydennoeObnovlenie — находка ФОНОВОЙ проверки (SleditZaObnovleniem,
 	// obnovlenieProveritRuchka), не ручного нажатия кнопки: та отвечает
@@ -337,20 +309,15 @@ type Sluzhba struct {
 	// Otpravshchik ходит в сеть и читает живую папку приложения. nil в бою.
 	otpravshchikZhurnalovDlyaStenda *zhurnaly.Otpravshchik
 
-	// pravaDlyaStenda — точка подмены prava.Est() при СБОРКЕ КОНФИГА. nil в
-	// бою, и тогда спрашивается настоящий процесс.
+	// pravaDlyaStenda — точка подмены prava.Est(): есть ли у этой копии права
+	// поднять туннель. nil в бою, и тогда спрашивается настоящий процесс.
 	//
-	// Зачем она есть. Лестница деградации режимов начинается с попытки поднять
-	// туннель, а туннель бывает только при правах администратора — то есть
-	// весь путь «туннель не поднялся → откат в режим браузеров» на стенде
-	// иначе не воспроизвести вовсе: prava.Est() отвечает про настоящий
-	// процесс, а гонять проверки от администратора значит поднимать на машине
-	// проверяющего настоящий сетевой адаптер (запрет трогать сеть). Тот же
-	// приём, что Adapter в internal/tunnel и zapustitYadro рядом: подменяем
-	// ровно один ответ системы, а проверяем своё решение по нему.
-	//
-	// Только сборка конфига: /api/sostoyanie про права отвечает человеку и
-	// обязано спрашивать систему само.
+	// Зачем она есть. Туннель бывает только при правах администратора, а
+	// prava.Est() отвечает про настоящий процесс: гонять проверки от
+	// администратора значит поднимать на машине проверяющего настоящий
+	// сетевой адаптер (запрет трогать сеть). Тот же приём, что Adapter в
+	// internal/tunnel и zapustitYadro рядом: подменяем ровно один ответ
+	// системы, а проверяем своё решение по нему.
 	pravaDlyaStenda func() bool
 
 	// adapterZhivDlyaStenda — точка подмены tunnel.Zhivoy (есть ли в системе
@@ -369,15 +336,11 @@ type Sluzhba struct {
 	// связи, и проверка молча проходила бы мимо самого случая.
 	zashchitaPodnyataDlyaStenda func() bool
 
-	// snyatProksiDlyaStenda — точка подмены proksi.Snyat(). nil в бою.
-	//
-	// Заведена ради беды 08.09 (машина второго человека семьи, чужая сеть):
-	// не поднялась ни полная связь, ни половинная, а запись системного прокси
-	// осталась висеть и указывала на ядро, которого нет. Браузер после этого
-	// мёртв целиком при живой сети. Проверить снятие иначе нечем: на линуксе,
-	// где идут все проверки, proksi.Snyat — заглушка, а гонять их на живой
-	// Windows нельзя (запрет трогать сеть на машине человека, тот же, что у
-	// pravaDlyaStenda и adapterZhivDlyaStenda рядом).
+	// snyatProksiDlyaStenda — точка подмены proksi.UbratSled() (уборка
+	// системного прокси, оставленного старой версией в прокси-режиме). nil в
+	// бою. Проверить уборку иначе нечем: на линуксе proksi.UbratSled —
+	// заглушка, а гонять проверки на живой Windows нельзя (запрет трогать
+	// сеть на машине человека, тот же, что у pravaDlyaStenda рядом).
 	snyatProksiDlyaStenda func()
 
 	// srokOsvobozhdeniyaDlyaStenda — сколько ждать, что занятое имя адаптера
@@ -444,22 +407,17 @@ func Novaya() (*Sluzhba, error) {
 }
 
 // PerestroitKonfig готовит рабочий конфиг ядра из профиля, который прислал
-// сервер: убирает поля, работающие только на телефоне, и выбирает режим по
-// правам. Без этого ядро на компьютере не стартует вообще.
+// сервер: убирает поля, работающие только на телефоне, и вход прокси. Без
+// этого ядро на компьютере не стартует вообще.
 func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(konfig.Vybor{}) }
 
-// perestroit принимает отступления от обычной сборки конфига (dop.Prava
-// подставляется тут же, по факту прав на машине — вызывающему коду задавать
-// его незачем). BezSistemnogoProksi и BezSetevyhPravil в dop складываются, а
-// не заменяют друг друга: PodnyatZashchitu может взвести оба по очереди на
-// одном и том же подключении, и второй отказ не должен откатывать первую
-// подстраховку.
+// perestroit принимает отступления от обычной сборки конфига (имя адаптера,
+// правила с диска).
 func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
 		return err
 	}
-	dop.Prava = s.estPrava()
 	gotovyy, k, err := konfig.Prigotovit(syroy, dop)
 	if err != nil {
 		return err
@@ -478,12 +436,12 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	// не писал ничего вовсе, и разбирать жалобы «сайты по 10 секунд» и
 	// «списки не обновляются» было буквально нечем.
 	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s",
-		k.Rezhim, dop.Prava, k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), zametka(k.Zametka))
+		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), zametka(k.Zametka))
 	return nil
 }
 
-// pripiskaMtu — размер пакета туннеля для строки журнала. В половинном режиме
-// туннеля нет вовсе, и приписки тоже нет.
+// pripiskaMtu — размер пакета туннеля для строки журнала. Нет числа в
+// профиле — нет и приписки.
 func pripiskaMtu(mtu int) string {
 	if mtu == 0 {
 		return ""
@@ -537,10 +495,14 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/panel", s.panelRuchka)
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
-	m.HandleFunc(pref+"/api/polnaya_zashchita", s.polnayaZashchita)
+	// «Дать права»: просьба прав и установка службы Windows. Прежние имена
+	// ручки (кнопки «Включить для всех программ» и «Работать без
+	// подтверждений») ведут туда же — их могут звать окна старых версий.
+	m.HandleFunc(pref+"/api/dat_prava", s.datPrava)
+	m.HandleFunc(pref+"/api/polnaya_zashchita", s.datPrava)
 	m.HandleFunc(pref+"/api/avtozapusk", s.avtozapuskRuchka)
 	m.HandleFunc(pref+"/api/avtorezhim", s.avtorezhimRuchka)
-	m.HandleFunc(pref+"/api/sluzhba_postavit", s.sluzhbaPostavit)
+	m.HandleFunc(pref+"/api/sluzhba_postavit", s.datPrava)
 	m.HandleFunc(pref+"/api/posle_obnovleniya", s.posleObnovleniyaRuchka)
 	m.HandleFunc(pref+"/api/ustupit_mesto", s.ustupitMestoRuchka)
 	m.HandleFunc(pref+"/api/uzly", s.uzly)
@@ -902,8 +864,8 @@ func (s *Sluzhba) obnovleniePostavitRuchka(w http.ResponseWriter, r *http.Reques
 //
 // Любая неудача — ничего не гасим и не трогаем: эта копия продолжает жить
 // старой версией, человек может нажать «Проверить обновление» и попробовать
-// снова. Успех — уходим тем же путём, каким уходит polnayaZashchita после
-// согласия на UAC: гасим своё ядро, поднимаем смену (PerezapuskPosleObnovleniya)
+// снова. Успех — ядро НЕ гасим (новая копия его примет), поднимаем смену
+// (PerezapuskPosleObnovleniya)
 // и завершаем процесс, — с той же паузой ~300мс, чтобы HTTP-ответ успел уйти.
 func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 	s.zamok.Lock()
@@ -991,38 +953,7 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 }
 
 // ZadatVyhod меняет способ, которым копия уходит после того, как поставила
-// sluzhbaPostavit — ручка «работать без подтверждений».
-//
-// Отвечает сразу, не дожидаясь конца установки: дальше на экране человека
-// появляется окно администратора Windows, и держать в это время открытый
-// запрос незачем — новая копия ставит службу сама и уходит, а эта копия к
-// тому моменту может быть уже перезапущена диспетчером.
-func (s *Sluzhba) sluzhbaPostavit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "только POST", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.PostavitSluzhbuWindows == nil {
-		otdat(w, map[string]any{"gotovo": false, "pochemu": "на этой системе службы нет"}, nil)
-		return
-	}
-	if err := s.PostavitSluzhbuWindows(); err != nil {
-		log.Printf("установка службы не начата: %v", err)
-		otdat(w, map[string]any{"gotovo": false, "pochemu": err.Error()}, nil)
-		return
-	}
-	// vinsluzhba.Ustanovit запускает службу сразу по завершении регистрации —
-	// с этой секунды туннель поднимает ОНА. Эта, уже работающая копия обязана
-	// погасить своё ядро, иначе на машине останутся два хозяина одного
-	// адаптера (беда 25.08 тем же кодом лечится на polnayaZashchita и
-	// установке обновления — см. uydiPosleSoglasiyaNaPrava и Yadro.Ostanovit
-	// в obnovleniePostavit). Сам процесс не уходит: в отличие от тех путей,
-	// его никто не подменяет новой копией — окно и трей должны жить дальше.
-	_ = s.Yadro.Ostanovit()
-	otdat(w, map[string]any{"gotovo": true}, nil)
-}
-
-// обновление или отдала права новой копии.
+// обновление или уступила место новой копии.
 //
 // По умолчанию это os.Exit(0) — обычному процессу больше ничего и не нужно.
 // Службе Windows нужно другое: уйти так, чтобы диспетчер служб счёл это
@@ -1275,9 +1206,9 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 		}
 	}
 	return &zhurnaly.Otpravshchik{
-		Adres:     fmt.Sprintf("%s://%s/logs", shema, host),
-		DeviceID:  s.Nastroyki.DeviceID,
-		Versiya:   podpiska.Versiya,
+		Adres:    fmt.Sprintf("%s://%s/logs", shema, host),
+		DeviceID: s.Nastroyki.DeviceID,
+		Versiya:  podpiska.Versiya,
 		Puti: zhurnaly.Istochniki(
 			hranenie.PutZhurnala(),
 			hranenie.ZapasnayaPapkaZhurnala(),
@@ -1495,11 +1426,17 @@ type otvetSostoyaniya struct {
 	Imya       string `json:"imya,omitempty"`
 	DoUnix     int64  `json:"do_unix,omitempty"`
 	PID        string `json:"pid,omitempty"`
-	Rezhim     string `json:"rezhim,omitempty"`     // tunnel | proksi
-	Zametka    string `json:"zametka,omitempty"`    // почему режим такой
-	MozhnoTun  bool   `json:"mozhno_tun,omitempty"` // туннель в профиле есть, а прав нет
-	Prava      bool   `json:"prava"`                // запущены ли мы администратором
-	SluzhbaEst bool   `json:"sluzhba_est"`          // установлена ли служба Windows: с ней подтверждение прав спрашивается один раз
+	Rezhim     string `json:"rezhim,omitempty"`  // tunnel (другого режима нет)
+	Zametka    string `json:"zametka,omitempty"` // что сейчас идёт через Kelevra
+	Prava      bool   `json:"prava"`             // запущены ли мы администратором
+	SluzhbaEst bool   `json:"sluzhba_est"`       // установлена ли служба Windows
+	// NuzhnyPrava — у этой копии нет прав поднять туннель (служба Windows не
+	// установлена, человек отказал в запросе прав). Окно рисует «Не
+	// подключено», строку OshibkaNetPrav и кнопку «Дать права».
+	NuzhnyPrava bool `json:"nuzhny_prava"`
+	// Otkaz — почему последняя попытка не подняла связь, словами человека
+	// (sluzhba.Oshibka*). Пусто — сказать нечего.
+	Otkaz string `json:"otkaz,omitempty"`
 	// PosleObnovleniya — окно открыто сразу после установки новой версии.
 	// Окно по нему один раз показывает, что изменилось и что делать дальше:
 	// тихая подсказка в значке этого не делает — у второго человека семьи
@@ -1511,23 +1448,6 @@ type otvetSostoyaniya struct {
 	// только при старте, и без этого поля обновление правил остаётся
 	// невидимым: файлы поменялись, а человеку это никак не показано.
 	SvezhihPravil int `json:"svezhih_pravil,omitempty"`
-	// RuchnoyProksi — система отказалась настроить прокси сама, адрес придётся вписать руками.
-	RuchnoyProksi bool `json:"ruchnoy_proksi,omitempty"`
-	// Chastichnaya — защита ПОЛОВИННАЯ: ядро стоит системным прокси, и мимо
-	// него идёт весь UDP (значит и QUIC, значит и YouTube). Окно по этому
-	// полю рисует круг жёлтым и словом «частично» вместо зелёного
-	// «подключено» — диагноз 31.08, дословно: «впн не выполняет свою
-	// основную функцию». Решение принимает konfig (Kartina.Chastichnaya) —
-	// тот же код, что собирает конфиг, — а не окно выводом из Rezhim:
-	// иначе окно и конфиг разъедутся в день появления третьего режима.
-	//
-	// Как и Zametka, доезжает до окна ТОЛЬКО пока ядро реально поднято: у
-	// опущенной защиты нет ни полной, ни половинной степени, есть «нет
-	// защиты» (см. TestSostoyanieNeNesetZametkuKogdaZashchitaOpushchena).
-	Chastichnaya bool `json:"chastichnaya,omitempty"`
-	// PochemuChastichnaya — почему половинная, словами человека
-	// (konfig.PrichinaBezPrav / PrichinaBezTunnelya). Идёт прямо в окно.
-	PochemuChastichnaya string `json:"pochemu_chastichnaya,omitempty"`
 	// Автозапуск с Windows. Podderzhivaetsya — ложь на не-Windows сборке (тумблер
 	// там нечестно показывать хоть включённым, хоть выключенным: он ничего не
 	// делает). Ustarela — запись есть, но ведёт на другой .exe (переустановка в
@@ -1609,9 +1529,9 @@ type otvetSostoyaniya struct {
 	// PodpiskaEst отличает «сервер ещё не отвечал» от «ответил и подписка
 	// приостановлена»: без него окно на свежем запуске рисовало бы
 	// «Приостановлена» по нулевому Aktivna — то есть врало бы.
-	PodpiskaEst         bool  `json:"podpiska_est"`
+	PodpiskaEst bool `json:"podpiska_est"`
 	// Panel — машина админа своей сети: окно показывает кнопку «Панель сети».
-	Panel bool `json:"panel,omitempty"`
+	Panel               bool  `json:"panel,omitempty"`
 	PodpiskaAktivna     bool  `json:"podpiska_aktivna,omitempty"`
 	PodpiskaLimitBayt   int64 `json:"podpiska_limit_bayt,omitempty"`
 	PodpiskaSyedenoBayt int64 `json:"podpiska_syedeno_bayt,omitempty"`
@@ -1648,26 +1568,17 @@ type ustroystvoOkna struct {
 // «дома» и ядро прямо сейчас не работает (защита осознанно опущена или ещё
 // не поднималась). Вынесена отдельной функцией от полей otvetSostoyaniya,
 // чтобы условие проверялось таблицей случаев без поднятия HTTP-стенда.
-// obyomZashchity — что окно узнаёт про ОБЪЁМ защиты: заметка (что именно
-// сейчас идёт через Kelevra), признак половинчатости и её причина.
+// obyomZashchity — что окно узнаёт про то, что сейчас идёт через Kelevra.
 //
-// Отдельной чистой функцией от полей otvetSostoyaniya — по той же причине, по
-// которой рядом стоит ozhidanieDoma: правило проверяется таблицей случаев без
-// поднятия HTTP-стенда и без живого ядра.
-//
-// Единственное правило целиком: пока ядро НЕ работает, все три ответа пусты.
-// s.kartina заполняется при сборке конфига и переживает опускание защиты
-// молча — ни ручной тумблер (OpustitZashchitu), ни авторежим
-// (avtorezhimKolbek) её не чистят. Без этого условия окно продолжало бы
-// говорить про объём защиты, которой в этот момент нет вовсе (регрессия
-// 22.08, TestSostoyanieNeNesetZametkuKogdaZashchitaOpushchena) — а с
-// появлением половинчатости то же самое врало бы ещё и жёлтым кругом
-// «частично» на выключенном VPN.
-func obyomZashchity(sost string, k konfig.Kartina) (zametka string, chastichnaya bool, pochemu string) {
+// Единственное правило: пока ядро НЕ работает, ответ пуст. s.kartina
+// заполняется при сборке конфига и переживает опускание защиты молча — без
+// этого условия окно продолжало бы говорить про связь, которой в этот момент
+// нет вовсе (регрессия 22.08, TestSostoyanieNeNesetZametkuKogdaZashchitaOpushchena).
+func obyomZashchity(sost string, k konfig.Kartina) string {
 	if sost != string(yadro.Rabotaet) {
-		return "", false, ""
+		return ""
 	}
-	return k.Zametka, k.Chastichnaya, k.PochemuChastichnaya
+	return k.Zametka
 }
 
 func ozhidanieDoma(avtorezhimVklyuchen bool, obstanovka string, sost string) bool {
@@ -1788,6 +1699,9 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	k := s.kartina
+	if o.Sost != string(yadro.Rabotaet) && o.Sost != string(yadro.Podnimaem) {
+		o.Otkaz = s.otkaz
+	}
 	if s.naydennoeObnovlenie != nil {
 		o.NovayaVersiyaDostupna = s.naydennoeObnovlenie.Versiya
 	}
@@ -1804,16 +1718,16 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	}
 	s.zamok.Unlock()
 	o.Rezhim = string(k.Rezhim)
-	// Zametka описывает ОБЪЁМ защиты («защищены только браузеры» и соседи,
-	// internal/konfig/konfig.go) — правда, только пока защита реально
-	// поднята (API ядра отвечает). k.kartina не чистится, когда защита
+	// Zametka описывает, что идёт через Kelevra (internal/konfig/konfig.go) —
+	// правда, только пока защита реально поднята (API ядра отвечает). k.kartina не чистится, когда защита
 	// опущена — ни ручным тумблером (OpustitZashchitu), ни авторежимом
 	// (avtorezhimKolbek), — так что без этого условия окно продолжало бы
 	// врать про объём защиты, которой в этот момент нет вовсе. Заметка
 	// авторежима (зачем защита опущена) — отдельный текст, живёт в JS
 	// (zametkaAvtorezhima, oblik/index.html) и этой правки не касается.
-	o.Zametka, o.Chastichnaya, o.PochemuChastichnaya = obyomZashchity(o.Sost, k)
+	o.Zametka = obyomZashchity(o.Sost, k)
 	o.Prava = prava.Est()
+	o.NuzhnyPrava = !s.estPrava()
 	if s.SluzhbaWindowsEst != nil {
 		o.SluzhbaEst = s.SluzhbaWindowsEst()
 	}
@@ -1826,9 +1740,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	s.posleObnovleniya = ""
 	o.SvezhihPravil = s.svezhihPravil
 	s.zamok.Unlock()
-	o.MozhnoTun = k.EstTunnel && !o.Prava
 	o.PravaUzheSprosheny = s.Nastroyki.UzheSprosiliPrava()
-	o.RuchnoyProksi = k.RuchnoyProksi
 	// runtime.GOOS, а не сам факт ошибки: на не-Windows avtozapusk всегда
 	// отвечает своей заглушкой avtozapusk.Ne, и эту ошибку незачем нести в
 	// окно текстом — там и так спрятан весь блок.
@@ -2278,16 +2190,76 @@ func (s *Sluzhba) vzyatSvedeniya(ctx context.Context) (*podpiska.Svedeniya, erro
 	return s.Podpiska.Svedeniya(ctx, s.Nastroyki.Kod)
 }
 
-// PodnyatZashchitu поднимает ядро, а если ядра на машине ещё нет — сначала
+// Отказы подъёма связи, которые читает человек: окно показывает их текст как
+// есть, поэтому тон официальный, без первого лица и без советов «попробуйте
+// ещё раз» — связь в этих случаях не поднята вовсе, и ступени «хотя бы
+// браузеры» больше нет (решение владельца 17.10: «нет никаких неполных
+// режимов и не рабочих»).
+var (
+	// OshibkaNetPrav — у этой копии нет прав администратора: туннель поднять
+	// нечем. Так бывает, только пока служба Windows не установлена (человек
+	// отказал в запросе прав); окно показывает кнопку «Дать права».
+	OshibkaNetPrav = errors.New("Для работы Kelevra нужны права администратора.")
+	// OshibkaAdapterZanyat — сетевое устройство туннеля держит остаток
+	// прошлого подключения, и соседние имена тоже заняты. Повтор не поможет:
+	// устройство освобождает перезагрузка (замер с машины человека 01.09).
+	OshibkaAdapterZanyat = errors.New("Сетевое устройство занято прошлым подключением. Требуется перезагрузка компьютера.")
+	// OshibkaTunnelNePodnyalsya — ядро не создало туннель по другой причине
+	// (драйвер, отказ системы). Сырой текст ядра остаётся в журнале и под
+	// «подробностями» окна (s.beda), человеку — эта строка.
+	OshibkaTunnelNePodnyalsya = errors.New("Не удалось создать сетевое подключение Kelevra.")
+)
+
+// otkazPodyoma — отказ подъёма с двумя лицами: Error() — строка для человека,
+// а errors.Is/As видят и её, и настоящую причину (ошибку ядра).
+type otkazPodyoma struct {
+	dlyaCheloveka error
+	prichina      error
+}
+
+func (o otkazPodyoma) Error() string   { return o.dlyaCheloveka.Error() }
+func (o otkazPodyoma) Unwrap() []error { return []error{o.dlyaCheloveka, o.prichina} }
+
+// povtorovAdaptera — сколько раз поднимать туннель заново на соседнем имени
+// адаптера, если ядро упало на занятом. Три: остаток одной прошлой попытки
+// снимается первым же повтором (замер 09.09: подъём на свободном имени — 1 с),
+// а если заняты три имени подряд, дело в системе, и четвёртая попытка только
+// тратит время человека.
+const povtorovAdaptera = 3
+
+// adapterZanyatPoOshibke — ядро упало потому, что имя или адрес сетевого
+// адаптера держит остаток прошлой попытки: «create adapter … file already
+// exists» (имя) или «set ipv4 address: The object already exists» (адрес,
+// замер 06.09).
+func adapterZanyatPoOshibke(err error) bool {
+	if err == nil {
+		return false
+	}
+	return tunnel.ZanyatoePoOshibke(err) || strings.Contains(strings.ToLower(err.Error()), "object already exists")
+}
+
+// tunnelPoOshibke — ядро упало именно на туннеле, а не на сервере, правилах
+// или порте.
+func tunnelPoOshibke(err error) bool {
+	if err == nil {
+		return false
+	}
+	t := strings.ToLower(err.Error())
+	return strings.Contains(t, "inbound/tun") || strings.Contains(t, "configure tun") ||
+		strings.Contains(t, "wintun") || strings.Contains(t, "create adapter")
+}
+
+// PodnyatZashchitu поднимает туннель, а если ядра на машине ещё нет — сначала
 // приносит его сам. Общее тело для ручки «Подключить» (podklyuchit) и для
 // авторежима (вызывается из avtorezhimKolbek, когда обстановка стала «вне
-// дома») — раньше это было только внутри HTTP-обработчика, и авторежиму
-// подключиться было некуда.
+// дома»).
+//
+// Режим один — туннель. Нет прав — OshibkaNetPrav, ядро не запускается вовсе.
+// Туннель не поднялся — связь не поднята, человеку причина (Oshibka*).
+// Системный прокси не ставится никогда.
 //
 // ctx — основа для собственных таймаутов метода (15 минут на скачивание
-// ядра, 70 секунд на его старт); HTTP-обработчик передаёт context.Background()
-// — так же, как было устроено до выноса метода, чтобы поведение ручки не
-// изменилось ни на йоту.
+// ядра, 70 секунд на его старт); HTTP-обработчик передаёт context.Background().
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// Пока идём вверх, авторежиму нельзя гасить ядро из-под нас (см. поле
 	// podyomIdet и OpustitZashchitu).
@@ -2299,6 +2271,14 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		s.podyomIdet = false
 		s.zamok.Unlock()
 	}()
+
+	// Права — раньше всего, даже раньше скачивания ядра: без них туннель не
+	// поднять, а качать мегабайты ради отказа незачем.
+	if !s.estPrava() {
+		log.Printf("подключение не начато: у этой копии нет прав администратора (служба Windows не установлена)")
+		s.soobshchitTreyuProZashchitu(false)
+		return OshibkaNetPrav
+	}
 
 	if !s.Yadro.EstBinar() {
 		s.zamok.Lock()
@@ -2325,8 +2305,6 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			return err
 		}
 	}
-	// Права могли появиться (человек перезапустил приложение администратором) —
-	// пересобираем конфиг перед стартом, иначе режим останется вчерашним.
 	vybor := konfig.Vybor{}
 	// Правила берём С ДИСКА, если кеш полон, — и ядро на старте в сеть за ними
 	// не ходит вовсе.
@@ -2336,52 +2314,41 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// в момент старта ядра резолв не работал — Windows перестраивает DNS под
 	// туннель, старый резолвер уже молчит, новый ещё не поднялся, потому что
 	// ядро и не стартовало. Человек в этой петле оставался без связи.
-	// ЗДЕСЬ НЕТ ЗАКАЧКИ ПРАВИЛ, И ЭТО РЕШЕНИЕ, А НЕ ЗАБЫВЧИВОСТЬ.
-	//
-	// Соблазн велик: на чистой машине кеша ещё нет, и первый подъём уходит в
-	// сеть за правилами силами самого ядра (замер на стенде 09.09 — 15.9 с
-	// против 1.7 при повторном подключении). Но всякая сетевая работа на
-	// пути нажатой кнопки сдвигает подъём, а за ним — весь авторежим: гейт
-	// дважды подряд поймал на этом мои же правки (защита поднималась дважды,
-	// «появилось залипание»).
-	//
-	// Кеш наполняют часы (SveryatPravila): первый заход — сразу при запуске
-	// службы, задолго до того, как человек нажмёт «Подключить».
+	// ЗДЕСЬ НЕТ ЗАКАЧКИ ПРАВИЛ, И ЭТО РЕШЕНИЕ, А НЕ ЗАБЫВЧИВОСТЬ: всякая
+	// сетевая работа на пути нажатой кнопки сдвигает подъём, а за ним — весь
+	// авторежим. Кеш наполняют часы (SveryatPravila).
 	s.dobavitPravilaIzKesha(&vybor, true)
 	if err := s.perestroit(vybor); err != nil {
 		log.Printf("не подготовил конфиг: %v", err)
 		return fmt.Errorf("не подготовил конфиг: %w", err)
 	}
+	// Имя адаптера из профиля — от него считается сдвиг адресов на повторах.
+	s.zamok.Lock()
+	imyaIzProfilya := s.kartina.TunImya
+	s.zamok.Unlock()
 	// Имя сетевого адаптера туннеля должно быть свободно ДО запуска ядра.
 	//
 	// Беда с машины человека 01.09: он нажал «Отключить», через 13 секунд
 	// подключился снова, и ядро упало на «create adapter: файл уже существует
 	// | open existing adapter: элемент не найден» — имя tun125 осталось занято
 	// остатком прошлой попытки. Падает ядро не сразу, а через ПЯТНАДЦАТЬ
-	// секунд, и всё это время человек смотрит на «Подключаюсь», чтобы в конце
-	// получить половинную защиту вместо полной. За вечер это повторилось
-	// дважды. Вопрос системе про имя стоит миллисекунды — задаём его сами и
+	// секунд. Вопрос системе про имя стоит миллисекунды — задаём его сами и
 	// заранее (internal/tunnel.SvobodnoeImya).
-	//
-	// otkatVProksi — защита в итоге поднимается НЕ в том режиме, который
-	// человек заказал. Объявлен тут, а не у лестницы отката ниже: спуститься
-	// ступенькой ниже можно и до первого запуска ядра — когда заранее видно,
-	// что запускать нечего.
-	vybor, otkatVProksi := s.podobratImyaAdaptera(vybor)
+	vybor, err := s.podobratImyaAdaptera(vybor)
+	if err != nil {
+		s.zapomnitOtkaz(err)
+		s.soobshchitTreyuProZashchitu(false)
+		return err
+	}
 	zapustit := s.Yadro.Zapustit
 	if s.zapustitYadro != nil {
 		zapustit = s.zapustitYadro
 	}
-	// Отменённый ctx обязан обрывать лестницу подстраховок, а не проходить её
-	// до конца. Ступеней у неё до четырёх, каждая до 70 с — за это время
-	// человек успевает нажать «Отключить», и авторежим (единственный, кто
-	// зовёт этот метод с отменяемым ctx — см. avtorezhimKolbek) продолжал бы
-	// поднимать защиту, с которой человек уже попрощался. Обёртка вокруг
-	// zapustit, а не проверка в начале метода: ступени зовут его по одной, и
-	// оборваться нужно на ближайшей, а не только на входе.
-	//
-	// Кнопкам это ничего не меняет: podklyuchit зовёт PodnyatZashchitu с
-	// context.Background(), который не отменяется никогда.
+	// Отменённый ctx обязан обрывать повторы, а не проходить их до конца:
+	// каждая попытка до 70 с, и за это время человек успевает нажать
+	// «Отключить» (авторежим — единственный, кто зовёт этот метод с
+	// отменяемым ctx, см. avtorezhimKolbek). Кнопкам это ничего не меняет:
+	// podklyuchit зовёт PodnyatZashchitu с context.Background().
 	iskhodnyyZapusk := zapustit
 	zapustit = func(c context.Context) error {
 		if err := ctx.Err(); err != nil {
@@ -2391,115 +2358,52 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	}
 	zctx, otmena := context.WithTimeout(ctx, 70*time.Second)
 	defer otmena()
-	err := zapustit(zctx)
-	// Отказ системы настроить прокси ядро считает поводом упасть. Человеку от
-	// этого одна беда: связи нет вообще. Поднимаем ядро без просьбы к системе
-	// и говорим адрес прокси прямо в окне.
-	//
-	// 23.08: сеть подстраховки не ловила ровно тот случай, ради которого её
-	// сделали. На Linux ядро падает строкой «initialize system proxy», а на
-	// WINDOWS — «start inbound/mixed[mixed-in]: set system proxy:
-	// InternetSetOption(ProxySettingsChanged): winapi error #12009» (замер под
-	// wine, stend/proksi.sh сценарий 4). Слова «initialize» там нет, и вся
-	// подстраховка на Windows молча простаивала: вместо половинной защиты с
-	// запиской «пропишите прокси руками» человек получал «ядро упало при
-	// старте» и связь никакую. Сверяем по общей части — «system proxy».
-	//
-	// bezProksiEsliNado — та же проверка, но названная функцией, а не
-	// разовым if: 28.08 приёмка выпуска 0.6.32 нашла, что подстраховка
-	// молчала, когда «system proxy» падает НЕ на первой попытке, а внутри
-	// лестницы правил ниже (embed или BezSetevyhPravil) — тогда err на
-	// входе в лестницу был «initialize rule-set», разовая проверка это
-	// пропускала, а после лестницы её никто не повторял. Человек получал
-	// «ядро упало при старте» и не подключённую защиту целиком, хотя обе
-	// подстраховки по отдельности рабочие — их просто не сложили. Зовём
-	// после КАЖДОЙ попытки поднять ядро (исходной и обеих ступеней
-	// лестницы), а не только после первой.
-	bezProksiEsliNado := func(v *konfig.Vybor, popytkaErr error) error {
-		if popytkaErr == nil || v.BezSistemnogoProksi || !strings.Contains(popytkaErr.Error(), "system proxy") {
-			return popytkaErr
-		}
-		log.Printf("система не дала настроить прокси, поднимаю ядро без этой просьбы")
-		v.BezSistemnogoProksi = true
-		if e := s.perestroit(*v); e != nil {
-			return popytkaErr
-		}
-		zctxSP, otmenaSP := context.WithTimeout(ctx, 70*time.Second)
-		defer otmenaSP()
-		return zapustit(zctxSP)
-	}
-	err = bezProksiEsliNado(&vybor, err)
-	// Ядро всё-таки упало на создании сетевого адаптера — повторяем на ДРУГОМ
-	// имени, один раз.
+	err = zapustit(zctx)
+	// Ядро всё-таки упало на занятом адаптере — повторяем на ДРУГОМ имени.
 	//
 	// Проверка перед запуском (podobratImyaAdaptera выше) ловит не всё, и это
 	// видно в самой строке ядра: «open existing adapter: Element not found»
 	// значит, что устройство есть на уровне драйвера, а в списке сетевых
 	// интерфейсов Windows его уже нет — то есть net.Interfaces() честно
 	// ответил нам «свободно». Переспрашивать систему тут бессмысленно, надо
-	// менять имя, не глядя на старое (tunnel.OboytiZanyatoe).
-	//
-	// Ровно один повтор. Если и соседнее имя не подошло, дело не в остатке
-	// прошлой попытки, а в самой системе, и третий заход только тратил бы ещё
-	// пятнадцать секунд человека перед тем же откатом.
-	if err != nil && tunnel.ZanyatoePoOshibke(err) && s.rezhimKartiny() == konfig.Tunnel {
+	// менять имя, не глядя на старое (tunnel.OboytiZanyatoe). Адрес двигаем
+	// тем же сдвигом, что и имя: остаток держит их вместе.
+	for i := 0; i < povtorovAdaptera && adapterZanyatPoOshibke(err); i++ {
 		s.zamok.Lock()
 		zanyatoe := s.kartina.TunImya
 		s.zamok.Unlock()
 		_ = s.Yadro.Ostanovit() // ядро могло не умереть, а зависнуть на таймауте
 		novoe, zanyaty := tunnel.OboytiZanyatoe(zanyatoe, s.adapterZhivDlyaStenda)
-		switch {
-		case novoe == "":
-			log.Printf("ядро не создало сетевой адаптер %q, и все соседние имена тоже заняты (%s) — "+
-				"полный режим сейчас не поднять", zanyatoe, strings.Join(zanyaty, ", "))
-			vybor.AdapterZanyat = true
-		default:
-			log.Printf("ядро не создало сетевой адаптер %q (имя занято) — повторяю на свободном имени %q", zanyatoe, novoe)
-			povtor := vybor
-			povtor.TunImya = novoe
-			if e := s.perestroit(povtor); e != nil {
-				log.Printf("конфиг с именем адаптера %q не собрался: %v", novoe, e)
-			} else {
-				zctxA, otmenaA := context.WithTimeout(ctx, 70*time.Second)
-				defer otmenaA()
-				errPovtor := zapustit(zctxA)
-				errPovtor = bezProksiEsliNado(&povtor, errPovtor)
-				if errPovtor == nil {
-					log.Printf("повтор на имени %q удался — полный режим поднят", novoe)
-					err, vybor = nil, povtor
-				} else {
-					log.Printf("повтор на имени %q тоже не удался: %v", novoe, errPovtor)
-					err = errPovtor
-					// Занято и новое имя — значит человеку надо сказать про
-					// устройство, а не общее «сейчас не вышло»: повторным
-					// нажатием он этого не починит (konfig.ZametkaAdapterZanyat).
-					vybor.AdapterZanyat = tunnel.ZanyatoePoOshibke(errPovtor)
-				}
-			}
+		if novoe == "" {
+			log.Printf("ядро не создало сетевой адаптер %q, и все соседние имена тоже заняты (%s)",
+				zanyatoe, strings.Join(zanyaty, ", "))
+			break
 		}
+		log.Printf("ядро не создало сетевой адаптер %q (занят остатком прошлой попытки) — повтор %d из %d на имени %q",
+			zanyatoe, i+1, povtorovAdaptera, novoe)
+		povtor := vybor
+		povtor.TunImya = novoe
+		povtor.TunSdvigAdresa = tunnel.Sdvig(imyaIzProfilya, novoe)
+		if e := s.perestroit(povtor); e != nil {
+			log.Printf("конфиг с именем адаптера %q не собрался: %v", novoe, e)
+			break
+		}
+		zctxA, otmenaA := context.WithTimeout(ctx, 70*time.Second)
+		err = zapustit(zctxA)
+		otmenaA()
+		if err == nil {
+			log.Printf("повтор на имени %q удался — туннель поднят", novoe)
+			vybor = povtor
+			break
+		}
+		log.Printf("повтор на имени %q не удался: %v", novoe, err)
 	}
-	// Второй такой же отказ, найден 23.08 замером настоящего ядра
-	// (.stend/sing-box-linux) на боевом профиле (22 route.rule_set, качаются
-	// с subkv.chickenkiller.com detour:"direct" — мимо туннеля). Источник
-	// правил жив, кеш пуст → 3.3с и порт открыт. Источник мёртв (connection
-	// refused) или молчит (i/o timeout), кеш пуст → ядро НЕ открывает порт
-	// вовсе, а падает целиком за 0.4с и за 5.2с соответственно строкой
-	// «initialize rule-set[N]: initial rule-set: ...». Наполненный кеш беду
-	// прячет (0.04с) — значит бьёт она по первому запуску и по слабой сети,
-	// проваленному DNS или провайдеру, который режет домен правил.
-	//
-	// Лестница из двух ступеней вместо одной (23.08→24.08). Первая версия
-	// подстраховки (BezSetevyhPravil) чинит связь, но выбрасывает разбор
-	// трафика целиком — человек теряет умную маршрутизацию (что через VPN, а
-	// что напрямую) насовсем, пока источник правил не отдышится. Замер
-	// живьём: все 22 файла вместе весят 495 039 байт (0.47 МБ, из них
-	// ads.srs — 94.7%), 18 из 22 не менялись с 3 августа — комплект стареет
-	// медленно, его можно возить прямо в приложении (internal/pravila) и
-	// подставлять вместо remote, когда сеть подвела. Поэтому сперва пробуем
-	// встроенный комплект (konfig.Vybor.PravilaIzKomplekta) — умная
-	// маршрутизация выживает, — и только если он не поднял ядро (комплекта
-	// нет на диске не разложить, или сам профиль не совпадает с комплектом),
-	// откатываемся к прежнему BezSetevyhPravil.
+	// Второй такой же отказ, найден 23.08 замером настоящего ядра на боевом
+	// профиле (22 route.rule_set, качаются с subkv.chickenkiller.com
+	// detour:"direct" — мимо туннеля). Источник мёртв или молчит, кеш пуст →
+	// ядро НЕ открывает порт вовсе, а падает целиком строкой «initialize
+	// rule-set[N]: initial rule-set: ...». Сперва пробуем встроенный комплект
+	// (konfig.Vybor.PravilaIzKomplekta) — умная маршрутизация выживает.
 	if err != nil && strings.Contains(err.Error(), "initialize rule-set") {
 		log.Printf("источник правил маршрутизации недоступен, пробую встроенный комплект правил (умная маршрутизация сохранится)")
 		podnyalsyaKomplektom := false
@@ -2515,7 +2419,6 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 				zctx3, otmena3 := context.WithTimeout(ctx, 70*time.Second)
 				defer otmena3()
 				errKomplekt := zapustit(zctx3)
-				errKomplekt = bezProksiEsliNado(&vyborKomplekt, errKomplekt)
 				if errKomplekt == nil {
 					err = nil
 					vybor = vyborKomplekt
@@ -2528,216 +2431,72 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 			}
 		}
 		if !podnyalsyaKomplektom {
-			// Ступени «поднять совсем без правил» больше нет, и вот почему.
-			//
-			// Без правил в туннель уходит ВЕСЬ трафик, включая российские
-			// сайты. В нашей стране это не запасной вариант, а поломка:
-			// человек получает зарубежный адрес там, где нужен домашний, и
-			// сайты начинают отвечать «выключите VPN». Замер 08.09 с живой
-			// машины — ровно этот экран человек и увидел.
-			//
-			// Честнее не поднимать связь и сказать причину: без разбора
-			// трафика она приносит больше вреда, чем пользы. Комплект правил
-			// возится в самом приложении и покрывает боевой профиль поимённо
-			// (internal/pravila), так что сюда мы попадаем, только если и он
-			// не подошёл — это уже беда, а не обычный день.
+			// Ступени «поднять совсем без правил» нет: без правил в туннель
+			// уходит ВЕСЬ трафик, включая российские сайты, и они отвечают
+			// «выключите VPN» (замер 08.09). Честнее не поднимать связь и
+			// сказать причину.
 			log.Printf("ни свежих правил, ни встроенного комплекта — связь не поднимаю: без разбора трафика весь он уйдёт в туннель, включая российские сайты")
 		}
 	}
-	// Последняя ступень лестницы деградации: туннель не поднялся ВООБЩЕ.
-	//
-	// До 31.08 этой ступени не было, и дыра в лестнице была самая дорогая из
-	// всех. Права у приложения есть, значит конфиг собран под полный режим;
-	// ядро на нём падает (сетевой адаптер не создался, драйвера нет, система
-	// не дала) — и человек оставался с кругом «связь не поднялась» и БЕЗ
-	// ВСЯКОЙ защиты, хотя половинная тут же рядом и поднимается без прав
-	// вовсе. Ступенькой ниже спуститься честнее, чем упасть с лестницы.
-	//
-	// Порядок внутри важен и повторяет уборку из ветки err != nil ниже:
-	// сперва убрать за НЕудавшейся попыткой (погасить ядро, если оно всё-таки
-	// живо, снять след туннеля и системный прокси, который ядро могло успеть
-	// прописать), и только потом поднимать следующую ступень. Иначе след
-	// неудачной попытки переживёт удачную и соврёт следующему запуску, что
-	// туннель поднимали мы (internal/tunnel, snyatOsirotevshiySledTunnelya).
-	if err != nil && s.rezhimKartiny() == konfig.Tunnel {
-		log.Printf("полный режим не поднялся (%v) — убираю следы попытки и опускаюсь на ступень ниже", err)
-		_ = s.Yadro.Ostanovit()
-		tunnel.UbratMetku()
-		s.snyatProksi()
-		vyborProksi := vybor
-		vyborProksi.BezTunnelya = true
-		if e := s.perestroit(vyborProksi); e != nil {
-			log.Printf("откат в режим браузеров: конфиг не собрался: %v", e)
-		} else {
-			zctx5, otmena5 := context.WithTimeout(ctx, 70*time.Second)
-			defer otmena5()
-			errOtkat := zapustit(zctx5)
-			errOtkat = bezProksiEsliNado(&vyborProksi, errOtkat)
-			if errOtkat == nil {
-				log.Printf("откат удался: полный режим не вышел, работаю частично — через Kelevra идут только браузеры")
-				err = nil
-				vybor = vyborProksi
-				otkatVProksi = true
-			} else {
-				// И половина не поднялась — тогда это честная беда, и врать
-				// про неё нечем. Наверх идёт ПЕРВАЯ причина (почему не вышел
-				// полный режим): она главная, вторая приписана к ней рядом.
-				log.Printf("откат тоже не удался: %v", errOtkat)
-				err = fmt.Errorf("%w; и вполовину подняться не вышло: %v", err, errOtkat)
-				// И убираем за собой ВСЁ, чего коснулась неудачная попытка.
-				//
-				// Замер 08.09, машина второго человека семьи, чужая сеть:
-				// связь не поднялась, а запись системного прокси осталась
-				// висеть в реестре — и указывала на ядро, которого нет.
-				// Браузер после этого мёртв целиком, при живой сети:
-				// приложение ходит напрямую и живёт, а человек видит «инета
-				// нет» и не понимает, при чём тут Kelevra.
-				//
-				// Прокси мог прописать откат перед тем, как упасть: ядро в
-				// половинном режиме ставит его при старте. Снимаем безусловно
-				// и той же рукой, что и в OpustitZashchitu, — Snyat() чужого
-				// не трогает, а нашу запись убирает.
-				//
-				// Правило простое: не смогли дать связь — обязаны вернуть
-				// систему в то состояние, в котором её застали. Половина
-				// защиты хуже целой, но сломанный браузер хуже их обеих.
-				_ = s.Yadro.Ostanovit()
-				s.snyatProksi()
-				tunnel.UbratMetku()
-				// И отправляем журнал НЕМЕДЛЕННО, не дожидаясь ночи.
-				//
-				// 08.09 у второго человека семьи связь не поднялась в чужой
-				// сети, и разобрать причину было нечем: журнал уезжает раз в
-				// сутки, около двух ночи. Человеку плохо сейчас, а факты
-				// появляются через сутки — и то если машина к тому времени в
-				// сети. Дважды подряд разбор упирался ровно в это.
-				//
-				// Отправка сама по себе безвредна: сеть у человека обычно
-				// живая (само приложение ходит по ней напрямую), запрос
-				// маленький, а не дошёл — расписание попробует как прежде.
-				go s.OtpravitZhurnalySrochno(context.WithoutCancel(ctx))
-			}
-		}
+	// Отказ туннеля — словами человека. Сырой текст ядра остаётся причиной
+	// (errors.Is/As) и строкой журнала.
+	switch {
+	case err == nil:
+	case adapterZanyatPoOshibke(err):
+		err = otkazPodyoma{OshibkaAdapterZanyat, err}
+	case tunnelPoOshibke(err):
+		err = otkazPodyoma{OshibkaTunnelNePodnyalsya, err}
 	}
-	// Зелёный поверх пустоты. До 23.08 «ядро поднялось без ошибки» само по
-	// себе считалось доказательством, что системный прокси в реестре стоит:
-	// проверка Stoit/Postavit висела ТОЛЬКО внутри ветки-подстраховки, то
-	// есть срабатывала лишь когда ядро упало ГРОМКО, строкой «system proxy».
-	// Молчаливый отказ — ядро стартовало, порт слушает, а записи в реестре
-	// нет или она не наша — не ловил никто: окно показывало зелёную защиту,
-	// метка «прокси поставили мы» писалась по предположению, а трафик шёл
-	// мимо. Проверяем не молчание ядра, а сам реестр, и на любом успешном
-	// подъёме, а не только после известной поломки.
 	if err == nil {
+		// След туннеля на диске: жёсткую смерть процесса не переживёт ни один
+		// defer, и следующий запуск должен УВИДЕТЬ, что туннель поднимали мы, и
+		// проверить приборно, не остался ли висеть адаптер (internal/tunnel).
 		s.zamok.Lock()
-		proksiRezhim := s.kartina.Rezhim == konfig.Proksi && s.kartina.ProksiAdres != ""
-		tunnelRezhim := s.kartina.Rezhim == konfig.Tunnel
-		adres, estTunnel := s.kartina.ProksiAdres, s.kartina.EstTunnel
 		tunImya := s.kartina.TunImya
 		s.zamok.Unlock()
-		// Туннель поднялся — системному прокси в реестре взяться неоткуда, и
-		// остаться он тоже не имеет права. Разбор 31.08: в туннельном режиме
-		// konfig выбрасывает вход mixed целиком, то есть порт 2412 больше
-		// никто не слушает. Запись «прокси 127.0.0.1:2412», оставшаяся от
-		// ПРОШЛОГО прокси-режима (его жёсткая смерть — ровно та авария, из-за
-		// которой у человека пропал интернет), в этот момент указывает на
-		// мёртвый порт: туннель работал бы, а браузеры молчали бы все до
-		// одного. Snyat() чужого не трогает — при ProxyEnable=0 он ничего не
-		// делает (internal/proksi).
-		//
-		// След туннеля на диске — то же самое, чем proksi.Otmetit страхует
-		// прокси-режим: жёсткую смерть процесса не переживёт ни один defer,
-		// и следующий запуск должен УВИДЕТЬ, что туннель поднимали мы, и
-		// проверить приборно, не остался ли висеть адаптер (internal/tunnel).
-		if tunnelRezhim {
-			zakrepitTunnel(tunImya)
-		}
-		// Кеш правил здесь больше не трогаем. Раньше это был ЕДИНСТВЕННЫЙ
-		// повод его обновить, и у того, чья машина работает сутками без
-		// переподключений, правила не менялись никогда — справедливая жалоба
-		// 09.09. Теперь у сверки свои часы (SveryatPravila): первый заход при
-		// запуске службы, дальше раз в полчаса. Отсюда её убрали ещё и
-		// потому, что горутина с context.WithoutCancel переживала остановку
-		// службы и дописывала кеш уже после неё.
-		if proksiRezhim {
-			stoit := proksi.Stoit(adres)
-			if !stoit {
-				// Ядро либо не просили (BezSistemnogoProksi), либо оно
-				// промолчало. Тот же ключ реестра от лица своего процесса
-				// пишут рабочие VPN-клиенты — пробуем сами.
-				stoit = proksi.Postavit(adres)
-			}
-			s.zamok.Lock()
-			s.kartina.RuchnoyProksi = !stoit
-			if stoit {
-				// Откат с неудавшегося полного режима говорит о себе своими
-				// словами (konfig.ZametkaTunnelNePodnyalsya, их поставила
-				// сборка конфига) — обычная заметка прокси-режима тут соврала
-				// бы человеку, что так и было задумано, и послала бы его на
-				// кнопку, которой при наличии прав на экране нет.
-				if !otkatVProksi {
-					s.kartina.Zametka = konfig.ZametkaProksiRezhima(estTunnel)
-				}
-			} else {
-				s.kartina.Zametka = fmt.Sprintf(konfig.ZametkaRuchnoyProksi, adres)
-			}
-			s.zamok.Unlock()
-			log.Printf("системный прокси в реестре: стоит=%v (адрес %s)", stoit, adres)
-		}
-	}
-	if err != nil {
-		// Ядро могло прописать системный прокси ещё до того, как упало или
-		// не ответило за 70 секунд (падение при старте, таймаут API) — запись
-		// в реестре остаётся висеть, а Ostanovit() её не снимает. Тот же баг,
-		// что был на «Отключить» и закрытии окна (беда 20.08), только на
-		// неудачном подключении.
-		s.snyatProksi()
-		// Тем же движением снимаем след туннеля: защита не поднялась, значит
-		// и туннеля нет, а оставленный след заставил бы СЛЕДУЮЩИЙ запуск
-		// искать несуществующий адаптер и тревожить человека впустую.
-		tunnel.UbratMetku()
-	} else {
+		zakrepitTunnel(tunImya)
 		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
-		// применяем прямо сейчас: раньше выбор до подключения был декорацией —
-		// список стоял пустым, а нажать было нечего.
+		// применяем прямо сейчас.
 		s.primenitSohranennyeUzly()
-
-		// Метка на диске: успешный подъём защиты означает, что системный
-		// прокси на s.kartina.ProksiAdres реально стоит в реестре — его
-		// поставило либо само ядро (обычный путь), либо мы сами чуть выше
-		// (проверка Stoit/Postavit). Жёсткая смерть процесса (Диспетчер
-		// задач, выключение питания) не даёт службе снять его штатно —
-		// метка переживает эту смерть и даёт следующему запуску окна
-		// (cmd/kelevra/main.go) снять чужой для него, но доказанно наш
-		// прокси самому. RuchnoyProksi=true — противоположный случай: адрес
-		// в реестре не стоит, человеку показана записка «впишите руками»,
-		// снимать нечего.
-		s.zamok.Lock()
-		adres, pishemMetku := s.kartina.ProksiAdres, s.kartina.Rezhim == konfig.Proksi && !s.kartina.RuchnoyProksi && s.kartina.ProksiAdres != ""
-		s.zamok.Unlock()
-		if pishemMetku {
-			proksi.Otmetit(adres)
+	} else {
+		log.Printf("связь не поднята: %v", err)
+		_ = s.Yadro.Ostanovit()
+		// Защита не поднялась — значит и туннеля нет, а оставленный след
+		// заставил бы СЛЕДУЮЩИЙ запуск искать несуществующий адаптер.
+		tunnel.UbratMetku()
+		var otkaz otkazPodyoma
+		if errors.As(err, &otkaz) {
+			// Туннель не встал — журнал уезжает НЕМЕДЛЕННО, не дожидаясь
+			// ночи: 08.09 разбор упирался в то, что факты приходят через сутки.
+			go s.OtpravitZhurnalySrochno(context.WithoutCancel(ctx))
 		}
 	}
+	s.zapomnitOtkaz(err)
 	s.soobshchitTreyuProZashchitu(err == nil)
 	return err
+}
+
+// zapomnitOtkaz — что окно говорит человеку о последней неудачной попытке
+// (поле otkaz в /api/sostoyanie). Только отказы с человеческим лицом
+// (otkazPodyoma); успех и прочие ошибки строку гасят.
+func (s *Sluzhba) zapomnitOtkaz(err error) {
+	tekst := ""
+	var otkaz otkazPodyoma
+	if errors.As(err, &otkaz) {
+		tekst = otkaz.Error()
+	}
+	s.zamok.Lock()
+	s.otkaz = tekst
+	s.zamok.Unlock()
 }
 
 // podobratImyaAdaptera — под каким именем поднимать сетевой адаптер туннеля
 // в ЭТОТ раз. Зовётся один раз, перед первым запуском ядра.
 //
-// Возвращает поправленный vybor и признак «полный режим отменён заранее» (он
-// же otkatVProksi у вызывающего): последнее случается, когда свободного имени
-// не нашлось вовсе — тогда запускать ядро незачем, оно потратит пятнадцать
-// секунд человека и упадёт ровно на этом.
-//
-// Отдельным методом, а не куском PodnyatZashchitu: тут четыре разных исхода,
-// и каждый надо уметь проверить, не поднимая на машине проверяющего
-// настоящий туннель (см. поле adapterZhivDlyaStenda).
-func (s *Sluzhba) podobratImyaAdaptera(vybor konfig.Vybor) (konfig.Vybor, bool) {
-	if s.rezhimKartiny() != konfig.Tunnel {
-		return vybor, false // половинный режим адаптера не создаёт вовсе
-	}
+// Ошибка — свободного имени нет вовсе (заняты имя из профиля и все соседние):
+// запускать ядро незачем, оно потратит пятнадцать секунд человека и упадёт
+// ровно на этом. Человеку — OshibkaAdapterZanyat.
+func (s *Sluzhba) podobratImyaAdaptera(vybor konfig.Vybor) (konfig.Vybor, error) {
 	s.zamok.Lock()
 	izProfilya := s.kartina.TunImya
 	s.zamok.Unlock()
@@ -2748,90 +2507,58 @@ func (s *Sluzhba) podobratImyaAdaptera(vybor konfig.Vybor) (konfig.Vybor, bool) 
 	}
 	switch {
 	case podbor.Ishodnoe == "":
-		// Профиль не назвал interface_name — имя выберет само ядро, и
-		// подбирать нам нечего.
-		return vybor, false
+		// Профиль не назвал interface_name — имя выберет само ядро.
+		return vybor, nil
 	case podbor.Vyshlo() && !podbor.Zamena:
-		// Обычный путь: имя из профиля свободно. Ничего не пересобираем —
-		// конфиг на диске уже правильный.
-		return vybor, false
+		// Обычный путь: имя из профиля свободно.
+		return vybor, nil
 	case podbor.Vyshlo():
 		novyy := vybor
 		novyy.TunImya = podbor.Imya
-		// Адрес двигаем тем же сдвигом, что и имя. Остаток прошлой попытки
-		// держит их вместе: 06.09 подбор имени сработал, а ядро всё равно
-		// упало через полминуты на «set ipv4 address: The object already
-		// exists», и человек снова получил половинную защиту.
+		// Адрес двигаем тем же сдвигом, что и имя (замер 06.09: «set ipv4
+		// address: The object already exists» на подобранном имени).
 		novyy.TunSdvigAdresa = tunnel.Sdvig(podbor.Ishodnoe, podbor.Imya)
 		if err := s.perestroit(novyy); err != nil {
-			// Конфиг со свободным именем не собрался — идём как шли. Пусть
-			// лучше ядро попробует занятое имя (вдруг всё-таки поднимется),
-			// чем мы отменим человеку полный режим по своей же неудаче.
+			// Конфиг со свободным именем не собрался — идём как шли: пусть
+			// ядро попробует занятое имя (вдруг поднимется).
 			log.Printf("конфиг со свободным именем адаптера %q не собрался (%v) — пробую с прежним", podbor.Imya, err)
 			_ = s.perestroit(vybor)
-			return vybor, false
+			return vybor, nil
 		}
-		return novyy, false
+		return novyy, nil
 	default:
-		// Заняты и имя из профиля, и все соседние. Это уже не остаток нашей
-		// прошлой попытки, а состояние системы: ядро на нём гарантированно
-		// упадёт, и единственное честное действие — сразу опуститься на
-		// ступень ниже и НАЗВАТЬ человеку причину (konfig.AdapterZanyat),
-		// а не гонять его по кнопке «Подключиться» ещё раз.
-		nizhe := vybor
-		nizhe.BezTunnelya, nizhe.AdapterZanyat, nizhe.TunImya = true, true, ""
-		if err := s.perestroit(nizhe); err != nil {
-			log.Printf("конфиг половинного режима не собрался (%v) — пробую поднять полный как есть", err)
-			_ = s.perestroit(vybor)
-			return vybor, false
-		}
-		log.Printf("свободного имени сетевого адаптера нет — полный режим не пробую, поднимаю половинный")
-		return nizhe, true
+		log.Printf("свободного имени сетевого адаптера нет (%s) — подключение не начато",
+			strings.Join(podbor.Zanyaty, ", "))
+		return vybor, otkazPodyoma{OshibkaAdapterZanyat,
+			fmt.Errorf("заняты имена адаптера: %s", strings.Join(podbor.Zanyaty, ", "))}
 	}
 }
 
 // zakrepitTunnel — всё, что приложение делает в системе после того, как
-// туннель ДЕЙСТВИТЕЛЬНО поднялся. Отдельной функцией, а не тремя строками
-// внутри PodnyatZashchitu: подъём туннеля с правами на стенде не
-// воспроизвести (prava.Est() отвечает про настоящий процесс), а проверять
-// эти два действия надо — цена ошибки в каждом из них равна пропавшему
-// интернету у человека.
+// туннель ДЕЙСТВИТЕЛЬНО поднялся.
 //
-// Первое: снять системный прокси. В туннельном режиме konfig выбрасывает
-// вход mixed целиком, то есть порт 2412 больше никто не слушает. Запись
-// «прокси 127.0.0.1:2412», оставшаяся от ПРОШЛОГО прокси-режима (его жёсткая
-// смерть — авария 31.08, из-за которой у человека пропал интернет), в этот
-// момент указывает на мёртвый порт: туннель работал бы, а браузеры молчали
-// бы все до одного. Snyat() чужого не трогает — при ProxyEnable=0 он не
-// делает ничего (internal/proksi).
+// Первое: убрать системный прокси, оставленный старой версией (прокси-режим
+// до 0.6.77). Он указывает на порт 2412, который больше никто не слушает:
+// туннель работал бы, а браузеры молчали бы все до одного. Чужой прокси
+// уборка не трогает (internal/proksi.UbratSled).
 //
 // Второе: оставить след на диске. Жёсткую смерть процесса не переживёт ни
 // один defer, и следующий запуск должен узнать, что туннель поднимали мы, и
 // проверить приборно, не остался ли висеть адаптер (internal/tunnel).
 func zakrepitTunnel(tunImya string) {
-	// Прямой вызов, а не обёртка s.snyatProksi: у этой функции нет получателя
-	// (она не метод службы), и стенду подменять тут нечего.
-	proksi.Snyat()
+	proksi.UbratSled()
 	tunnel.Otmetit(tunImya, os.Getpid())
-	log.Printf("поднят туннель (адаптер %q), системный прокси снят за ненадобностью", tunImya)
+	log.Printf("поднят туннель (адаптер %q)", tunImya)
 }
 
-// soobshchitTreyuProZashchitu отдаёт значку в трее то же самое состояние,
-// которое окно получает полями Chastichnaya/PochemuChastichnaya. Отдельным
-// методом, а не строкой в двух местах: подъём и опускание защиты обязаны
-// говорить значку одно и то же, и разъехаться этим двум местам нельзя —
-// именно так подсказка «Kelevra: VPN включён» и висела на опущенной защите.
+// soobshchitTreyuProZashchitu отдаёт значку в трее, поднята ли связь.
+// Подъём и опускание обязаны говорить значку одно и то же — именно так
+// подсказка «Kelevra: VPN включён» и висела на опущенной защите.
 func (s *Sluzhba) soobshchitTreyuProZashchitu(podnyata bool) {
 	if s.MetkaZashchity == nil {
 		return // хук не подключён (стенд-тесты внутри пакета) — значка нет
 	}
-	s.zamok.Lock()
-	chastichnaya, pochemu := s.kartina.Chastichnaya, s.kartina.PochemuChastichnaya
-	s.zamok.Unlock()
-	if !podnyata {
-		chastichnaya, pochemu = false, ""
-	}
-	s.MetkaZashchity(podnyata, chastichnaya, pochemu)
+	s.MetkaZashchity(podnyata)
 }
 
 // domaSeychas — один доверенный заход авторежима перед подъёмом защиты
@@ -2928,6 +2655,16 @@ func (s *Sluzhba) domaSeychas(roditelskiy context.Context) avtorezhim.Sostoyanie
 }
 
 func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
+	err := s.Podklyuchit(r.Context())
+	otdat(w, map[string]any{"gotovo": true}, err)
+}
+
+// Podklyuchit — то, что делает нажатие «Подключиться», без HTTP: зовут его
+// ручка podklyuchit и служба Windows, когда её только что поставили по просьбе
+// человека (PodklyuchitPosleUstanovki). ctx нужен только ветке «дома»
+// (avtorezhimKolbek); сам подъём связи идёт с context.Background(), как у
+// кнопки всегда.
+func (s *Sluzhba) Podklyuchit(ctx context.Context) error {
 	// Развилка по режиму, в котором человек УЖЕ был ДО этого нажатия (тумблер
 	// авторежима — /api/avtorezhim, avtorezhimRuchka), а не по обстановке:
 	// жалоба 28.08: определив, что человек дома, программа переставала
@@ -2961,12 +2698,7 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 		// Ручной режим: поднимаем защиту безусловно, без захода domaSeychas
 		// (это лишние секунды ожидания на пустом месте) и не трогая
 		// авторежим — человек сам решил не доверять автомату.
-		err := s.PodnyatZashchitu(context.Background())
-		if err == nil {
-			go s.zaprositPravaAvtomaticheskiEsliNado()
-		}
-		otdat(w, map[string]any{"gotovo": true}, err)
-		return
+		return s.PodnyatZashchitu(context.Background())
 	}
 
 	s.avtorezhimZamok.Lock()
@@ -2984,8 +2716,7 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 	s.avtorezhimZamok.Unlock()
 	if peredumal {
 		log.Printf("«Подключиться»: пока спрашивал обстановку, человек решил иначе — защиту не трогаю")
-		otdat(w, map[string]any{"gotovo": true}, nil)
-		return
+		return nil
 	}
 
 	// Авторежим уже включён — «Подключиться» лишь подтверждает его тем же
@@ -3005,26 +2736,19 @@ func (s *Sluzhba) podklyuchit(w http.ResponseWriter, r *http.Request) {
 		// увидеть ответ немедленно, а не через страховочный тикер. Вызов
 		// идемпотентный (avtorezhim.Nuzhno вернёт NeTrogat, если опускать
 		// нечего), поэтому обычный путь «дома, защиты нет» он не трогает.
-		s.avtorezhimKolbek(r.Context(), avtorezhim.Doma, true)
-		otdat(w, map[string]any{"gotovo": true}, nil)
-		return
+		s.avtorezhimKolbek(ctx, avtorezhim.Doma, true)
+		return nil
 	}
-	err := s.PodnyatZashchitu(context.Background())
-	if err == nil {
-		// В фоне и после ответа: сам запрос прав (окно UAC) не должен
-		// задержать «gotovo» в окне — человек уже подключён, а вопрос про
-		// права идёт следом, а не вместо ответа.
-		go s.zaprositPravaAvtomaticheskiEsliNado()
-	}
-	otdat(w, map[string]any{"gotovo": true}, err)
+	return s.PodnyatZashchitu(context.Background())
 }
 
-// OpustitZashchitu останавливает ядро и снимает системный прокси. Общее тело
-// для ручки «Отключить» (otklyuchit) и для авторежима (когда обстановка
-// стала «дома»). Снимаем прокси безусловно: ядро могло умереть само ещё до
-// вызова, запись в реестре всё равно висит.
+// OpustitZashchitu останавливает ядро. Общее тело для ручки «Отключить»
+// (otklyuchit) и для авторежима (когда обстановка стала «дома»). Попутно
+// убирает системный прокси, если его оставила старая версия (snyatProksi):
+// чужой прокси уборка не трогает.
 func (s *Sluzhba) OpustitZashchitu() error {
 	err := s.Yadro.Ostanovit()
+	s.zapomnitOtkaz(nil)
 	s.snyatProksi()
 	// След туннеля снимаем тем же безусловным движением и по той же причине:
 	// ядро могло умереть само ещё до вызова, а след на диске остался бы и
@@ -3215,114 +2939,35 @@ func (s *Sluzhba) UchestTrafik() {
 	}
 }
 
-// polnayaZashchita просит у Windows права администратора: без них ядро не
-// поднимет туннель. При согласии человека приложение перезапускается уже с
-// правами, а эта копия уходит — две копии на машине не нужны.
-func (s *Sluzhba) polnayaZashchita(w http.ResponseWriter, r *http.Request) {
-	if prava.Est() {
+// datPrava — кнопка «Дать права»: просит у Windows права администратора и
+// ставит службу Windows (тот же путь, что запрос прав при первом запуске,
+// cmd/kelevra: prava.PoprositIZhdat(argPostavitSluzhbu)).
+//
+// Эта копия сама никуда не уходит: служба, поднявшись, объявляет себя меткой
+// в общей папке, служебный процесс в сеансе человека видит её и уступает
+// место (cmd/kelevra: peredatMestoSluzhbeWindows), а окно переходит на новый
+// адрес (сторож окна).
+func (s *Sluzhba) datPrava(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "только POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.estPrava() {
 		otdat(w, map[string]any{"gotovo": true}, nil)
 		return
 	}
-	// Метка копии раньше снималась ДО окна UAC. ShellExecuteW возвращается
-	// уже с запущенной копией, а та копия первым делом смотрит метку: не
-	// увидев её, она решала «приложения ещё нет» и стартовала как первая —
-	// поверх ещё живой старой (беда 25.08, открывалось два окна: гонка между
-	// «метка снята» и «старая копия реально умерла» проигрывалась). Метка
-	// теперь живёт у этой копии до самой её смерти; вместо гонки — явная
-	// передача: новая копия получает наш pid аргументом --smena и сама ждёт
-	// нашу смерть, прежде чем снять метку и занять её место (см.
-	// cmd/kelevra/main.go: zhdatSmenu).
-	if err := s.sprositPrava(); err != nil {
-		// Человек нажал «Нет»: метку никто не трогал — эта копия остаётся
-		// работать как ни в чём не бывало, второй запуск по-прежнему увидит
-		// её живой.
-		otdat(w, nil, err)
+	if s.PostavitSluzhbuWindows == nil {
+		otdat(w, nil, fmt.Errorf("Служба Kelevra устанавливается только в Windows."))
 		return
 	}
-	otdat(w, map[string]any{"gotovo": true, "perezapusk": true}, nil)
-	log.Printf("человек согласился на права администратора, перезапускаюсь")
-	s.uydiPosleSoglasiyaNaPrava()
-}
-
-// sprositPrava — настоящее окно UAC либо подмена со стенда. Передаёт свой
-// pid, чтобы новая копия знала, чьей смерти ей ждать (см. Poprosit).
-func (s *Sluzhba) sprositPrava() error {
-	if s.poprositPrava != nil {
-		return s.poprositPrava(os.Getpid())
-	}
-	return prava.Poprosit(os.Getpid())
-}
-
-// uydiPosleSoglasiyaNaPrava — общий хвост согласия на права: и кнопка
-// «Включить для всех программ» (polnayaZashchita), и автозапрос после первого
-// успешного подключения (zaprositPravaAvtomaticheskiEsliNado) заканчиваются
-// одинаково — повышенная копия уже запущена (ShellExecuteW внутри sprositPrava
-// это сделал), а эта, старая, обязана погасить своё ядро и уйти, иначе на
-// машине останутся две живые копии (беда 25.08).
-func (s *Sluzhba) uydiPosleSoglasiyaNaPrava() {
-	if s.priUhode != nil {
-		s.priUhode() // синхронная метка для теста: момент решения уйти, ДО 300-мс паузы
-	}
-	go func() {
-		time.Sleep(300 * time.Millisecond) // дать ответу/сохранению уйти
-		_ = s.Yadro.Ostanovit()            // ядро старой копии гасим сами
-		if s.vyhod != nil {
-			s.vyhod()
-			return
-		}
-		os.Exit(0)
-	}()
-}
-
-// zaprositPravaAvtomaticheskiEsliNado — первый успешный коннект с профилем,
-// которому нужен туннель (EstTunnel), сам спрашивает права администратора
-// ОДИН раз, тем же путём, что и кнопка «Включить для всех программ»: человек
-// уже впустил приложение (ввёл код доступа), и запрос прав — тот же шаг,
-// который он иначе сделал бы сам следующим кликом. Кнопка остаётся на месте
-// как запасной путь — этот автозапрос её не заменяет, а опережает.
-//
-// Не критический путь для podklyuchit: вызывается уже ПОСЛЕ того, как
-// PodnyatZashchitu вернула успех и ответ ушёл в окно, поэтому отказ или
-// ошибка тут не портят сам факт подключения — только пишутся в журнал.
-//
-// UzheSprosiliPrava() — единственный сторож повторного вопроса и, что
-// важнее, сторож против незваного попапа на СУЩЕСТВУЮЩЕЙ установке: миграция
-// в hranenie.Zagruzit уже отметила такие файлы как «спрошено», сюда эта
-// функция для них вообще не доходит.
-func (s *Sluzhba) zaprositPravaAvtomaticheskiEsliNado() {
-	s.zamok.Lock()
-	estTunnel := s.kartina.EstTunnel
-	s.zamok.Unlock()
-	if !estTunnel || s.Nastroyki.UzheSprosiliPrava() || prava.Est() {
+	log.Printf("«Дать права»: прошу права администратора и ставлю службу Windows")
+	if err := s.PostavitSluzhbuWindows(); err != nil {
+		log.Printf("«Дать права»: служба не поставлена: %v", err)
+		otdat(w, nil, OshibkaNetPrav)
 		return
 	}
-	oshibka := s.sprositPrava()
-	if oshibka != nil {
-		log.Printf("автозапрос прав администратора при первом подключении: отказ или ошибка: %v", oshibka)
-	} else {
-		log.Printf("человек согласился на права администратора при первом подключении, перезапускаюсь")
-	}
-	// Отметку пишем ДО ухода, а не после (как было раньше): при согласии
-	// uydiPosleSoglasiyaNaPrava гасит эту копию из фоновой горутины через
-	// 300 мс, и если Sohranit не успеет долететь до диска раньше выхода
-	// процесса, следующий (уже обычный, НЕ повышенный) запуск увидит файл
-	// без отметки и спросит права ЕЩЁ РАЗ — а человек просил ровно один раз
-	// при старте. Флаг ставим и при отказе тоже: он значит «спрашивали», а
-	// не «дали» — Prava/prava.Est() отдельно отвечает на «есть ли они».
-	s.Nastroyki.OtmetitPravaZaprosheny()
-	sohranit := s.sohranitNastroyki
-	if sohranit == nil {
-		sohranit = func() error { return hranenie.Sohranit(s.Nastroyki) }
-	}
-	if err := sohranit(); err != nil {
-		log.Printf("не сохранил отметку об автозапросе прав администратора: %v", err)
-	}
-	if oshibka == nil {
-		s.uydiPosleSoglasiyaNaPrava()
-	}
-	if s.posleAvtozaprosaPrav != nil {
-		s.posleAvtozaprosaPrav()
-	}
+	log.Printf("«Дать права»: служба Windows поставлена")
+	otdat(w, map[string]any{"gotovo": true}, nil)
 }
 
 func otdat(w http.ResponseWriter, telo any, err error) {
@@ -3384,14 +3029,15 @@ func (s *Sluzhba) posleObnovleniyaRuchka(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
-// snyatProksi — снятие системного прокси через точку подмены стенда.
-// В бою это ровно proksi.Snyat(); в проверках — счётчик вызовов.
+// snyatProksi — уборка системного прокси, оставленного старой версией, через
+// точку подмены стенда. В бою это ровно proksi.UbratSled(); в проверках —
+// счётчик вызовов.
 func (s *Sluzhba) snyatProksi() {
 	if s.snyatProksiDlyaStenda != nil {
 		s.snyatProksiDlyaStenda()
 		return
 	}
-	proksi.Snyat()
+	proksi.UbratSled()
 }
 
 // OtpravitZhurnalySrochno шлёт журнал вне расписания — когда человеку уже

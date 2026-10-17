@@ -84,7 +84,7 @@ func tunnelnyeTegiProfilya(t *testing.T, syroy []byte) []string {
 // заблокированного — значит QUIC игр и звонков к прямым адресам живой.
 func TestVTunneleQuicRezhetsyaTolkoUZablokirovannogo(t *testing.T) {
 	syroy := profil(t)
-	gotovyy, k, err := Prigotovit(syroy, Vybor{Prava: true})
+	gotovyy, k, err := Prigotovit(syroy, Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,37 +114,13 @@ func TestVTunneleQuicRezhetsyaTolkoUZablokirovannogo(t *testing.T) {
 	}
 }
 
-// TestVProksiQuicPrivyazanKZablokirovannomu — запасной режим (нет прав).
-// Здесь правило имеет смысл (без него YouTube по QUIC ушёл бы мимо клиента),
-// но и здесь оно обязано бить точечно — по тем же спискам, а не по всему UDP
-// машины.
-func TestVProksiQuicPrivyazanKZablokirovannomu(t *testing.T) {
-	syroy := profil(t)
-	gotovyy, k, err := Prigotovit(syroy, Vybor{Prava: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if k.Rezhim != Proksi {
-		t.Fatalf("режим %q, а щуп про прокси", k.Rezhim)
-	}
-
-	pr, idx := praviloQuic(t, gotovyy)
-	if idx < 0 {
-		t.Fatal("правила про udp/443 в прокси-режиме нет — YouTube по QUIC уйдёт мимо клиента к провайдеру")
-	}
-	if tegi := tegiPravila(t, pr); len(tegi) == 0 {
-		t.Fatalf("правило про udp/443 = %#v — оно режет весь UDP машины, а должно только списки заблокированного", pr)
-	}
-}
-
 // TestFinalOstayotsyaDirectVOboihRezhimah — ожог 31.08 (коммит 654c8d4): по
 // умолчанию весь трафик ушёл в туннель, «русские приложения начали ругаться
 // на впн». Правка про QUIC не имеет права повторить это в другой форме:
 // route.final остаётся direct, в туннель уходит только то, что в правилах.
 func TestFinalOstayotsyaDirectVOboihRezhimah(t *testing.T) {
 	for imya, v := range map[string]Vybor{
-		"туннель": {Prava: true},
-		"прокси":  {Prava: false},
+		"туннель": {},
 	} {
 		t.Run(imya, func(t *testing.T) {
 			gotovyy, _, err := Prigotovit(profil(t), v)
@@ -164,7 +140,7 @@ func TestFinalOstayotsyaDirectVOboihRezhimah(t *testing.T) {
 // (action:reject), и в сужение нашего правила он попадать не должен: там и
 // так reject, а лишний тег — лишний матч.
 func TestQuicPraviloNeTrogaetSpisokReklamy(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +159,7 @@ func TestQuicPraviloNeTrogaetSpisokReklamy(t *testing.T) {
 // sniff/hijack-dns (снифф должен успеть отработать) и ДО первого правила
 // профиля с rule_set, иначе решение профиля перехватит трафик раньше среза.
 func TestQuicPraviloStoitDoPravilProfilya(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,10 +197,10 @@ func TestQuicPraviloStoitDoPravilProfilya(t *testing.T) {
 // отобрали бы у человека QUIC просто так.
 func TestBezTunnelnyhPravilQuicNeRezhetsyaVovse(t *testing.T) {
 	syroy := []byte(`{
-		"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":2412}],
+		"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"tun125","address":["172.19.0.1/30"]}],
 		"outbounds":[{"type":"direct","tag":"direct"}],
 		"route":{"final":"direct","rules":[{"action":"sniff"}]}}`)
-	gotovyy, _, err := Prigotovit(syroy, Vybor{BezSistemnogoProksi: true})
+	gotovyy, _, err := Prigotovit(syroy, Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +215,7 @@ func TestBezTunnelnyhPravilQuicNeRezhetsyaVovse(t *testing.T) {
 // а UDP там не работает. Широкий reject тут честнее тишины — иначе весь UDP
 // уходил бы в туннель и умирал по таймауту.
 func TestUproshchennyyRezhimRezhetVesUdp443(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true, BezSetevyhPravil: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{BezSetevyhPravil: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +239,7 @@ func TestSKomplektomQuicVsyoRavnoTochechnyy(t *testing.T) {
 	}
 	komplekt["ads"] = "C:/pravila/ads.srs"
 
-	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: true, PravilaIzKomplekta: komplekt, PravilaKomplektData: "2026-08-23"})
+	gotovyy, _, err := Prigotovit(syroy, Vybor{PravilaIzKomplekta: komplekt, PravilaKomplektData: "2026-08-23"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,9 +257,8 @@ func TestSKomplektomQuicVsyoRavnoTochechnyy(t *testing.T) {
 // pochistitPravila чинит для входов). Проверяем оба режима и комплект.
 func TestQuicPraviloSsylaetsyaTolkoNaZhivyeRuleSet(t *testing.T) {
 	for imya, v := range map[string]Vybor{
-		"туннель":    {Prava: true},
-		"прокси":     {Prava: false},
-		"упрощённый": {Prava: true, BezSetevyhPravil: true},
+		"туннель":    {},
+		"упрощённый": {BezSetevyhPravil: true},
 	} {
 		t.Run(imya, func(t *testing.T) {
 			gotovyy, _, err := Prigotovit(profil(t), v)

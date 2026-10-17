@@ -103,10 +103,10 @@ PY
 }
 
 # sobrat_konfig <profil.json> <konfig.json> <bez_pravil 0|1> [komplekt_dir] —
-# зовёт настоящий Prigotovit (не самодельный JSON). BezSistemnogoProksi всегда
-# взведён: на Linux ядро без него падает строкой «initialize system proxy»
-# (отдельная, не наша беда) — она бы замаскировала ровно то падение, которое
-# мы мерим. komplekt_dir, если задан, зовёт настоящий pravila.Razlozhit
+# зовёт настоящий Prigotovit (не самодельный JSON). Приложение собирает только
+# туннель (0.6.77), а стенду без root его не поднять: -vhod-shchupa меняет
+# в готовом конфиге tun на mixed без системного прокси (порт — из профиля).
+# komplekt_dir, если задан, зовёт настоящий pravila.Razlozhit
 # (internal/pravila) и подставляет Vybor.PravilaIzKomplekta — главнее bez_pravil.
 sobrat_konfig() {
   local profil=$1 konfig=$2 bez_pravil=$3 komplekt_dir=${4:-}
@@ -114,7 +114,7 @@ sobrat_konfig() {
   local flag=""
   [ "$bez_pravil" = "1" ] && flag="-bez-pravil"
   [ -n "$komplekt_dir" ] && flag="$flag -komplekt-dir $komplekt_dir"
-  if ! "$ZAMER" -profil "$profil" -prava=false -bez-proksi $flag > "$konfig" 2> "$log"; then
+  if ! "$ZAMER" -profil "$profil" -vhod-shchupa $flag > "$konfig" 2> "$log"; then
     echo "  КРАСНЫЙ: cmd/zamer_konfig не собрал конфиг:"; cat "$log"; bed=1; return 1
   fi
   cat "$log"

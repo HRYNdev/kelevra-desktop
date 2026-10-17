@@ -8,53 +8,79 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
 
-// imyaMetki — файл-метка «системный прокси на этот адрес поставили мы».
-//
-// Зачем он нужен. Snyat() убирает прокси только при мягком выходе: штатном
-// завершении службы, панике, «Отключить», неудачном подключении. Жёсткая
-// смерть процесса — Диспетчер задач, выключение или перезагрузка Windows
-// (оконная сборка без консоли не получает SIGTERM), пропадание питания —
-// ни один из этих путей не проходит: реестр остаётся с ProxyEnable=1 и нашим
-// адресом, а снять его больше некому. Метка на диске переживает такую
-// смерть и даёт следующему запуску окна (cmd/kelevra/main.go) увидеть,
-// что прокси в системе — доказанно наш, и снять его самому.
-const imyaMetki = "proksi.json"
+// С 0.6.77 Kelevra системный прокси НЕ СТАВИТ НИКОГДА: неполного режима больше
+// нет (решение владельца 17.10), и функций, которые прокси прописывают, в
+// пакете нет вовсе — запрет держится конструкцией, а не словами. Пакет
+// остался ради одного дела: убрать прокси, оставленный СТАРЫМИ версиями,
+// у тех, кто обновился из прокси-режима (UbratSled).
 
-func putMetki() string { return filepath.Join(hranenie.Papka(), imyaMetki) }
+// StaryyAdres — адрес, на который прокси-режим старых версий ставил системный
+// прокси: mixed-вход боевого профиля. По нему уборка узнаёт свою запись, даже
+// если метка до нас не дожила (жёсткая смерть до записи метки, метка в другой
+// папке).
+const StaryyAdres = "127.0.0.1:2412"
+
+// imyaMetki — файл-метка «системный прокси на этот адрес поставили мы».
+// Писали её старые версии; новые только читают и убирают.
+const imyaMetki = "proksi.json"
 
 type metka struct {
 	Adres string `json:"adres"`
 }
 
-// Otmetit запоминает, что системный прокси на adres поставили мы — своей
-// рукой (Postavit) или рукой ядра, но с нашим подтверждением (Stoit). Ошибка
-// записи не должна мешать защите: метка — это только подстраховка на случай
-// жёсткой смерти процесса, не сама защита.
-func Otmetit(adres string) {
-	b, err := json.Marshal(metka{Adres: adres})
-	if err != nil {
-		return
+// papkiMetok — где может лежать метка старой версии. Две папки, а не одна:
+// при переезде данных в общую папку службы Windows (hranenie.Perenesti) метка
+// НЕ переносится и остаётся в профиле человека, а hranenie.Papka() после
+// переезда смотрит уже в общую.
+func papkiMetok() []string {
+	var papki []string
+	for _, p := range []string{hranenie.Papka(), hranenie.PapkaLichnaya()} {
+		if p == "" {
+			continue
+		}
+		povtor := false
+		for _, est := range papki {
+			if est == p {
+				povtor = true
+			}
+		}
+		if !povtor {
+			papki = append(papki, p)
+		}
 	}
-	if err := os.MkdirAll(hranenie.Papka(), 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(putMetki(), b, 0o600)
+	return papki
 }
 
-// ProchestMetku читает метку, оставленную прошлым (возможно, уже мёртвым)
-// запуском. Пустой адрес и false — метки нет.
+// ProchestMetku читает метку, оставленную старой версией. Пустой адрес и
+// false — метки нет ни в одной из папок.
 func ProchestMetku() (string, bool) {
-	b, err := os.ReadFile(putMetki())
-	if err != nil {
-		return "", false
+	for _, p := range papkiMetok() {
+		b, err := os.ReadFile(filepath.Join(p, imyaMetki))
+		if err != nil {
+			continue
+		}
+		var m metka
+		if err := json.Unmarshal(b, &m); err != nil || m.Adres == "" {
+			continue
+		}
+		return m.Adres, true
 	}
-	var m metka
-	if err := json.Unmarshal(b, &m); err != nil || m.Adres == "" {
-		return "", false
-	}
-	return m.Adres, true
+	return "", false
 }
 
-// UbratMetku удаляет метку. Вызывается из каждого Snyat(): после снятия
-// прокси (или попытки снять то, чего уже нет) метке взяться неоткуда.
-func UbratMetku() { _ = os.Remove(putMetki()) }
+// UbratMetku удаляет метку во всех папках, где она может лежать.
+func UbratMetku() {
+	for _, p := range papkiMetok() {
+		_ = os.Remove(filepath.Join(p, imyaMetki))
+	}
+}
+
+// nashiAdresa — какие адреса в реестре уборка считает своими: из метки (если
+// она есть) и StaryyAdres.
+func nashiAdresa() []string {
+	adresa := []string{StaryyAdres}
+	if a, est := ProchestMetku(); est && a != StaryyAdres {
+		adresa = append(adresa, a)
+	}
+	return adresa
+}

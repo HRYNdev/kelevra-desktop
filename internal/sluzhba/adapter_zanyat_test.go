@@ -3,8 +3,10 @@ package sluzhba
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +28,8 @@ import (
 //
 // Повторилось в тот вечер дважды. Человек выдал права, туннель ему положен, а
 // приложение показало «Частично — мимо идут игры». Плюс пятнадцать секунд
-// «Подключаюсь» перед этим — их человек смотрит впустую.
+// «Подключаюсь» перед этим — их человек смотрит впустую. С 0.6.77 частичного
+// режима нет вовсе: туннель на другом имени или честный отказ с причиной.
 //
 // Проверки написаны на СЦЕНАРИЙ: что человек получил в итоге и что уехало
 // ядру, а не как устроен подбор имени.
@@ -117,9 +120,6 @@ func TestZanyatoeImyaAdapteraNeStoitChelovekuPolnogoRezhima(t *testing.T) {
 	if k.Rezhim != konfig.Tunnel {
 		t.Fatalf("режим %q — человек выдал права и остался без полного режима из-за имени адаптера", k.Rezhim)
 	}
-	if k.Chastichnaya {
-		t.Fatal("защита объявлена половинной, хотя туннель поднят")
-	}
 	// След туннеля на диске обязан нести НАСТОЯЩЕЕ имя адаптера: по нему
 	// следующий запуск ищет остаток после жёсткой смерти копии.
 	sled, _, est := tunnel.ProchestMetku()
@@ -155,97 +155,126 @@ func TestYadroUpaloNaZanyatomImeniPovtorNaSvobodnom(t *testing.T) {
 		t.Fatalf("повтор пошёл на том же имени %q, на котором ядро только что упало", imena[0])
 	}
 	if imena[1] == "" {
-		t.Fatal("повтор пошёл без входа-туннеля — это не повтор, а откат в половину")
+		t.Fatal("повтор пошёл без входа-туннеля")
 	}
 	s.zamok.Lock()
 	k := s.kartina
 	s.zamok.Unlock()
-	if k.Rezhim != konfig.Tunnel || k.Chastichnaya {
-		t.Fatalf("после удачного повтора режим %q (половинный=%v) — человек потерял полный режим зря",
-			k.Rezhim, k.Chastichnaya)
+	if k.Rezhim != konfig.Tunnel {
+		t.Fatalf("после удачного повтора режим %q — человек потерял туннель зря", k.Rezhim)
 	}
 }
 
-// Уборка не удалась: свободного имени нет вовсе (заняты и имя из профиля, и
-// все соседние). Приложение не имеет права ни упасть, ни промолчать — оно
-// опускается на ступень ниже и НАЗЫВАЕТ причину человеческими словами.
-//
-// Отдельно проверяется, что ядро в полном режиме не запускали вовсе: заведомо
-// падающий запуск стоит человеку пятнадцати секунд «Подключаюсь».
-func TestSvobodnogoImeniNetChestnyyOtkatSPrichinoy(t *testing.T) {
+// Свободного имени нет вовсе (заняты и имя из профиля, и все соседние).
+// Ступени ниже туннеля нет: связь не поднимается, ядро не запускают вовсе
+// (заведомо падающий запуск стоит человеку пятнадцати секунд), а человеку
+// названа причина и то единственное, что её снимает, — перезагрузка.
+func TestSvobodnogoImeniNetOtkazSPrichinoy(t *testing.T) {
 	var vse []string
 	for i := 100; i <= 200; i++ {
 		vse = append(vse, fmt.Sprintf("tun%d", i))
 	}
 	s := stendSAdapterami(t, vse...)
 
-	var imena []string
+	zapuskov := 0
 	s.zapustitYadro = func(ctx context.Context) error {
-		imena = append(imena, imyaAdaptera(t, s))
+		zapuskov++
 		return nil
 	}
 
-	if err := s.PodnyatZashchitu(context.Background()); err != nil {
-		t.Fatalf("имя адаптера занято, и человек остался вовсе без связи: %v", err)
+	err := s.PodnyatZashchitu(context.Background())
+	if !errors.Is(err, OshibkaAdapterZanyat) {
+		t.Fatalf("ждали OshibkaAdapterZanyat, получили %v", err)
 	}
-	for _, imya := range imena {
-		if imya != "" {
-			t.Fatalf("ядро всё-таки запускали с входом-туннелем (%v) — 15 секунд ожидания впустую", imena)
-		}
+	if err.Error() != "Сетевое устройство занято прошлым подключением. Требуется перезагрузка компьютера." {
+		t.Fatalf("человеку сказано %q", err.Error())
 	}
-
+	if zapuskov != 0 {
+		t.Fatalf("ядро запускали %d раз — свободного имени нет, запуск заведомо упадёт", zapuskov)
+	}
 	s.zamok.Lock()
-	k := s.kartina
+	otkaz := s.otkaz
 	s.zamok.Unlock()
-	if k.Rezhim != konfig.Proksi || !k.Chastichnaya {
-		t.Fatalf("режим %q, половинность %v — ждали честную половину", k.Rezhim, k.Chastichnaya)
-	}
-	if k.PochemuChastichnaya != konfig.PrichinaAdapterZanyat {
-		t.Fatalf("причина половинчатости %q — человеку не назвали, что случилось; "+
-			"общее «попробуйте ещё раз» тут врёт: повторное нажатие упрётся в то же устройство",
-			k.PochemuChastichnaya)
-	}
-	// Заметки, которые говорят «так и задумано», тут запрещены той же
-	// причиной, что и в откате по любой другой беде.
-	if k.Zametka == konfig.ZametkaBezPrav || k.Zametka == konfig.ZametkaBezTunnelya {
-		t.Fatalf("заметка %q врёт, что полного режима человеку не положено", k.Zametka)
+	if otkaz != OshibkaAdapterZanyat.Error() {
+		t.Fatalf("окну отдан отказ %q — причина обязана дойти до экрана", otkaz)
 	}
 }
 
-// Ядро упало на занятом имени, повтор на соседнем упал так же. Дело не в
-// остатке прошлой попытки, а в самой системе: приложение обязано перестать
-// тратить время человека, опуститься в половинный режим и назвать причину.
-func TestPovtorTozheNeVyshelOtkatNazyvaetPrichinu(t *testing.T) {
+// Ядро падает на занятом имени и на каждом повторе. Повторов — разумный
+// предел (povtorovAdaptera), дальше честный отказ: дело уже не в остатке
+// прошлой попытки, а в системе. Прокси вместо туннеля не поднимается.
+func TestPovtoryNeVyshliOtkazBezProksi(t *testing.T) {
 	s := stendSAdapterami(t)
 
-	popytokSTunnelem := 0
+	var imena []string
 	s.zapustitYadro = func(ctx context.Context) error {
-		if imyaAdaptera(t, s) == "" {
-			return nil // половинный режим поднимается всегда
-		}
-		popytokSTunnelem++
+		imena = append(imena, imyaAdaptera(t, s))
 		return fmt.Errorf("%s", oshibkaZanyatogoAdaptera)
 	}
 
-	if err := s.PodnyatZashchitu(context.Background()); err != nil {
-		t.Fatalf("оба захода за туннелем не вышли, и откат тоже — человек без связи: %v", err)
+	err := s.PodnyatZashchitu(context.Background())
+	if !errors.Is(err, OshibkaAdapterZanyat) {
+		t.Fatalf("ждали OshibkaAdapterZanyat, получили %v", err)
 	}
-	if popytokSTunnelem != 2 {
-		t.Fatalf("заходов за туннелем %d — ждали ровно два (исходный и один повтор на другом имени)", popytokSTunnelem)
+	if len(imena) != 1+povtorovAdaptera {
+		t.Fatalf("заходов %d (%v) — ждали исходный и %d повтора", len(imena), imena, povtorovAdaptera)
 	}
-
-	s.zamok.Lock()
-	k := s.kartina
-	s.zamok.Unlock()
-	if k.Rezhim != konfig.Proksi || !k.Chastichnaya {
-		t.Fatalf("режим %q, половинность %v — ждали честную половину", k.Rezhim, k.Chastichnaya)
-	}
-	if k.PochemuChastichnaya != konfig.PrichinaAdapterZanyat {
-		t.Fatalf("причина половинчатости %q — беда известна поимённо, молчать о ней нельзя", k.PochemuChastichnaya)
+	vidnye := map[string]bool{}
+	for _, imya := range imena {
+		if imya == "" {
+			t.Fatalf("один из заходов шёл без туннеля (%v) — это откат в прокси, которого быть не должно", imena)
+		}
+		if vidnye[imya] {
+			t.Fatalf("повтор пошёл на уже упавшем имени: %v", imena)
+		}
+		vidnye[imya] = true
 	}
 	if _, _, est := tunnel.ProchestMetku(); est {
 		t.Fatal("след неудачной попытки остался на диске — следующий запуск будет искать несуществующий адаптер")
 	}
+	for _, tip := range tipyVhodov(t, s) {
+		if tip != "tun" {
+			t.Fatalf("в конфиге ядра появился вход %q", tip)
+		}
+	}
+}
+
+// Второй повтор удался: туннель поднят, адрес сдвинут тем же шагом, что имя.
+func TestVtoroyPovtorUdalsyaAdresSdvinut(t *testing.T) {
+	s := stendSAdapterami(t)
+	var imena []string
+	s.zapustitYadro = func(ctx context.Context) error {
+		imena = append(imena, imyaAdaptera(t, s))
+		if len(imena) < 3 {
+			return fmt.Errorf("%s", oshibkaZanyatogoAdaptera)
+		}
+		return nil
+	}
+	if err := s.PodnyatZashchitu(context.Background()); err != nil {
+		t.Fatalf("второй повтор удался, а связь не поднята: %v", err)
+	}
+	if len(imena) != 3 || imena[2] != "tun127" {
+		t.Fatalf("имена заходов %v — ждали tun125, tun126, tun127", imena)
+	}
+	if !strings.Contains(string(konfigSDiska(t, s)), "172.19.0.9/30") {
+		t.Fatal("адрес туннеля не сдвинут вместе с именем — ядро упадёт на «object already exists»")
+	}
+	s.zamok.Lock()
+	otkaz := s.otkaz
+	s.zamok.Unlock()
+	if otkaz != "" {
+		t.Fatalf("связь поднята, а окну отдан отказ %q", otkaz)
+	}
+}
+
+// konfigSDiska — конфиг, приготовленный для ядра прямо сейчас.
+func konfigSDiska(t *testing.T, s *Sluzhba) []byte {
+	t.Helper()
+	b, err := os.ReadFile(s.Yadro.PutKonfiga())
+	if err != nil {
+		t.Fatalf("не прочитал конфиг с диска: %v", err)
+	}
+	return b
 }
 
 // Обычный запуск на свободном имени не имеет права ничего стоить и ничего

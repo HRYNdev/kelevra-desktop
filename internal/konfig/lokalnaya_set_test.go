@@ -18,7 +18,7 @@ import (
 // pravilaTunnelnogo — route.rules готового конфига в туннельном режиме.
 func pravilaTunnelnogo(t *testing.T) []map[string]any {
 	t.Helper()
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, k, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func nomerPravilaLokalki(pravila []map[string]any) int {
 // в собранном туннельном конфиге ЕСТЬ правило, уводящее локальные подсети
 // напрямую.
 func TestTunnelnyyKonfigUvoditLokalnuyuSetNapryamuyu(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestPraviloLokalkiStoitRanshheObshchih(t *testing.T) {
 // починки, на самом входе tun. Профиль присылает strict_route: true, и это
 // не пожелание, а правила фаервола WFP, которые режут трафик мимо туннеля.
 func TestStrictRouteVyklyuchenIMarshrutyLokalkiIsklyucheny(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,16 +140,14 @@ func TestStrictRouteVyklyuchenIMarshrutyLokalkiIsklyucheny(t *testing.T) {
 // Починка локалки не имеет права заодно переставить route.final: это увело
 // бы в туннель ВЕСЬ неопознанный трафик, включая сервер подписки.
 func TestFinalOstalsyaPryamymPosleLokalki(t *testing.T) {
-	for _, prava := range []bool{true, false} {
-		gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: prava})
-		if err != nil {
-			t.Fatal(err)
-		}
-		d := razobrat(t, gotovyy)
-		r, _ := d["route"].(map[string]any)
-		if final, _ := r["final"].(string); final != "direct" {
-			t.Fatalf("права=%v: route.final стал %q вместо direct", prava, final)
-		}
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := razobrat(t, gotovyy)
+	r, _ := d["route"].(map[string]any)
+	if final, _ := r["final"].(string); final != "direct" {
+		t.Fatalf("route.final стал %q вместо direct", final)
 	}
 }
 
@@ -157,11 +155,11 @@ func TestFinalOstalsyaPryamymPosleLokalki(t *testing.T) {
 // подключении, и профиль на диске может оказаться уже нашим готовым
 // конфигом. Второй проход не имеет права добавить второе такое же правило.
 func TestPraviloLokalkiNePloditsya(t *testing.T) {
-	odin, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	odin, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	dva, _, err := Prigotovit(odin, Vybor{Prava: true})
+	dva, _, err := Prigotovit(odin, Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,22 +171,6 @@ func TestPraviloLokalkiNePloditsya(t *testing.T) {
 	}
 	if skolko != 1 {
 		t.Fatalf("после второго прогона правил про локалку %d, а должно быть 1", skolko)
-	}
-}
-
-// TestLokalkaZashchishchenaIBezPrav — в прокси-режиме туннеля нет, но
-// правило маршрутизации остаётся: гарантия «дома всё доступно» не должна
-// зависеть от того, дали права или нет.
-func TestLokalkaZashchishchenaIBezPrav(t *testing.T) {
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if k.Rezhim != Proksi {
-		t.Fatalf("ожидал прокси-режим, получил %q", k.Rezhim)
-	}
-	if nomerPravilaLokalki(pravilaRoute(t, gotovyy)) < 0 {
-		t.Fatal("в прокси-режиме правила про локальные подсети нет")
 	}
 }
 

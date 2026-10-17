@@ -188,7 +188,7 @@ func TestPravilaIzKeshaNeVydayutsyaZaVstroennyyKomplekt(t *testing.T) {
 // При этом слова «mtu» не было ни в одной строке журналов десктопа за всю их
 // историю, и жалобу «сайты по 10 секунд» проверить было нечем.
 func TestRazmerPaketaVidenVKartine(t *testing.T) {
-	_, k, err := Prigotovit(profil(t), Vybor{Prava: true})
+	_, k, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}

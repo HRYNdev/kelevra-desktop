@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
 )
@@ -82,17 +83,13 @@ func gotovStendLestnicy(t *testing.T) *Sluzhba {
 	if err := os.WriteFile(s.Yadro.Bin, []byte("stub"), 0o755); err != nil {
 		t.Fatalf("не подложил бинарь ядра: %v", err)
 	}
-	// KELEVRA_PRAVA=net выше гасит prava.Est(), а свежий Nastroyki (файла ещё
-	// не было) — это ровно «СВЕЖИЙ инсталл, права ещё не спрошены». Любой
-	// успешный /api/podklyuchit в этих тестах поэтому сам заводит
-	// zaprositPravaAvtomaticheskiEsliNado — НЕОЖИДАЕМУЮ горутину, которая
-	// пишет hranenie.Sohranit уже ПОСЛЕ того, как этот тест вернулся и
-	// t.Setenv(KELEVRA_DIR) откатил переменную назад: попадает в ОТНОСИТЕЛЬНЫЙ
-	// путь ".kelevra" прямо в дереве исходников (см. hranenie.Papka, когда ни
-	// KELEVRA_DIR, ни $HOME не заданы). Стенду самой лестницы правил вопрос
-	// прав администратора не интересен — отмечаем «уже спрошены» заранее,
-	// чтобы гонка не могла случиться вовсе. Тесты, которым нужен именно
-	// свежий вопрос прав (prava_avto_test.go), сбрасывают эту отметку сами.
+	// Права на туннель — подменой: настоящий prava.Est() отвечает про процесс
+	// проверки, а без прав подъём связи с 0.6.77 не начинается вовсе
+	// (OshibkaNetPrav). Тесты про отсутствие прав ставят false сами.
+	// Сетевые адаптеры — тоже подменой: настоящих в проверках быть не должно.
+	s.pravaDlyaStenda = func() bool { return true }
+	s.adapterZhivDlyaStenda = func(string) bool { return false }
+	s.srokOsvobozhdeniyaDlyaStenda = time.Nanosecond
 	s.Nastroyki.OtmetitPravaZaprosheny()
 	return s
 }

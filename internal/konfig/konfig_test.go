@@ -40,50 +40,17 @@ func vhody(d map[string]any) []map[string]any {
 
 // Главное: поле, из-за которого ядро на компьютере не стартует вообще.
 func TestAndroidnoePoleUhodit(t *testing.T) {
-	for _, prava := range []bool{false, true} {
-		gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: prava})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(gotovyy), "override_android_vpn") {
-			t.Fatalf("права=%v: осталось android-поле, ядро не запустится", prava)
-		}
-	}
-}
-
-func TestBezPravOstayotsyaProksi(t *testing.T) {
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if k.Rezhim != Proksi {
-		t.Fatalf("без прав ожидал прокси-режим, получил %q", k.Rezhim)
-	}
-	if !k.EstTunnel {
-		t.Fatal("в профиле есть туннель, картина о нём молчит")
-	}
-	if k.ProksiAdres != "127.0.0.1:2412" {
-		t.Fatalf("адрес прокси %q", k.ProksiAdres)
-	}
-	var estMixed bool
-	for _, vh := range vhody(razobrat(t, gotovyy)) {
-		if vh["type"] == "tun" {
-			t.Fatal("туннель остался, а прав на него нет: ядро упадёт при старте")
-		}
-		if vh["type"] == "mixed" {
-			estMixed = true
-			if vh["set_system_proxy"] != true {
-				t.Fatal("прокси есть, но система о нём не узнает — трафик пойдёт мимо")
-			}
-		}
-	}
-	if !estMixed {
-		t.Fatal("не осталось ни одного входа")
+	if strings.Contains(string(gotovyy), "override_android_vpn") {
+		t.Fatal("осталось android-поле, ядро не запустится")
 	}
 }
 
 func TestSPravamiOstayotsyaTunnel(t *testing.T) {
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, k, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,11 +82,11 @@ func TestSPravamiOstayotsyaTunnel(t *testing.T) {
 // {"ip_is_private":true,"outbound":"direct"} в нём — прямая дорога домой)
 // эта правка не трогает вовсе.
 func TestSPolnoyZashchitoyFinalOstaetsyaDirect(t *testing.T) {
-	// Базой берём тот же Prigotovit в режиме прокси (Prava:false), а не сырой
-	// профиль: dobavitPravilomRezhimQuic вставляет своё udp/443-правило
-	// независимо от Prava, и это не имеет отношения к нашей правке —
-	// сравнивать нужно только то, что мог поменять именно final-переключатель.
-	baza, _, err := Prigotovit(profil(t), Vybor{Prava: false})
+	// Базой берём тот же Prigotovit, а не сырой профиль:
+	// dobavitPravilomRezhimQuic вставляет своё udp/443-правило, и это не
+	// имеет отношения к нашей правке — сравнивать нужно только то, что мог
+	// поменять именно final-переключатель.
+	baza, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +94,7 @@ func TestSPolnoyZashchitoyFinalOstaetsyaDirect(t *testing.T) {
 	pravilaDo, _ := dDo["route"].(map[string]any)["rules"].([]any)
 	chisloPravilDo := len(pravilaDo)
 
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,26 +143,11 @@ func TestSPolnoyZashchitoyFinalOstaetsyaDirect(t *testing.T) {
 	}
 }
 
-// Режим прокси (нет прав) route.final не трогаем — там как и раньше "direct":
-// решает уже система через set_system_proxy, а не route.final ядра.
-func TestBezPravFinalOstayotsyaDirect(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := razobrat(t, gotovyy)
-	r, _ := d["route"].(map[string]any)
-	final, _ := r["final"].(string)
-	if final != "direct" {
-		t.Fatalf("route.final = %q, в режиме прокси (без прав) ожидал direct как раньше", final)
-	}
-}
-
 // Комплект (BezSetevyhPravil) главнее и без него взводится независимо —
 // проверяем, что при Prava:true+BezSetevyhPravil final по-прежнему туннель
 // (это поведение уже было, новая правка его не должна задеть).
 func TestSPolnymiPravamiIBezSetevyhPravilFinalTunnel(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true, BezSetevyhPravil: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{BezSetevyhPravil: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,50 +198,32 @@ func TestPravilaBezVybroshennogoVhoda(t *testing.T) {
 		}
 		svoih++
 	}
-	if svoih != 2 {
-		t.Fatalf("ожидал 2 правила (одно выброшено целиком), получил %d", svoih)
+	// Выброшен вход mixed-in: правило, где он был вторым, остаётся с одним
+	// tun-in, остальные — как были.
+	if svoih != 3 {
+		t.Fatalf("ожидал 3 правила профиля, получил %d", svoih)
 	}
-	if strings.Contains(string(gotovyy), "tun-in") {
+	if strings.Contains(string(gotovyy), "mixed-in") {
 		t.Fatal("ссылка на выброшенный вход осталась в правилах")
 	}
 }
 
 func TestProfilBezVhodaEtoOshibka(t *testing.T) {
-	if _, _, err := Prigotovit([]byte(`{"inbounds":[{"type":"tun","tag":"tun-in"}]}`), Vybor{}); err == nil {
-		t.Fatal("без прав и без прокси подключаться нечем — это должно быть ошибкой, а не тихим запуском")
+	if _, _, err := Prigotovit([]byte(`{"inbounds":[{"type":"mixed","tag":"mixed-in","listen_port":2412}]}`), Vybor{}); err == nil {
+		t.Fatal("без туннеля подключаться нечем — это должно быть ошибкой, а не тихим запуском")
 	}
 }
 
 func TestBityyProfil(t *testing.T) {
-	if _, _, err := Prigotovit([]byte("не json"), Vybor{Prava: true}); err == nil {
+	if _, _, err := Prigotovit([]byte("не json"), Vybor{}); err == nil {
 		t.Fatal("битый профиль обязан быть ошибкой")
-	}
-}
-
-// Отказ системы настроить прокси не должен ронять ядро: ставим прокси-вход
-// без просьбы к системе и честно говорим человеку адрес.
-func TestOtstuplenieBezSistemnogoProksi(t *testing.T) {
-	gotovyy, k, err := Prigotovit(profil(t), Vybor{BezSistemnogoProksi: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !k.RuchnoyProksi || k.Rezhim != Proksi {
-		t.Fatalf("картина не отражает отступление: %+v", k)
-	}
-	if !strings.Contains(k.Zametka, k.ProksiAdres) {
-		t.Fatalf("человеку не сказали адрес прокси: %q", k.Zametka)
-	}
-	for _, vh := range vhody(razobrat(t, gotovyy)) {
-		if vh["type"] == "mixed" && vh["set_system_proxy"] != false {
-			t.Fatal("ядро снова попросят настроить системный прокси — оно упадёт так же")
-		}
 	}
 }
 
 // Выбор узла человеком должен пережить перезапуск ядра, а хранит выбор
 // cache_file. Поля store_selected тут быть НЕ ДОЛЖНО: ядро 1.14 на нём падает.
 func TestPrigotovitVelitYadruPomnitVybor(t *testing.T) {
-	gotovyy, _, err := Prigotovit(profil(t), Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +291,7 @@ func TestPrigotovitDobavlyaetHranilishcheEsliEgoNet(t *testing.T) {
 	d := razobrat(t, profil(t))
 	delete(d["experimental"].(map[string]any), "cache_file")
 	syroy, _ := json.Marshal(d)
-	gotovyy, _, err := Prigotovit(syroy, Vybor{Prava: true})
+	gotovyy, _, err := Prigotovit(syroy, Vybor{})
 	if err != nil {
 		t.Fatal(err)
 	}

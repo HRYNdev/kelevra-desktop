@@ -143,8 +143,8 @@ def proverit_obrezku_kadra(str_, imya_sceny):
 # расширяем вход старому. Имена узлов — «Нидерланды»/«Комната», как в
 # реальном конфиге следователя (internal/yadro/uzly_test.go), не выдуманные.
 SCENA_DVA_UZLA = dict(
-    BAZA, sost="rabotaet", pid="8124", rezhim="proksi", mozhno_tun=True,
-    zametka=ZAMETKI["ZametkaBezPrav"],
+    BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+    zametka=ZAMETKI["ZametkaVes"],
     uzly={"gruppy": [{
         "imya": "Соединение", "sam": False, "seychas": "Комната",
         "uzly": [{"imya": "Нидерланды", "zaderzhka": 64}, {"imya": "Комната", "zaderzhka": 12}],

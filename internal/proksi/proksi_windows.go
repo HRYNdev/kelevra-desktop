@@ -1,14 +1,13 @@
 //go:build windows
 
-// Пакет proksi снимает за собой системный прокси Windows.
+// Пакет proksi убирает системный прокси Windows, оставленный старыми версиями.
 //
-// Зачем он есть. Ядро прописывает себя системным прокси само, а откатывает
-// запись только при спокойном выходе. На Windows у sing-box нет мягкой
-// остановки, приложение гасит его напрямую — и настройка остаётся висеть.
-// Жалоба 20.08 10:23: при выключении прокси-сервер за собой не гасится, и
-// из-за этого после закрытия приложения перестают грузиться сайты.
-// То же самое случится при любой аварии ядра, поэтому чистить обязано
-// приложение, а не расчёт на вежливый выход чужой программы.
+// Зачем он есть. До 0.6.77 у Kelevra был прокси-режим: ядро прописывало себя
+// системным прокси, а откатывало запись только при спокойном выходе. Жёсткая
+// смерть процесса оставляла запись висеть — и после закрытия приложения
+// переставали грузиться сайты (жалоба 20.08). Новые версии прокси не ставят
+// никогда, но у того, кто обновился из прокси-режима, запись может остаться,
+// и убрать её обязаны мы.
 package proksi
 
 import (
@@ -29,24 +28,35 @@ const putNastroek = `Software\Microsoft\Windows\CurrentVersion\Internet Settings
 // internal/prava, и заведена по той же причине.
 //
 // Замер 31.08: проверки, собранные под Windows и запущенные на НАСТОЯЩЕЙ
-// Windows (а не под wine, как на стенде), доходят до Postavit — и системный
-// прокси машины уезжает на 127.0.0.1:2412, порт, за которым в этот момент
-// никого нет. Это ровно та авария, из-за которой у человека дважды пропадал
+// Windows (а не под wine, как на стенде), доходили до Postavit (функция
+// установки прокси, удалена в 0.6.77) — и системный прокси машины уезжал на
+// 127.0.0.1:2412, порт, за которым в этот момент никого нет. Это ровно та авария, из-за которой у человека дважды пропадал
 // интернет, только устроенная не приложением, а его же проверками. Ставит
 // переменную TestMain пакета internal/sluzhba; у пользователя её нет.
 func tolkoSmotrim() bool { return os.Getenv("KELEVRA_PROKSI") == "net" }
 
-// Snyat выключает системный прокси, если он включён.
-// Возвращает true, если что-то действительно было выключено.
-func Snyat() bool {
+// UbratSled снимает системный прокси, оставленный СТАРОЙ версией Kelevra
+// (до 0.6.77, прокси-режим), и стирает её метку. Возвращает true, если прокси
+// действительно был включён и снят.
+//
+// Чужой прокси не трогает никогда: снимает, только если в ProxyServer стоит
+// наш адрес — из метки старой версии или StaryyAdres. До 0.6.77 снятие гасило
+// ЛЮБОЙ включённый прокси (ProxyEnable=0 без сверки адреса); теперь, когда
+// Kelevra прокси не ставит вовсе, такой размах нечем оправдать — у человека
+// может стоять свой прокси, и выключать его на каждом подключении нельзя.
+//
+// Зовут её: окно и значок на старте (пользовательский сеанс — ветка реестра
+// человека), служебный процесс в сеансе человека при подъёме туннеля и на
+// выходе. Из службы Windows она бесполезна, но безвредна: у системной
+// учётной записи своя ветка HKCU, и нашего адреса там нет.
+func UbratSled() bool {
 	if tolkoSmotrim() {
 		log.Printf("системный прокси: KELEVRA_PROKSI=net — настройки сети машины не трогаю")
 		UbratMetku()
 		return false
 	}
-	// Метку читаем ДО всякого UbratMetku: в ней лежит адрес, который поставили
-	// МЫ, и только он даёт право стереть строку ProxyServer (см. pribratSled).
-	nash, estMetka := ProchestMetku()
+	nashi := nashiAdresa()
+	defer UbratMetku()
 	k, err := registry.OpenKey(registry.CURRENT_USER, putNastroek, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		log.Printf("системный прокси: не открыть настройки: %v", err)
@@ -54,48 +64,45 @@ func Snyat() bool {
 	}
 	defer k.Close()
 
-	vkl, _, err := k.GetIntegerValue("ProxyEnable")
-	if err == nil && vkl == 0 {
-		if estMetka {
-			pribratSled(k, nash) // галочка уже снята, а наша строка адреса могла остаться
-		}
-		UbratMetku() // уже снят (в т.ч. этим же Snyat() с прошлого раза) — метка стала лишней
-		return false // никто ничего не включал — не трогаем чужие настройки
-	}
-	if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
-		log.Printf("системный прокси: не выключить: %v", err)
+	server, _, err := k.GetStringValue("ProxyServer")
+	if err != nil || !nashSledIz(server, nashi) {
+		// Строки нет или в ней чужой адрес — это не наш след, не трогаем.
 		return false
 	}
-	// Снимать обязаны тем же путём, каким ставили. Если прокси был поставлен
-	// через опцию 75, настоящий источник правды для WinINet — двоичный
-	// DefaultConnectionSettings, а не наши две строки в реестре: погасив только
-	// ProxyEnable, мы оставили бы человека ровно с той бедой 20.08, из-за
-	// которой этот пакет и появился.
-	if err := cherezOpciyu75("", flagPryamo); err != nil {
-		log.Printf("системный прокси: опция 75 не сняла (%v) — сняли реестром", err)
+	snyali := false
+	if vkl, _, err := k.GetIntegerValue("ProxyEnable"); err == nil && vkl != 0 {
+		if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
+			log.Printf("системный прокси старой версии: не выключить: %v", err)
+			return false
+		}
+		// Снимать тем же путём, каким ставили: старая версия ставила прокси и
+		// через опцию 75 (двоичный DefaultConnectionSettings — настоящий
+		// источник правды для WinINet), и реестром.
+		if err := snyatOpciey75(); err != nil {
+			log.Printf("системный прокси: опция 75 не сняла (%v) — сняли реестром", err)
+		}
+		snyali = true
 	}
-	// Свой адрес из реестра стираем. До 31.08 он оставался лежать: сайты
-	// выключенная галочка не ломает, и казалось, что строка безобидна. Она не
-	// безобидна — она врёт при разборе аварии. 31.08 по строке
-	// «ProxyServer=http://127.0.0.1:2412» при ProxyEnable=0 дважды искали
-	// причину пропавшего интернета, которой там не было. За собой прибираем
-	// целиком, а не наполовину.
-	if estMetka {
-		pribratSled(k, nash)
+	// Строку адреса стираем и при выключенной галочке: она врёт при разборе
+	// аварии (31.08 по ней дважды искали причину пропавшего интернета).
+	if err := k.DeleteValue("ProxyServer"); err != nil {
+		log.Printf("системный прокси: свою строку адреса стереть не вышло: %v", err)
 	}
 	soobshchitSisteme()
-	UbratMetku()
-	log.Printf("системный прокси снят")
-	return true
+	if snyali {
+		log.Printf("системный прокси старой версии Kelevra снят (%s)", server)
+	} else {
+		log.Printf("системный прокси: убрал строку адреса старой версии Kelevra (%s)", server)
+	}
+	return snyali
 }
 
 // nashSled отвечает на единственный вопрос, который даёт право стереть чужую
 // с виду строку из реестра: «то, что лежит в ProxyServer, — это ровно тот
-// адрес, который поставили МЫ?». Сравнение через Contains по той же причине,
-// что и в Stoit: ядро пишет адрес со схемой («http://127.0.0.1:2412»), а в
-// метке он лежит без неё («127.0.0.1:2412»).
+// адрес, который ставила Kelevra?». Сравнение через Contains: ядро пишет адрес
+// со схемой («http://127.0.0.1:2412»), а в метке он лежит без неё.
 //
-// Пустая метка (её нет) или пустая строка в реестре — всегда «нет»: без
+// Пустой адрес или пустая строка в реестре — всегда «нет»: без
 // доказательства чужую настройку не трогаем никогда, даже выключенную.
 func nashSled(vReestre, nash string) bool {
 	vReestre, nash = strings.TrimSpace(vReestre), strings.TrimSpace(nash)
@@ -105,95 +112,14 @@ func nashSled(vReestre, nash string) bool {
 	return strings.Contains(vReestre, nash)
 }
 
-// pribratSled стирает строку ProxyServer, если в ней стоит наш адрес nash.
-// Чужой адрес оставляет как есть и говорит об этом в журнал.
-func pribratSled(k registry.Key, nash string) {
-	server, _, err := k.GetStringValue("ProxyServer")
-	if err != nil {
-		return // строки нет вовсе — прибирать нечего
+// nashSledIz — nashSled хотя бы для одного из наших адресов.
+func nashSledIz(vReestre string, nashi []string) bool {
+	for _, n := range nashi {
+		if nashSled(vReestre, n) {
+			return true
+		}
 	}
-	if !nashSled(server, nash) {
-		log.Printf("системный прокси: в реестре не наш адрес (%q против нашего %q) — не трогаю", server, nash)
-		return
-	}
-	if err := k.DeleteValue("ProxyServer"); err != nil {
-		log.Printf("системный прокси: свою строку адреса стереть не вышло: %v", err)
-		return
-	}
-	log.Printf("системный прокси: убрал за собой строку адреса (%s)", server)
-}
-
-// Stoit сообщает, стоит ли прямо сейчас в системе прокси на адрес adres.
-// Ядро пишет адрес со схемой («http://127.0.0.1:2412»), а adres приходит без
-// неё («127.0.0.1:2412») — поэтому сравниваем через strings.Contains, а не
-// на равенство.
-func Stoit(adres string) bool {
-	k, err := registry.OpenKey(registry.CURRENT_USER, putNastroek, registry.QUERY_VALUE)
-	if err != nil {
-		log.Printf("системный прокси: не открыть настройки: %v", err)
-		return false
-	}
-	defer k.Close()
-
-	vkl, _, err := k.GetIntegerValue("ProxyEnable")
-	if err != nil || vkl == 0 {
-		return false
-	}
-	server, _, err := k.GetStringValue("ProxyServer")
-	if err != nil {
-		return false
-	}
-	return strings.Contains(server, adres)
-}
-
-// Postavit прописывает системный прокси на adres сам — то же самое, что
-// делают рабочие VPN-клиенты без прав администратора.
-//
-// Путей два, и порядок важен. Главный — InternetSetOption с опцией 75
-// (INTERNET_PER_CONNECTION_OPTION): именно так ставят прокси sing-box и
-// v2rayN, и именно его WinINet считает настоящим источником правды (он пишет
-// двоичный DefaultConnectionSettings). Запасной — две строки в реестре;
-// Microsoft про них прямым текстом: «Client applications should not use
-// registry functions to change the default values of the Internet options».
-// Реестр мы всё равно приводим в тот же вид: по нему читает Stoit() и его
-// видит человек в Параметрах, так что расходиться им нельзя.
-//
-// Возвращает true, если хотя бы один из путей прошёл.
-func Postavit(adres string) bool {
-	if tolkoSmotrim() {
-		log.Printf("системный прокси: KELEVRA_PROKSI=net — %s в настройки сети машины не пишу", adres)
-		return false
-	}
-	poOpcii := cherezOpciyu75(adres, flagCherezProksi|flagPryamo)
-	if poOpcii != nil {
-		// Под wine (наш стенд) опция 75 не реализована и падает с 12009 —
-		// это не признак того, что и на настоящей Windows будет отказ.
-		log.Printf("системный прокси: опция 75 отказала (%v) — иду через реестр", poOpcii)
-	}
-
-	poReestru := vReestr(adres)
-	if poReestru != nil {
-		log.Printf("системный прокси: реестр отказал: %v", poReestru)
-	}
-	if poOpcii != nil && poReestru != nil {
-		return false
-	}
-	soobshchitSisteme()
-	log.Printf("системный прокси поставлен сам: %s (опция 75: %v, реестр: %v)",
-		adres, poOpcii == nil, poReestru == nil)
-	return true
-}
-
-func vReestr(adres string) error {
-	k, err := registry.OpenKey(registry.CURRENT_USER, putNastroek, registry.QUERY_VALUE|registry.SET_VALUE)
-	if err != nil {
-		return err
-	}
-	defer k.Close()
-	if err := k.SetStringValue("ProxyServer", adres); err != nil {
-		return err
-	}
-	return k.SetDWordValue("ProxyEnable", 1)
+	return false
 }
 
 // Опция 75 и её обвязка. Структуры — как в WinINet:
@@ -212,8 +138,7 @@ const (
 	poleServer    = 2 // INTERNET_PER_CONN_PROXY_SERVER
 	poleIsklyuchi = 3 // INTERNET_PER_CONN_PROXY_BYPASS
 
-	flagPryamo       = 1 // PROXY_TYPE_DIRECT
-	flagCherezProksi = 2 // PROXY_TYPE_PROXY
+	flagPryamo = 1 // PROXY_TYPE_DIRECT
 )
 
 type perConnOpciya struct {
@@ -231,9 +156,11 @@ type perConnSpisok struct {
 	opcii       *perConnOpciya
 }
 
-// cherezOpciyu75 ставит (adres непустой) или снимает (adres пустой, priznaki =
-// flagPryamo) системный прокси штатным вызовом WinINet.
-func cherezOpciyu75(adres string, priznaki uintptr) error {
+// snyatOpciey75 снимает системный прокси штатным вызовом WinINet: признак
+// «напрямую», без адреса. Ставить прокси этим путём больше некому — адреса
+// функция не принимает вовсе.
+func snyatOpciey75() error {
+	adres, priznaki := "", uintptr(flagPryamo)
 	wininet, err := syscall.LoadLibrary("wininet.dll")
 	if err != nil {
 		return err
