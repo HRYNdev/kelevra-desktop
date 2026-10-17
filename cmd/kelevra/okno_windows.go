@@ -166,6 +166,11 @@ func pokazatOkno(url string) {
 	// edge.Chromium.Init). Navigate — тоже через нить окна, по той же
 	// причине, что и Terminate.
 	perejtiNaAdres := func(adres string) { w.Dispatch(func() { w.Navigate(adres) }) }
+	// Кнопка «Панель сети» (вкладка «Подписка»): панель открывается ОТДЕЛЬНЫМ процессом — второе окно
+	// WebView2 в этом процессе падает (см. выше), а своё окно у панели большое и живёт само по себе.
+	if err := w.Bind("kelevraPanel", zapustitOknoPaneli); err != nil {
+		log.Printf("кнопка панели сети не привязана: %v", err)
+	}
 	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, srokOzhidaniyaZameny, zakrytOkno, perejtiNaAdres)
 	w.Navigate(url)
 	w.Run()

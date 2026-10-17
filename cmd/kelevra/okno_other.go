@@ -34,3 +34,8 @@ func podnyatChuzheeOkno() bool {
 func zakrytStaroeOkno() itogSmenyOkna {
 	return itogSmenyOkna{}
 }
+
+// pokazatOknoPaneli вне Windows окна не рисует: адрес панели — в журнал, открыть можно браузером.
+func pokazatOknoPaneli(ssylka string) {
+	fmt.Println("окна тут нет; панель сети:", ssylka)
+}
