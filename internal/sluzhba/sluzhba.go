@@ -534,6 +534,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.Handle(pref+"/", http.StripPrefix(pref+"/", http.FileServer(http.FS(stranicy))))
 	m.HandleFunc(pref+"/api/sostoyanie", s.sostoyanie)
 	m.HandleFunc(pref+"/api/kod", s.kod)
+	m.HandleFunc(pref+"/api/panel", s.panelRuchka)
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
 	m.HandleFunc(pref+"/api/polnaya_zashchita", s.polnayaZashchita)
@@ -1598,6 +1599,8 @@ type otvetSostoyaniya struct {
 	// приостановлена»: без него окно на свежем запуске рисовало бы
 	// «Приостановлена» по нулевому Aktivna — то есть врало бы.
 	PodpiskaEst         bool  `json:"podpiska_est"`
+	// Panel — машина админа своей сети: окно показывает кнопку «Панель сети».
+	Panel bool `json:"panel,omitempty"`
 	PodpiskaAktivna     bool  `json:"podpiska_aktivna,omitempty"`
 	PodpiskaLimitBayt   int64 `json:"podpiska_limit_bayt,omitempty"`
 	PodpiskaSyedenoBayt int64 `json:"podpiska_syedeno_bayt,omitempty"`
@@ -1758,6 +1761,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		o.Imya, o.DoUnix = s.svedeniya.Imya, s.svedeniya.Do
 		o.ChelovekImya, o.UstroystvoImya = s.svedeniya.ImyaCheloveka(), s.svedeniya.ImyaUstroystva()
 		o.PodpiskaEst = true
+		o.Panel = s.svedeniya.Panel
 		o.PodpiskaAktivna = s.svedeniya.Aktivna
 		o.PodpiskaLimitBayt, o.PodpiskaSyedenoBayt = s.svedeniya.LimitBayt, s.svedeniya.SyedenoB
 		for _, u := range s.svedeniya.Ustroystva {
@@ -2201,6 +2205,19 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 		s.zapomnitDveri(sv)
 	}
 	otdat(w, map[string]any{"gotovo": true}, nil)
+}
+
+// panelRuchka — одноразовая ссылка в панель своей сети для окна (кнопка «Панель сети»).
+func (s *Sluzhba) panelRuchka(w http.ResponseWriter, r *http.Request) {
+	ctx, otmena := context.WithTimeout(r.Context(), 20*time.Second)
+	defer otmena()
+	ssylka, err := s.Podpiska.PropuskPaneli(ctx, s.Nastroyki.Podpiska)
+	if err != nil {
+		log.Printf("панель сети не открылась: %v", err)
+		otdat(w, nil, err)
+		return
+	}
+	otdat(w, map[string]any{"ssylka": ssylka}, nil)
 }
 
 // dveri — куда стучаться с кодом: стенд (KELEVRA_PODPISKA) — только он; иначе двери, которые

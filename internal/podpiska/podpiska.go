@@ -313,6 +313,44 @@ type Svedeniya struct {
 	Ustroystva []Ustroystvo `json:"devices,omitempty"`
 	// Dveri — адреса выдачи, которые сервер советует для входа по коду (своя сеть).
 	Dveri []string `json:"dveri,omitempty"`
+	// Panel — эта машина принадлежит админу своей сети: в окне есть кнопка «Панель сети».
+	Panel bool `json:"panel,omitempty"`
+}
+
+// PropuskPaneli — одноразовая ссылка в панель своей сети для этой машины: ключ устройства из
+// адреса подписки (/u/<ключ>) предъявляется мозгу. Панель только у подписки, полученной входом по коду.
+func (k *Klient) PropuskPaneli(ctx context.Context, adres string) (string, error) {
+	u, err := url.Parse(adres)
+	chasti := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if err != nil || u.Host == "" || len(chasti) != 2 || chasti[0] != "u" {
+		return "", fmt.Errorf("панель открывается с подписки, полученной входом по коду")
+	}
+	req, err := k.zaprosMetodom(ctx, http.MethodPost, fmt.Sprintf("%s://%s/panel/api/v1/vhod/ustroystvo", k.shema(), u.Host))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-Device-Key", chasti[1])
+	otvet, err := k.http().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("мозг сети недоступен: %w", err)
+	}
+	defer otvet.Body.Close()
+	var o struct {
+		Ssylka  string `json:"ssylka"`
+		Oshibka string `json:"oshibka"`
+	}
+	_ = json.NewDecoder(io.LimitReader(otvet.Body, 64<<10)).Decode(&o)
+	switch {
+	case otvet.StatusCode == http.StatusOK && strings.HasPrefix(o.Ssylka, "https://"):
+		return o.Ssylka, nil
+	case otvet.StatusCode == http.StatusForbidden:
+		return "", fmt.Errorf("этой машине панель не положена")
+	case otvet.StatusCode >= 500:
+		return "", fmt.Errorf("мозг сети сейчас недоступен — связь при этом работает")
+	case o.Oshibka != "":
+		return "", fmt.Errorf("%s", o.Oshibka)
+	}
+	return "", fmt.Errorf("панель ответила %d", otvet.StatusCode)
 }
 
 // Ustroystvo — одна строка списка «кто ещё ходит под этим кодом».

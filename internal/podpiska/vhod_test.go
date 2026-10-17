@@ -171,3 +171,31 @@ func TestPoAdresu(t *testing.T) {
 		t.Fatalf("неизвестный ключ должен дать OshibkaKoda, получил %v", err)
 	}
 }
+
+// Пропуск в панель: ключ из адреса /u/<ключ> уходит заголовком, ответ — одноразовая ссылка.
+func TestPropuskPaneli(t *testing.T) {
+	var klyuch string
+	d := dver(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/panel/api/v1/vhod/ustroystvo" {
+			klyuch = r.Header.Get("X-Device-Key")
+			if klyuch != "klyuch5555" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.Write([]byte(`{"ssylka":"https://n/panel/vhod/abc"}`))
+			return
+		}
+		w.WriteHeader(404)
+	})
+	k := klientDlyaDverey()
+	s, err := k.PropuskPaneli(context.Background(), "http://"+d+"/u/klyuch5555")
+	if err != nil || s != "https://n/panel/vhod/abc" || klyuch != "klyuch5555" {
+		t.Fatalf("ждал ссылку, получил %q, %v (ключ %q)", s, err, klyuch)
+	}
+	if _, err := k.PropuskPaneli(context.Background(), "http://"+d+"/u/chuzhoy0000"); err == nil {
+		t.Fatal("чужой ключ дал ссылку")
+	}
+	if _, err := k.PropuskPaneli(context.Background(), "https://subkv.example/k/KOD"); err == nil {
+		t.Fatal("с подписки по коду (без ключа устройства) панель открываться не должна")
+	}
+}

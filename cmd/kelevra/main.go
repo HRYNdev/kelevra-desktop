@@ -82,6 +82,12 @@ func main() {
 	// (stend/windows.sh) и разбор беды у человека, менять эту переменную нельзя.
 	// нельзя.
 
+	// --panel <ссылка>: только окно панели своей сети (кнопка «Панель сети», okno_paneli.go).
+	if ssylka, ok := ssylkaPaneliIzArgov(os.Args[1:]); ok {
+		pokazatOknoPaneli(ssylka)
+		return
+	}
+
 	// --trey: только значок в трее, без окна и без своего ядра. Так стартует
 	// автозапуск, когда туннель держит служба Windows.
 	if estArg(argTrey) {

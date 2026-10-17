@@ -1293,6 +1293,14 @@
         </div>
         <div class="podskazka-pod-kartoy" id="podp-podskazka" hidden>так это устройство подписано на сервере</div>
 
+        <!-- Панель своей сети — только машине админа (сервер пишет panel в сведениях). Открывается
+             отдельным окном: второе окно WebView2 в этом процессе не живёт (cmd/kelevra okno_windows.go). -->
+        <button class="karta karta-vyhod" id="podp-panel" type="button" hidden>
+          <span class="vyhod-label">Сеть</span>
+          <span class="vyhod-title">Панель сети</span>
+          <span class="vyhod-subtitle" id="podp-panel-podpis">Люди, устройства, узлы и трафик</span>
+        </button>
+
         <div class="karta karta-nastroyki" id="podp-karta-kod" hidden>
           <div class="ryad-svedeniya nastroyki-ryad">
             <span class="ryad-metka">Код доступа</span>
@@ -2112,7 +2120,21 @@ function narisovatPodpisku(s) {
   const maska = s.kod_maska || "";
   $("podp-kod").textContent = maska;
   $("podp-karta-kod").hidden = !maska;
+  $("podp-panel").hidden = !s.panel;
 }
+
+$("podp-panel").onclick = async () => {
+  const podpis = $("podp-panel-podpis");
+  podpis.textContent = "Открываю…";
+  try {
+    const d = await api("panel", {});
+    if (window.kelevraPanel) await window.kelevraPanel(d.ssylka);
+    else window.open(d.ssylka, "_blank");
+    podpis.textContent = "Люди, устройства, узлы и трафик";
+  } catch (e) {
+    podpis.textContent = e.message;
+  }
+};
 
 // pokazatRasskazObObnovlenii — карточка «что изменилось», один раз после
 // установки новой версии. Поле posle_obnovleniya служба отдаёт ровно одному
