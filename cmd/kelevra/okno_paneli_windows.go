@@ -46,9 +46,10 @@ func pokazatOknoPaneli(ssylka string) {
 }
 
 // metkaPrilozheniya — дописывается к user agent окна панели: так панель
-// узнаёт, что открыта в приложении, а не в браузере (как на телефоне). Без
-// «tema=…»: на компьютере панель берёт тему по системе.
-const metkaPrilozheniya = "KelevraApp"
+// узнаёт, что открыта в приложении, а не в браузере (как на телефоне), и
+// какую тему взять: у Desktop светлой темы нет, поэтому всегда тёмная —
+// иначе на светлой Windows панель была бы светлой рядом с тёмным окном.
+const metkaPrilozheniya = "KelevraApp tema/dark"
 
 // IID_ICoreWebView2Settings2 (WebView2.h) — в нём живут get_/put_UserAgent.
 var iidSettings2 = windows.GUID{Data1: 0xee9a0f68, Data2: 0xf46c, Data3: 0x4e32,
