@@ -32,6 +32,13 @@ import (
 // HTTP.
 const shagProverkiVersii = 10 * time.Second
 
+// peremennayaPopytki — через неё защёлка poslednyayaPopytka переживает сам
+// перезапуск. Без неё новая копия начинает с пустой защёлки, и если свежий
+// .exe на диске НЕ новее (служба стоит из другой папки, а окно запущено из
+// старой копии — например, из «Загрузок»), окно перезапускало бы само себя
+// каждые shagProverkiVersii, вечно.
+const peremennayaPopytki = "KELEVRA_SMENA_PO_VERSII"
+
 // putUstanovki — канонический путь установки: папка, где лежит .exe, плюс
 // его настоящее имя (obnovlenie.ImyaFayla), а не os.Executable() в лоб и не
 // голый obnovlenie.PutSebya(). Этот код зовётся из ОКНА, которое в момент
@@ -94,13 +101,13 @@ func nuzhnoPerezapuskatOknoPoVersii(versiyaOkna, versiyaSluzhby, poslednyayaPopy
 // нажимал и ничего не обновлял, это окно тихо чинит само себя. Без --tiho
 // (pokazatLiOkno: !tiho → true): новое окно обязано появиться, а не остаться
 // скрытым — человек должен увидеть ровно то же окно, что и до перезапуска.
-func perezapustitOknoPoVersii() error {
+func perezapustitOknoPoVersii(versiyaSluzhby string) error {
 	put, err := putUstanovki()
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command(put, argSmena, strconv.Itoa(os.Getpid()), argPriStarte)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), peremennayaPopytki+"="+versiyaSluzhby)
 	return cmd.Start()
 }
 
@@ -120,7 +127,7 @@ func perezapustitOknoPoVersii() error {
 // шаге — nuzhnoPerezapuskatOknoPoVersii не даст долбить один и тот же сбой
 // силой, но заметит, если к тому моменту вышла ЕЩЁ более новая версия.
 func storozhitVersiyu(adresTekushchiy func() string, zakryt func()) {
-	poslednyayaPopytka := ""
+	poslednyayaPopytka := os.Getenv(peremennayaPopytki)
 	for {
 		time.Sleep(shagProverkiVersii)
 		versiyaSluzhby := versiyaChuzhoyKopii(adresTekushchiy())
@@ -129,7 +136,7 @@ func storozhitVersiyu(adresTekushchiy func() string, zakryt func()) {
 		}
 		log.Printf("сторож версии: служба версии %s новее окна %s — перезапускаю окно свежим .exe", versiyaSluzhby, podpiska.Versiya)
 		poslednyayaPopytka = versiyaSluzhby
-		if err := perezapustitOknoPoVersii(); err != nil {
+		if err := perezapustitOknoPoVersii(versiyaSluzhby); err != nil {
 			log.Printf("сторож версии: не поднял свежую копию (%v) — работаю старой версией дальше", err)
 			continue
 		}
