@@ -122,6 +122,12 @@ func (y *Yadro) Vybrano(gruppa string) (string, error) {
 // Vybrat переключает группу на узел. Ядро откажет, если узел не входит в группу
 // или если группой правит автоматика.
 func (y *Yadro) Vybrat(gruppa, uzel string) error {
+	return y.VybratZa(gruppa, uzel, 0)
+}
+
+// VybratZa — Vybrat с своим сроком ответа ядра (0 — обычный клиент). Переключение с обрывом живых
+// соединений (interrupt_exist_connections) ядро может подтверждать дольше обычных трёх секунд.
+func (y *Yadro) VybratZa(gruppa, uzel string, srok time.Duration) error {
 	if gruppa == "" || uzel == "" {
 		return fmt.Errorf("не сказано, что и на что переключить")
 	}
@@ -135,7 +141,13 @@ func (y *Yadro) Vybrat(gruppa, uzel string) error {
 	if y.Sekret != "" {
 		req.Header.Set("Authorization", "Bearer "+y.Sekret)
 	}
-	otvet, err := y.klient().Do(req)
+	klient := y.klient()
+	if srok > 0 && klient.Timeout < srok {
+		k := *klient
+		k.Timeout = srok
+		klient = &k
+	}
+	otvet, err := klient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -152,7 +164,12 @@ const ProbaAdres = "http://cp.cloudflare.com/generate_204"
 // Zamerit — сколько миллисекунд идёт запрос через этот узел. Замер делает само
 // ядро: оно поднимает соединение именно через выбранный выход, а не через нас.
 func (y *Yadro) Zamerit(ctx context.Context, uzel string) (int, error) {
-	put := "/proxies/" + url.PathEscape(uzel) + "/delay?timeout=3000&url=" + url.QueryEscape(ProbaAdres)
+	return y.ZameritZa(ctx, uzel, 3*time.Second)
+}
+
+// ZameritZa — Zamerit со своим сроком замера (сколько ядро ждёт ответа узла).
+func (y *Yadro) ZameritZa(ctx context.Context, uzel string, srok time.Duration) (int, error) {
+	put := "/proxies/" + url.PathEscape(uzel) + "/delay?timeout=" + fmt.Sprint(srok.Milliseconds()) + "&url=" + url.QueryEscape(ProbaAdres)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+y.api()+put, nil)
 	if err != nil {
 		return 0, err
@@ -161,9 +178,9 @@ func (y *Yadro) Zamerit(ctx context.Context, uzel string) (int, error) {
 		req.Header.Set("Authorization", "Bearer "+y.Sekret)
 	}
 	klient := y.klient()
-	if klient.Timeout < 6*time.Second { // замер сам ждёт до 3 с, короткий таймаут срубил бы его
+	if klient.Timeout < srok+3*time.Second { // замер сам ждёт до srok, короткий таймаут срубил бы его
 		k := *klient
-		k.Timeout = 6 * time.Second
+		k.Timeout = srok + 3*time.Second
 		klient = &k
 	}
 	otvet, err := klient.Do(req)

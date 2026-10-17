@@ -116,3 +116,18 @@ func TestVseMertvy(t *testing.T) {
 		t.Fatalf("переключили на мёртвый: %v", p.vybory)
 	}
 }
+
+type opozdanie struct{ podstava }
+
+func (p *opozdanie) Vybrat(g, u string) error { p.podstava.Vybrat(g, u); return errors.New("context deadline exceeded") }
+
+// Ядро переключило, но ответило таймаутом — узел встал, считаем переход состоявшимся.
+func TestVybratSOpozdaniem(t *testing.T) {
+	sey := time.Unix(1000, 0)
+	p := &opozdanie{podstava{vybrano: "Нидерланды", mertvye: map[string]bool{"Нидерланды": true}}}
+	o := &Ochered{Gruppa: "Соединение", Uzly: []string{"Нидерланды", "Финляндия"}, Ya: p, Seychas: func() time.Time { return sey }}
+	o.Shag(context.Background())
+	if !o.Shag(context.Background()) || p.vybrano != "Финляндия" {
+		t.Fatalf("переход с опоздавшим ответом не засчитан: %q", p.vybrano)
+	}
+}
