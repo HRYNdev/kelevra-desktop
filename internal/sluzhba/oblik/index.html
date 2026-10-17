@@ -2128,9 +2128,20 @@ $("podp-panel").onclick = async () => {
   podpis.textContent = "Открываю…";
   try {
     const d = await api("panel", {});
-    if (window.kelevraPanel) await window.kelevraPanel(d.ssylka);
-    else window.open(d.ssylka, "_blank");
-    podpis.textContent = "Люди, устройства, узлы и трафик";
+    // БРАУЗЕР НЕ ОТКРЫВАЕМ НИКОГДА (17.10: «это что за уебанство на компе,
+    // открывается БРАУЗЕР НАХУЙ»). window.open сюда попадал только тогда,
+    // когда это окно поднято ЕЩЁ СТАРОЙ копией .exe (0.6.73 и раньше) — своей
+    // привязки kelevraPanel (w.Bind, okno_windows.go) у неё нет, служба за
+    // ней обновилась тихо, окно осталось прежним и загрузило этот же,
+    // уже новый HTML. Корень лечит storozh_versii.go: окно само замечает,
+    // что служба другой версии, и перезапускает себя свежим .exe — эта
+    // ветка видна человеку только в короткую щель до того перезапуска.
+    if (window.kelevraPanel) {
+      await window.kelevraPanel(d.ssylka);
+      podpis.textContent = "Люди, устройства, узлы и трафик";
+    } else {
+      podpis.textContent = "Окно обновляется — закройте Kelevra и откройте снова из трея, панель откроется своим окном.";
+    }
   } catch (e) {
     podpis.textContent = e.message;
   }

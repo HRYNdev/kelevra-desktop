@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -160,18 +161,39 @@ func pokazatOkno(url string) {
 	// Dispatch кладёт функцию в очередь окна и будит его PostThreadMessageW
 	// (webview.go:443) — Terminate исполняется в правильном потоке.
 	zakrytOkno := func() { w.Dispatch(w.Terminate) }
+	// adresTekushchiy — общая память про ЖИВОЙ адрес службы между двумя
+	// сторожами ниже: storozhitSluzhbu переводит окно на новый адрес после
+	// переезда службы, а storozhitVersiyu спрашивает версию по тому же
+	// адресу. Без этого второй сторож стучался бы в уже мёртвый адрес вечно
+	// (см. его же комментарий в storozh_versii.go).
+	var adresZamok sync.Mutex
+	adresTekushchiy := url
+	chitatAdres := func() string {
+		adresZamok.Lock()
+		defer adresZamok.Unlock()
+		return adresTekushchiy
+	}
 	// Переезд службы окно переживает переходом на новый адрес, не закрываясь:
 	// второе окно в этом же процессе создать нельзя, go-webview2 падает
 	// внутри себя (проверено на живом стенде 09.09, авария в
 	// edge.Chromium.Init). Navigate — тоже через нить окна, по той же
 	// причине, что и Terminate.
-	perejtiNaAdres := func(adres string) { w.Dispatch(func() { w.Navigate(adres) }) }
+	perejtiNaAdres := func(adres string) {
+		adresZamok.Lock()
+		adresTekushchiy = adres
+		adresZamok.Unlock()
+		w.Dispatch(func() { w.Navigate(adres) })
+	}
 	// Кнопка «Панель сети» (вкладка «Подписка»): панель открывается ОТДЕЛЬНЫМ процессом — второе окно
 	// WebView2 в этом процессе падает (см. выше), а своё окно у панели большое и живёт само по себе.
 	if err := w.Bind("kelevraPanel", zapustitOknoPaneli); err != nil {
 		log.Printf("кнопка панели сети не привязана: %v", err)
 	}
 	go storozhitSluzhbu(url, hranenie.Papka(), shagStorozha, molchaniyDoZakrytiya, srokOzhidaniyaZameny, zakrytOkno, perejtiNaAdres)
+	// Сторож версии (storozh_versii.go): лечит беду 17.10 («открывается
+	// БРАУЗЕР») в корне — находит, что бинарь этого окна старше службы под
+	// ним, и переоткрывает себя свежим .exe, не дожидаясь человека.
+	go storozhitVersiyu(chitatAdres, zakrytOkno)
 	w.Navigate(url)
 	w.Run()
 }
