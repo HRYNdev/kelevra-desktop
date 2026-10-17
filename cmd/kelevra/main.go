@@ -794,7 +794,7 @@ func zhdatMetkuSluzhbyDo(papka string, srok time.Duration) (string, error) {
 func postavitSluzhbuIUyti(putZhurnala string) {
 	put, err := os.Executable()
 	if err != nil {
-		umeret(putZhurnala, "Kelevra не поняла, где лежит сама", err)
+		umeret(putZhurnala, "Не найден путь к файлу Kelevra", err)
 	}
 	log.Printf("ставлю службу Windows из %s", put)
 	if err := vinsluzhba.UstanovitPolnostyu(put); err != nil {
@@ -893,7 +893,7 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	ustanovitObnovlenie = s.PostavitNaydennoe
 	slushatel, url, err := s.Slushat()
 	if err != nil {
-		umeret(putZhurnala, "Kelevra не смогла занять локальный порт (обычно это фаервол или антивирус)", err)
+		umeret(putZhurnala, "Локальный порт занят или заблокирован", err)
 	}
 	server := &http.Server{Handler: s.Obsluzhit()}
 	go func() {

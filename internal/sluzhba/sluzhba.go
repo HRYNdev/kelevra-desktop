@@ -1737,7 +1737,7 @@ func polozhenieAvtorezhima(vklyuchen, ruchnoy bool, obstanovka, sost, slepPrichi
 		if rabotaet {
 			return "сеть не домашняя — подключено"
 		}
-		return "сеть не домашняя — подключаюсь"
+		return "сеть не домашняя — подключение"
 	default:
 		return "идёт определение типа сети"
 	}

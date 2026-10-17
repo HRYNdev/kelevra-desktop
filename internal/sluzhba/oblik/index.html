@@ -1478,7 +1478,7 @@ async function api(put, telo) {
 // stend/oblik_snimok.py — длинное слово тут покраснеет само, без моей памяти.
 //
 // Сами слова и их РЕГИСТР — с телефона (HomeScreen.kt 255-270), там их
-// выверяли на живом экране: «Подключить / Подключаюсь / Отключаюсь / Дома /
+// выверяли на живом экране: «Подключить / Подключение / Отключаюсь / Дома /
 // Подключено / Отключено / Связи нет». До 02.09 тут стояли свои строчные
 // («отключено», «нет связи») — разница видна сразу, если поставить окно рядом
 // с телефоном, а их и ставят рядом (правка 02.09: делать как на телефоне).
@@ -1489,7 +1489,7 @@ async function api(put, telo) {
 // Выдумывать по ним оттенки значило бы врать о том, чего не мерили. Ещё две
 // («Поднимаю комнату», «Комната не отвечает») на компьютере не нужны вовсе —
 // комнаты тут нет.
-const podpisi = {stoit:"Отключено", podnimaem:"Подключаюсь", rabotaet:"Подключено", slomalos:"Связи нет"};
+const podpisi = {stoit:"Отключено", podnimaem:"Подключение", rabotaet:"Подключено", slomalos:"Связи нет"};
 
 // Переходное слово на время СВОЕГО запроса: пока /api/otklyuchit в полёте,
 // ядро всё ещё «rabotaet», и круг до 02.09 продолжал писать «Подключено» —
@@ -1731,7 +1731,7 @@ function zagolovokObnovleniya(s) {
 function podpisObnovleniya(s) {
   if (vRezhimeUstanovki(s)) {
     if (ustanovkaItog === "idet") return "Устанавливаем…";
-    if (ustanovkaItog && ustanovkaItog.beda) return "Не удалось поставить, нажмите ещё раз";
+    if (ustanovkaItog && ustanovkaItog.beda) return "Обновление не установлено";
     // Тот же путь ухода, что и у тычка в пузырь (trey_windows.go:
     // tychokVObnovlenie → PostavitNaydennoe): служба гасит своё ядро и
     // поднимает смену сама — окну остаётся только сказать человеку, что не
@@ -1767,7 +1767,7 @@ async function postavitObnovlenie() {
 
 // Ход установки виден СРАЗУ в обоих местах — и в пункте настроек, и в
 // диалоге: они показывают одно и то же состояние, и обновляться порознь им
-// нельзя (иначе диалог скажет «Скачиваю…», а настройки под ним — «нажмите,
+// нельзя (иначе диалог скажет «Загрузка…», а настройки под ним — «нажмите,
 // чтобы поставить»).
 function pererisovatObnovlenie() {
   $("knopka-obnovlenie").disabled = ustanovkaItog === "idet";
@@ -1782,7 +1782,7 @@ function pererisovatObnovlenie() {
 // (/api/sostoyanie — otvetSostoyaniya в sluzhba.go; считает их сама загрузка,
 // obnovlenie.PostavitSHodom, от Content-Length живого соединения). Поля может
 // не быть — сервер не всегда называет длину ответа, — и тогда мы возвращаемся
-// ровно к прежнему честному поведению: неопределённая полоса и «Скачиваю…»
+// ровно к прежнему честному поведению: неопределённая полоса и «Загрузка…»
 // без числа. Выдумывать процент, которого никто не измерил, нельзя.
 //
 // Долю берём из poslednee (последний ответ /api/sostoyanie, опрос раз в 2
@@ -1804,9 +1804,9 @@ function narisovatDialogObnovleniya() {
   polosa.firstElementChild.style.width = dolya === null ? "" : Math.round(dolya * 100) + "%";
   const hod = $("dialog-obnovleniya-hod");
   hod.hidden = !(idet || gotovo || beda);
-  hod.textContent = idet ? (dolya === null ? "Скачиваю…" : "Скачиваю… " + Math.round(dolya * 100) + "%")
+  hod.textContent = idet ? (dolya === null ? "Загрузка…" : "Загрузка… " + Math.round(dolya * 100) + "%")
       : gotovo ? "Готово, Kelevra перезапускается…"
-      : beda ? "Не удалось поставить — нажмите ещё раз" : "";
+      : beda ? "Обновление не установлено" : "";
   // Пока идёт установка, ставить второй раз нечего, а после успеха — некуда:
   // копия уже уходит на перезапуск.
   $("dialog-obnovlenie-postavit").hidden = idet || gotovo;
@@ -2163,11 +2163,11 @@ async function obnovit() {
   // которого тут быть не должно. Раньше на этом месте по той же причине
   // стояло переходное «Проверяю» — оно ушло вместе с самой проверкой,
   // см. обработчик круга ниже.
-  // «Подключаюсь» дома писать по-прежнему нельзя — это обещание, которого
+  // «Подключение» дома писать по-прежнему нельзя — это обещание, которого
   // запрос не выполнит, и дома его никто и не шлёт.
   const zvanie = deystvieKruga === "otklyuchaem" ? "Отключаюсь"
       : s.ozhidanie_doma ? "Дома"
-      : deystvieKruga === "podklyuchaem" ? "Подключаюсь"
+      : deystvieKruga === "podklyuchaem" ? "Подключение"
       : chastichno ? "Частично" : (podpisi[s.sost] || s.sost);
   $("zvanie").textContent = zvanie;
   $("zvanie").classList.toggle("dlinnoe", zvanie.length > 9);
@@ -2473,7 +2473,7 @@ function risovatUzly(gruppy) {
       ryad.style.cssText = "margin-top:10px;text-align:right";
       const z = document.createElement("button");
       z.className = "ssylka";
-      z.textContent = zamerIdet ? "Проверяю…" : "Проверить скорость";
+      z.textContent = zamerIdet ? "Проверка…" : "Проверить скорость";
       z.disabled = zamerIdet;
       z.onclick = async () => {
         zamerIdet = true; uzlySlepok = ""; obnovitUzly();
