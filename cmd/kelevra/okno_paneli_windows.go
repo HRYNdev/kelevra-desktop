@@ -31,7 +31,7 @@ func pokazatOknoPaneli(ssylka string) {
 		},
 	})
 	if w == nil {
-		skazat("Панель не открылась", "В этой Windows нет компонента WebView2:\n"+gdeWebView2)
+		skazat("Панель не открылась", "В системе не установлен компонент WebView2:\n"+gdeWebView2)
 		return
 	}
 	defer w.Destroy()

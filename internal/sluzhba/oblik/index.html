@@ -1229,7 +1229,7 @@
               подписано на сервере» — ровно при строке «Устройство»;
            3) группа «Устройства»: значок, имя, «это устройство», «в сети» /
               «был …», мелко «0.6.74 · с 31 августа», справа расход; прочерк у
-              всех — строка «прочерк — расход по устройствам сервер не считал»;
+              всех — строка «прочерк — расход не учтён сервером»;
            4) последней — строка «Панель сети» (только машине админа, /info panel).
          17.10 убраны своё-десктопное: полоса «Трафик подписки» с процентом и
          карточка «Код доступа» с маской — шторка совпадает с телефоном. -->
@@ -1262,7 +1262,7 @@
 
         <div class="zagolovok-bloka" id="podp-zag-ustroystv" hidden>Устройства</div>
         <div class="karta karta-nastroyki" id="podp-karta-ustroystv" hidden></div>
-        <div class="podskazka-pod-kartoy" id="podp-net-rashoda" hidden>прочерк — расход по устройствам сервер не считал</div>
+        <div class="podskazka-pod-kartoy" id="podp-net-rashoda" hidden>прочерк — расход не учтён сервером</div>
 
         <!-- Панель своей сети — строка телефона (KRowItem «Панель сети» / «Люди, устройства,
              узлы и трафик», шеврон), только машине админа (сервер пишет panel в сведениях).
@@ -2081,12 +2081,12 @@ const PODPIS_PANELI = "Люди, устройства, узлы и трафик"
 $("podp-panel").onclick = async () => {
   const podpis = $("podp-panel-podpis"), beda = $("podp-panel-beda");
   if (typeof window.kelevraPanel !== "function") {
-    beda.textContent = "Перезапустите окно Kelevra, чтобы открыть панель";
+    beda.textContent = "Для открытия панели требуется перезапуск окна Kelevra";
     beda.hidden = false;
     return;
   }
   beda.hidden = true;
-  podpis.textContent = "Открываю…";
+  podpis.textContent = "Загрузка…";
   try {
     const d = await api("panel", {});
     await window.kelevraPanel(d.ssylka);

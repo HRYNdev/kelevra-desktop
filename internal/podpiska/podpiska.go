@@ -323,7 +323,7 @@ func (k *Klient) PropuskPaneli(ctx context.Context, adres string) (string, error
 	u, err := url.Parse(adres)
 	chasti := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if err != nil || u.Host == "" || len(chasti) != 2 || chasti[0] != "u" {
-		return "", fmt.Errorf("панель открывается с подписки, полученной входом по коду")
+		return "", fmt.Errorf("Панель доступна только для подписки, полученной входом по коду")
 	}
 	req, err := k.zaprosMetodom(ctx, http.MethodPost, fmt.Sprintf("%s://%s/panel/api/v1/vhod/ustroystvo", k.shema(), u.Host))
 	if err != nil {
@@ -332,7 +332,7 @@ func (k *Klient) PropuskPaneli(ctx context.Context, adres string) (string, error
 	req.Header.Set("X-Device-Key", chasti[1])
 	otvet, err := k.http().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("мозг сети недоступен: %w", err)
+		return "", fmt.Errorf("Нет связи с панелью: %w", err)
 	}
 	defer otvet.Body.Close()
 	var o struct {
@@ -344,13 +344,13 @@ func (k *Klient) PropuskPaneli(ctx context.Context, adres string) (string, error
 	case otvet.StatusCode == http.StatusOK && strings.HasPrefix(o.Ssylka, "https://"):
 		return o.Ssylka, nil
 	case otvet.StatusCode == http.StatusForbidden:
-		return "", fmt.Errorf("этой машине панель не положена")
+		return "", fmt.Errorf("Нет доступа к панели с этого устройства")
 	case otvet.StatusCode >= 500:
-		return "", fmt.Errorf("мозг сети сейчас недоступен — связь при этом работает")
+		return "", fmt.Errorf("Панель недоступна")
 	case o.Oshibka != "":
 		return "", fmt.Errorf("%s", o.Oshibka)
 	}
-	return "", fmt.Errorf("панель ответила %d", otvet.StatusCode)
+	return "", fmt.Errorf("Ошибка запроса · %d", otvet.StatusCode)
 }
 
 // Ustroystvo — одна строка списка «кто ещё ходит под этим кодом».
