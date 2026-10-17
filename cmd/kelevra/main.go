@@ -197,7 +197,7 @@ func main() {
 
 	// Окно — ВНЕ замка (см. adresKopii): pokazatOkno не возвращается, пока
 	// человек не закроет окно.
-	adres, chuzhaya, itogOkna := adresKopii(papka, putZhurnala, smenaPID)
+	adres, chuzhaya, itogOkna := adresKopii(papka, putZhurnala, smenaPID, false)
 	// Место занято живой копией СТАРЕЕ нас — просим её уйти и занимаем сами.
 	//
 	// Иначе человек, запустивший новый файл руками, остаётся со старой
@@ -205,7 +205,7 @@ func main() {
 	// mesto_novoy_kopii.go). Обычное обновление уходит само, но запуск
 	// установщика руками этого пути не знает.
 	if chuzhaya && smenaPID == 0 && zanyatMestoEsliMyNovee(adres) {
-		adres, chuzhaya, itogOkna = adresKopii(papka, putZhurnala, smenaPID)
+		adres, chuzhaya, itogOkna = adresKopii(papka, putZhurnala, smenaPID, true)
 	}
 	if smenaPID > 0 {
 		// Второй заход уборки — и он-то и убирает хвост по-настоящему. Первый
@@ -298,7 +298,11 @@ func main() {
 // ещё не дойдя до чтения метки, и человек видел бы, что ничего не
 // происходит. Под wine это не проверить (окна нет), поэтому запрет держится
 // не стендом, а формой: pokazatOkno вызвать отсюда попросту нельзя.
-func adresKopii(papka, putZhurnala string, smenaPID int) (string, bool, itogSmenyOkna) {
+//
+// posleUstupki — прежняя копия только что уступила нам место
+// (zanyatMestoEsliMyNovee); если это была служба Windows, её поднимает
+// диспетчер, а не мы (vybratPodyomYadra).
+func adresKopii(papka, putZhurnala string, smenaPID int, posleUstupki bool) (string, bool, itogSmenyOkna) {
 	// Срок ожидания тот же, что окно и так готово ждать службу: дольше держать
 	// человека всё равно нечем. Не взяли (истёк срок или примитив недоступен) —
 	// идём по старой схеме: это прежнее поведение, а не новый отказ.
@@ -357,23 +361,40 @@ func adresKopii(papka, putZhurnala string, smenaPID int) (string, bool, itogSmen
 	// Своего служебного процесса тут быть не должно вовсе: два хозяина у одного
 	// туннеля означают борьбу за адаптер и за порт, а метка запуска — вещь одна
 	// на машину. Наше дело здесь скромное: убедиться, что служба поднята, и
-	// дождаться её метки.
-	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
-		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
+	// дождаться её метки (решение и разбор 17.10 — vybratPodyomYadra).
+	ustanovlena, errUst := vinsluzhba.Ustanovlena()
+	if errUst != nil {
+		log.Printf("не спросить диспетчер служб, стоит ли служба Windows: %v", errUst)
+	}
+	if podyom := vybratPodyomYadra(ustanovlena, errUst, posleUstupki); podyom.zhdatSluzhbuWindows {
+		if posleUstupki {
+			log.Printf("служба Windows уступила место — жду, пока диспетчер поднимет её новой версией (до %s)", podyom.srok)
+		} else if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet && podyom.zapuskat {
 			log.Printf("служба Windows установлена, но стоит — поднимаю")
 			if err := vinsluzhba.Zapustit(); err != nil {
 				log.Printf("не поднять службу Windows: %v", err)
 			}
 		}
-		if adres, err := zhdatMetkuSluzhby(papka); err == nil {
-			log.Printf("работаю через службу Windows: %s", adres)
-			return adres, true, itogOkna
-		} else {
-			// Служба есть, но метки не дождались. Молча падать нельзя: без
-			// объяснения человек видит приложение, которое просто не
-			// открывается. Дальше пробуем по-старому, своим процессом.
-			log.Printf("служба Windows не отозвалась: %v, поднимаю свой процесс", err)
+		adres, err := zhdatMetkuSluzhbyDo(papka, podyom.srok)
+		if err != nil {
+			// Своё служебное рядом со службой Windows не поднимаем и тут: без
+			// прав оно падает на закрытой папке данных (замер 17.10), с
+			// правами — становится вторым хозяином туннеля, как только служба
+			// вернётся. Молча уходить тоже нельзя: человек нажал на значок.
+			umeret(putZhurnala, "служба Kelevra не поднялась", err)
 		}
+		log.Printf("работаю через службу Windows: %s", adres)
+		if posleUstupki {
+			// Диспетчер поднимает службу из ЕЁ файла. Запусти человек новую
+			// версию из другой папки — служба вернётся прежней версией; молча
+			// это не оставляем, по журналу должно быть видно почему.
+			if v := versiyaSluzhby(adres); v != "" && obnovlenie.Sravnit(podpiska.Versiya, v) > 0 {
+				log.Printf("ВНИМАНИЕ: служба Windows вернулась версией %s, а мы %s — её файл лежит в другом месте и не обновлён", v, podpiska.Versiya)
+			}
+		}
+		// После уступки окно открываем СВОЁ: окно прежней копии (если было)
+		// принадлежит старой версии, поднимать его вместо своего незачем.
+		return adres, !posleUstupki, itogOkna
 	}
 	// Службы ещё нет: поднимаем её ОТДЕЛЬНЫМ отсоединённым процессом и ждём
 	// метку копии. Раньше это же место поднимало службу прямо тут, в процессе
@@ -666,6 +687,22 @@ func podnyatSluzhbuOtdelno(papka string) (string, error) {
 // туннель можно кнопкой в окне или пунктом «Отключить» в самом значке.
 func zhitZnachkom(papka, putZhurnala string) {
 	log.Printf("режим значка: туннель держит служба, значок держим мы")
+	// --trey --smena <pid>: этот значок поднят прежним значком, который увидел
+	// службу новее себя (perezapusk_treya.go). Ждём его ухода ДО своего
+	// значка — иначе на секунду в трее два значка, — и убираем хвост: файл,
+	// из которого жил прежний значок, теперь свободен. С повторами: смерть
+	// процесса и освобождение его файла на Windows не одно мгновение.
+	//
+	// Холодный старт (автозапуск при входе) до этой правки хвоста не убирал
+	// вовсе: ветка --trey уходит из main раньше ubratHvostProshlogoObnovleniya.
+	smenaPID, posleSmeny := argSmenaPID()
+	if posleSmeny {
+		log.Printf("значок: перезапуск после обновления службы, жду ухода прежнего значка (pid %d)", smenaPID)
+		zhdatSmenu(smenaPID)
+		go ubratHvostPosleSmeny()
+	} else {
+		go ubratHvostProshlogoObnovleniya()
+	}
 	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
 		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
 			if err := vinsluzhba.Zapustit(); err != nil {
@@ -691,7 +728,37 @@ func zhitZnachkom(papka, putZhurnala string) {
 		}()
 		zapustitTrey(vyhod)
 	}()
-	zhdatSignal(vyhod)
+
+	// Слежка за версией службы (perezapusk_treya.go): служба строго новее —
+	// значок перезапускается тем же .exe, на диске уже новым.
+	stop := make(chan struct{})
+	perezapusk := make(chan string, 1)
+	go func() {
+		adres := func() (string, bool) { return kopiya.Nayti(papka) }
+		if v, nado := zhdatNovuyuSluzhbu(podpiska.Versiya, posleSmeny, shagSlezhkiTreya, adres, versiyaSluzhby, stop); nado {
+			perezapusk <- v
+		}
+	}()
+	for {
+		versiya, nado := zhdatSignalIliPerezapusk(vyhod, perezapusk)
+		if !nado {
+			break
+		}
+		// Сперва новая копия, потом уход: не запустилась — остаёмся жить
+		// старым значком, человек без значка хуже, чем значок старой версии.
+		// Новая сама ждёт нашей смерти (--smena) до своего значка.
+		log.Printf("значок: служба уже версии %s, значок — %s; перезапускаю значок", versiya, podpiska.Versiya)
+		put, err := zapustitSebyaZanovo(argTrey, argSmena, strconv.Itoa(os.Getpid()))
+		if err != nil {
+			log.Printf("значок: не запустил новый значок из %s: %v — остаюсь как есть", put, err)
+			continue
+		}
+		log.Printf("значок: новый значок запущен из %s, снимаю свой и ухожу", put)
+		close(stop)
+		ubratZnachokPriZavershenii()
+		return
+	}
+	close(stop)
 	log.Printf("режим значка: выход. Туннель остаётся у службы, снимать его не наше дело")
 }
 
@@ -702,14 +769,20 @@ func zhitZnachkom(papka, putZhurnala string) {
 // могла подниматься ещё до входа человека в систему. Разные причины ждать —
 // разные сообщения об отказе, и по журналу видно, чего именно не дождались.
 func zhdatMetkuSluzhby(papka string) (string, error) {
-	predel := time.Now().Add(srokPodnyatiyaSluzhby)
+	return zhdatMetkuSluzhbyDo(papka, srokPodnyatiyaSluzhby)
+}
+
+// zhdatMetkuSluzhbyDo — то же ожидание со своим сроком: после уступки места
+// служба возвращается через паузу диспетчера (vybratPodyomYadra).
+func zhdatMetkuSluzhbyDo(papka string, srok time.Duration) (string, error) {
+	predel := time.Now().Add(srok)
 	for time.Now().Before(predel) {
 		if adres, est := kopiya.Nayti(papka); est {
 			return adres, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return "", fmt.Errorf("служба Windows не оставила метку за %s", srokPodnyatiyaSluzhby)
+	return "", fmt.Errorf("служба Windows не оставила метку за %s", srok)
 }
 
 
@@ -936,14 +1009,26 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 // одного и того же штатного завершения ниже (Ostanovit + Snyat), а не
 // выйти через os.Exit из чужого потока.
 func zhdatSignal(vyhodIzTreya <-chan struct{}) {
+	zhdatSignalIliPerezapusk(vyhodIzTreya, nil)
+}
+
+// zhdatSignalIliPerezapusk — то же ожидание, плюс третий исход для значка:
+// служба стала новее, пора перезапуститься (perezapusk_treya.go). true и
+// версия службы — перезапуск; false — сигнал или «Выход». perezapusk nil —
+// третьего исхода нет (из nil-канала select не читает никогда).
+func zhdatSignalIliPerezapusk(vyhodIzTreya <-chan struct{}, perezapusk <-chan string) (string, bool) {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stop)
 	select {
 	case <-stop:
 		log.Printf("служебный режим: получен сигнал, останавливаюсь")
 	case <-vyhodIzTreya:
 		log.Printf("служебный режим: «Выход» из трея, останавливаюсь")
+	case v := <-perezapusk:
+		return v, true
 	}
+	return "", false
 }
 
 // umeret — единственный выход из строя, который видит пользователь.

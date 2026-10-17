@@ -3,9 +3,11 @@
 package vinsluzhba
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -27,40 +29,67 @@ func PodSluzhboy() bool {
 }
 
 // Ustanovlena — зарегистрирована ли служба в системе.
+//
+// Спрашиваем с наименьшими правами, какие есть у обычного человека:
+// подключиться к диспетчеру и прочитать состояние. mgr.Connect просит у
+// диспетчера ВСЕ права (SC_MANAGER_ALL_ACCESS), а OpenService из mgr — все
+// права на службу; у окна и значка без администратора их нет, и ответ
+// «службы нет» приходил ровно тогда, когда служба стояла и работала.
+// Замер с ПК 17.10: в журнале окна за всё время нет ни одной строки
+// «работаю через службу Windows»; ручной запуск новой версии поднимал рядом
+// со службой свой служебный процесс, тот падал на закрытой папке данных, и у
+// человека на экране было окно ошибки.
+//
+// Теперь «службы нет» — только по коду системы ERROR_SERVICE_DOES_NOT_EXIST;
+// любой другой отказ возвращается ошибкой, а не притворяется ответом.
 func Ustanovlena() (bool, error) {
-	m, err := mgr.Connect()
+	_, zakryt, err := otkrytDlya(windows.SERVICE_QUERY_STATUS)
 	if err != nil {
-		return false, fmt.Errorf("не подключиться к диспетчеру служб: %w", err)
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return false, nil
+		}
+		return false, err
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(Imya)
-	if err != nil {
-		// Отличить «нет такой службы» от «нет прав спросить» нечем: сообщение
-		// системы одинаково недружелюбно. Для вызывающего разница есть только
-		// при установке, и там ошибка придёт своя.
-		return false, nil
-	}
-	s.Close()
+	zakryt()
 	return true, nil
 }
 
-// Rabotaet — поднята ли служба прямо сейчас.
+// Rabotaet — поднята ли служба прямо сейчас. Те же наименьшие права, что у
+// Ustanovlena.
 func Rabotaet() (bool, error) {
-	m, err := mgr.Connect()
+	s, zakryt, err := otkrytDlya(windows.SERVICE_QUERY_STATUS)
 	if err != nil {
-		return false, fmt.Errorf("не подключиться к диспетчеру служб: %w", err)
+		return false, err
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(Imya)
-	if err != nil {
-		return false, fmt.Errorf("службы %s нет: %w", Imya, err)
-	}
-	defer s.Close()
-	sost, err := s.Query()
-	if err != nil {
+	defer zakryt()
+	var sost windows.SERVICE_STATUS
+	if err := windows.QueryServiceStatus(s, &sost); err != nil {
 		return false, fmt.Errorf("не спросить состояние службы: %w", err)
 	}
-	return sost.State == svc.Running, nil
+	return sost.CurrentState == windows.SERVICE_RUNNING, nil
+}
+
+// otkrytDlya открывает службу ровно с нужными правами (dostup), не больше.
+// zakryt закрывает оба описателя: службы и диспетчера.
+func otkrytDlya(dostup uint32) (windows.Handle, func(), error) {
+	m, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return 0, nil, fmt.Errorf("не подключиться к диспетчеру служб: %w", err)
+	}
+	imya, err := windows.UTF16PtrFromString(Imya)
+	if err != nil {
+		windows.CloseServiceHandle(m)
+		return 0, nil, err
+	}
+	s, err := windows.OpenService(m, imya, dostup)
+	if err != nil {
+		windows.CloseServiceHandle(m)
+		return 0, nil, fmt.Errorf("службу %s не открыть: %w", Imya, err)
+	}
+	return s, func() {
+		windows.CloseServiceHandle(s)
+		windows.CloseServiceHandle(m)
+	}, nil
 }
 
 // Ustanovit регистрирует службу и запускает её. Требует прав администратора —
@@ -143,19 +172,16 @@ func Udalit() error {
 	return s.Delete()
 }
 
-// Zapustit поднимает уже установленную службу.
+// Zapustit поднимает уже установленную службу. Просит только право запуска
+// (не все права, как mgr): у кого его нет, получит отказ на самом запуске,
+// а не на подключении к диспетчеру.
 func Zapustit() error {
-	m, err := mgr.Connect()
+	s, zakryt, err := otkrytDlya(windows.SERVICE_START)
 	if err != nil {
-		return fmt.Errorf("не подключиться к диспетчеру служб: %w", err)
+		return err
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(Imya)
-	if err != nil {
-		return fmt.Errorf("службы %s нет: %w", Imya, err)
-	}
-	defer s.Close()
-	return s.Start()
+	defer zakryt()
+	return windows.StartService(s, 0, nil)
 }
 
 // Ostanovit гасит службу и ждёт, пока она действительно встанет.

@@ -103,3 +103,47 @@ func zhdatOsvobozhdeniya(adres string) bool {
 	log.Printf("старая копия за %s так и не ушла — работаю как есть", srokUstupki)
 	return false
 }
+
+// Кто поднимает ядро, когда своей живой копии на машине нет.
+//
+// Замер с ПК 17.10. Человек запустил 0.6.75 руками, пока работала служба
+// Windows 0.6.74. Служба уступила место и ушла — а окно, не узнав в ней службу
+// Windows, подняло своё служебное отдельным процессом. Тот был без прав
+// администратора, упал на закрытой папке данных («nastroyki.json.tmp: Access
+// is denied») и вывел человеку окно ошибки; через пять секунд диспетчер служб
+// сам поднял службу новой версии, и окно в итоге работало через неё. Отказ был
+// лишним от начала до конца: служба Windows после ухода поднимается
+// диспетчером сама (действия восстановления, первое — через 5 с).
+
+// podyomYadra — что делать окну, когда своей живой копии на машине нет.
+type podyomYadra struct {
+	// zhdatSluzhbuWindows — ядро держит служба Windows: своего служебного
+	// процесса не поднимаем НИКОГДА, только ждём её метку.
+	zhdatSluzhbuWindows bool
+	// zapuskat — если служба стоит, попросить диспетчер её поднять. После
+	// уступки места не просим: она ушла с отказом, и диспетчер поднимет её
+	// сам; наш запуск в это время попал бы на ещё не остановленную службу.
+	zapuskat bool
+	// srok — сколько ждём её метку.
+	srok time.Duration
+}
+
+// vybratPodyomYadra — решение, а не исполнение: его держит тест.
+//
+//	ustanovlena  — служба Windows зарегистрирована (vinsluzhba.Ustanovlena).
+//	oshibka      — диспетчер служб не ответил. Не знаем — идём прежним путём,
+//	               своим процессом: это старое поведение, а не новый отказ.
+//	posleUstupki — прежняя копия только что уступила нам место
+//	               (zanyatMestoEsliMyNovee): служба вернётся не сразу, а
+//	               после паузы диспетчера, поэтому ждём её как сторож окна
+//	               ждёт замену (srokOzhidaniyaZameny), а не 20 секунд.
+func vybratPodyomYadra(ustanovlena bool, oshibka error, posleUstupki bool) podyomYadra {
+	if oshibka != nil || !ustanovlena {
+		return podyomYadra{}
+	}
+	p := podyomYadra{zhdatSluzhbuWindows: true, zapuskat: !posleUstupki, srok: srokPodnyatiyaSluzhby}
+	if posleUstupki {
+		p.srok = srokOzhidaniyaZameny
+	}
+	return p
+}

@@ -36,3 +36,24 @@ func zapustitOtdelnuyuSluzhbu() error {
 	// служба живёт, пока жив тот, кто её запустил, — а это и есть та самая дыра.
 	return cmd.Process.Release()
 }
+
+// zapustitSebyaZanovo — та же отсоединённая копия себя, но с любыми
+// аргументами и из файла, где лежит новая версия (putDlyaPerezapuska): так
+// перезапускается значок после обновления службы (perezapusk_treya.go).
+func zapustitSebyaZanovo(args ...string) (string, error) {
+	sebya, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	put := putDlyaPerezapuska(sebya)
+	cmd := exec.Command(put, args...)
+	cmd.Env = os.Environ()
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+	}
+	if err := cmd.Start(); err != nil {
+		return put, err
+	}
+	return put, cmd.Process.Release()
+}

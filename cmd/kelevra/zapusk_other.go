@@ -23,3 +23,19 @@ func zapustitOtdelnuyuSluzhbu() error {
 	}
 	return cmd.Process.Release()
 }
+
+// zapustitSebyaZanovo вне Windows — та же копия себя без отсоединения (см.
+// zapustitOtdelnuyuSluzhbu выше и perezapusk_treya.go).
+func zapustitSebyaZanovo(args ...string) (string, error) {
+	sebya, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	put := putDlyaPerezapuska(sebya)
+	cmd := exec.Command(put, args...)
+	cmd.Env = os.Environ()
+	if err := cmd.Start(); err != nil {
+		return put, err
+	}
+	return put, cmd.Process.Release()
+}
