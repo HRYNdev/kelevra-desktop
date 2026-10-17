@@ -143,6 +143,13 @@ type Nastroyki struct {
 	// см. konfig.zapomnitVybor) — но ЭТО хранилище живёт и когда ядро ещё не
 	// запускалось ни разу: без него выбор «до Подключить» был бы декорацией.
 	Uzly map[string]string `json:"uzly,omitempty"`
+	// Podpiska — адрес подписки целиком: https://<дверь>/k/<код> (старый вход) или
+	// https://<дверь>/u/<ключ устройства> (вход по коду в своей сети, мозг, 17.10.2026).
+	// Пусто — старые установки: адрес собирается из Kod и зашитого хоста, как раньше.
+	Podpiska string `json:"podpiska,omitempty"`
+	// Dveri — адреса выдачи, которые сервер назвал в /info (dveri): по ним идёт
+	// вход по коду. Пусто — двери «из коробки» (podpiska.Dveri).
+	Dveri []string `json:"dveri,omitempty"`
 	// ObyavlennoeObnovlenie — версия, про которую фоновая проверка уже
 	// показала пузырь в трее (internal/sluzhba.ProveritObnovlenieFonom).
 	// На диске, а не только в памяти процесса: копия висит в трее неделями и

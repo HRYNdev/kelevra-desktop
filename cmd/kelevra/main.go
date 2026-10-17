@@ -833,6 +833,8 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	s.PrinyatZhivoeYadro(ctx, sledTunnelyaPriStarte)
 
 	go s.ObnovlyatProfil(ctx)
+	// Своя сеть: переход по очереди узлов профиля (пакет ochered). У профиля с одним узлом — молчит.
+	go s.VestiOcheredUzlov(ctx)
 	// Копия, которую человек не закрывал днями, никогда больше не проходит
 	// obnovitsya() (он звучит один раз при холодном старте, выше по main()) —
 	// без этой строки 0.6.23 и 0.6.24 не долетели бы до него никогда, сколько

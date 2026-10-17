@@ -102,6 +102,23 @@ func (y *Yadro) Gruppy() ([]Gruppa, error) {
 	return out, nil
 }
 
+// Vybrano — что сейчас выбрано в группе (Clash API GET /proxies/<группа>, поле now).
+func (y *Yadro) Vybrano(gruppa string) (string, error) {
+	otvet, err := y.zapros("/proxies/" + url.PathEscape(gruppa))
+	if err != nil {
+		return "", err
+	}
+	defer otvet.Body.Close()
+	if otvet.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("ядро ответило %d", otvet.StatusCode)
+	}
+	var u uzelApi
+	if err := json.NewDecoder(otvet.Body).Decode(&u); err != nil {
+		return "", err
+	}
+	return u.Now, nil
+}
+
 // Vybrat переключает группу на узел. Ядро откажет, если узел не входит в группу
 // или если группой правит автоматика.
 func (y *Yadro) Vybrat(gruppa, uzel string) error {
