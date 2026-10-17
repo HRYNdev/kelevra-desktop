@@ -114,8 +114,13 @@ func (o *Ochered) zhiv(ctx context.Context, uzel string) bool {
 
 func (o *Ochered) vstat(i int, pochemu string) bool {
 	if err := o.Ya.Vybrat(o.Gruppa, o.Uzly[i]); err != nil {
-		o.log("очередь узлов: встать на «%s» не вышло: %v", o.Uzly[i], err)
-		return false
+		// Ядро могло переключить, но не успеть ответить (стенд 17.10: PUT по таймауту, а выбор встал):
+		// верим не ответу, а тому, что выбрано на деле.
+		if tek, e := o.Ya.Vybrano(o.Gruppa); e != nil || tek != o.Uzly[i] {
+			o.log("очередь узлов: встать на «%s» не вышло: %v", o.Uzly[i], err)
+			return false
+		}
+		o.log("очередь узлов: ядро ответило с ошибкой (%v), но «%s» встал", err, o.Uzly[i])
 	}
 	o.log("очередь узлов: узел сменён на «%s» (%s)", o.Uzly[i], pochemu)
 	o.provalov = 0

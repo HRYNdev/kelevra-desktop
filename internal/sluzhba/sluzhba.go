@@ -1407,7 +1407,7 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 			o = nil
 			if gruppa, uzly, ok := ochered.IzKonfiga(syroy); ok {
 				pervyy := uzly[0]
-				o = &ochered.Ochered{Gruppa: gruppa, Uzly: uzly, Ya: s.Yadro, Log: log.Printf,
+				o = &ochered.Ochered{Gruppa: gruppa, Uzly: uzly, Ya: yadroDlyaOcheredi{s.Yadro}, Log: log.Printf,
 					// Человек выбрал в окне не первый узел — его выбор, очередь не вмешивается.
 					Ruchnoy: func() bool { v := s.Nastroyki.Uzly[gruppa]; return v != "" && v != pervyy }}
 				log.Printf("очередь узлов: %q, узлы %v", gruppa, uzly)
@@ -1416,10 +1416,21 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 		if o == nil {
 			continue
 		}
-		shctx, otmena := context.WithTimeout(ctx, 20*time.Second)
+		shctx, otmena := context.WithTimeout(ctx, 45*time.Second)
 		o.Shag(shctx)
 		otmena()
 	}
+}
+
+// yadroDlyaOcheredi — ядро для очереди узлов с её сроками: замер 6 с (холодный узел через дом и
+// маскировку не всегда укладывается в 3 с окна — на стенде 17.10 оба узла разом «не ответили»),
+// переключение — до 15 с (ядро рвёт живые соединения и отвечает позже).
+type yadroDlyaOcheredi struct{ y *yadro.Yadro }
+
+func (a yadroDlyaOcheredi) Vybrano(g string) (string, error) { return a.y.Vybrano(g) }
+func (a yadroDlyaOcheredi) Vybrat(g, u string) error         { return a.y.VybratZa(g, u, 15*time.Second) }
+func (a yadroDlyaOcheredi) Zamerit(ctx context.Context, u string) (int, error) {
+	return a.y.ZameritZa(ctx, u, 6*time.Second)
 }
 
 // primenitSohranennyeUzly переносит выбор узла, сделанный раньше (в том числе
