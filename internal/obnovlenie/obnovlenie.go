@@ -412,9 +412,10 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	// Подпись — ДО любых проверок формата и ДО того, как тронут рабочий файл.
 	if TrebovatPodpis {
 		if err := proveritPodpisFayla(ctx, klient, n.SsylkaPodpisi, vremennyy, ImyaFayla); err != nil {
-			log.Printf("обновление %s отвергнуто, остаюсь на прежней версии: %v", n.Versiya, err)
+			log.Printf("подпись обновления %s НЕ подтверждена (ed25519): %v — обновление отвергнуто, остаюсь на прежней версии", n.Versiya, err)
 			return fmt.Errorf("%w (%v) — прежнее приложение не тронуто", ErrPodpis, err)
 		}
+		log.Printf("подпись обновления %s верна (ed25519, %s%s)", n.Versiya, ImyaFayla, podpis.SufiksFayla)
 	}
 
 	if err := proveritNovyy(vremennyy, putExe); err != nil {
