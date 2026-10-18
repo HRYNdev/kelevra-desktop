@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
 
 // ApiAdres — куда стучаться, если конфиг про Clash API молчит. Настоящий адрес
@@ -118,8 +120,26 @@ func (y *Yadro) ZapisatKonfig(telo []byte) error {
 		return err
 	}
 	vremenny := y.PutKonfiga() + ".tmp"
-	if err := os.WriteFile(vremenny, telo, 0o600); err != nil {
+	_ = os.Remove(vremenny)
+	f, err := os.OpenFile(vremenny, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		return err
+	}
+	// В конфиге лежит пароль Clash API (experimental.clash_api.secret): в
+	// общей папке права закрываются до записи, иначе файл унаследовал бы
+	// чтение для всех пользователей ПК (hranenie.ZakrytOtPolzovateley).
+	if err := hranenie.ZakrytOtPolzovateley(vremenny); err != nil {
+		f.Close()
+		_ = os.Remove(vremenny)
+		return fmt.Errorf("не закрыть права на конфиг ядра: %w", err)
+	}
+	_, zerr := f.Write(telo)
+	if cerr := f.Close(); zerr == nil {
+		zerr = cerr
+	}
+	if zerr != nil {
+		_ = os.Remove(vremenny)
+		return zerr
 	}
 	return os.Rename(vremenny, y.PutKonfiga())
 }

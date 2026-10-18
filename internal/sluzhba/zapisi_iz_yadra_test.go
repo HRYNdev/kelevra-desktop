@@ -93,3 +93,60 @@ func TestChtenieBezPerevodaStrokiNeDvigaetSmeshenie(t *testing.T) {
 		}
 	}
 }
+
+// Перезапуск службы: журнал ядра, разобранный прошлой копией, заново не
+// читается — иначе старые отказы ложатся в свежее окно и дают ложную «беду».
+// Читается только то, что дописано после старта.
+func TestPosleRestartaStaryyZhurnalNeChitaetsya(t *testing.T) {
+	put := filepath.Join(t.TempDir(), "yadro.log")
+	staroe := `+0500 2026-10-07 09:48:00 ERROR [1 10ms] connection: open connection to [2a00::1]:443 using outbound/direct[direct]: dial tcp [2a00::1]:443: connect: unreachable network` + "\n"
+	// Последняя старая строка не дописана к моменту старта службы.
+	if err := os.WriteFile(put, []byte(staroe+staroe+"+0500 2026-10-07 09:48:01 ERROR obryv"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := &nablyudatelYadra{put: put, kody: map[string]int{}, imena: map[string]int{}}
+	n.nachatSKonca()
+
+	f, err := os.OpenFile(put, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	novaya := "+0500 2026-10-08 10:00:00 INFO novaya"
+	if _, err := f.WriteString(" hvost\n" + novaya + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	stroki, err := n.prochitatNovoe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stroki) != 1 || stroki[0] != novaya {
+		t.Fatalf("после старта прочитано %q, ждал только новую строку", stroki)
+	}
+}
+
+// Ядро перезапущено: прошлый журнал отложен, начат новый файл. Он читается с
+// начала, даже если успел дорасти до прежнего смещения.
+func TestNovyyFaylZhurnalaChitaetsyaSNachala(t *testing.T) {
+	dir := t.TempDir()
+	put := filepath.Join(dir, "yadro.log")
+	if err := os.WriteFile(put, []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := &nablyudatelYadra{put: put, kody: map[string]int{}, imena: map[string]int{}}
+	n.nachatSKonca()
+	if err := os.Rename(put, put+".prev"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(put, []byte("pervaya\nvtoraya\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stroki, err := n.prochitatNovoe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stroki) != 2 || stroki[0] != "pervaya" {
+		t.Fatalf("новый журнал прочитан как %q, ждал обе строки с начала", stroki)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -52,8 +53,10 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 	// подписью нашего ключа (internal/podpis), до распаковки.
 	if obnovlenie.TrebovatPodpis {
 		if err := obnovlenie.ProveritPodpisFayla(ctx, &http.Client{Timeout: 30 * time.Second}, ssylkaPodpisi, arhiv, ImyaArhiva()); err != nil {
+			log.Printf("подпись ядра %s НЕ подтверждена (ed25519): %v — ядро не поставлено", ImyaArhiva(), err)
 			return fmt.Errorf("%w: ядро не поставлено (%v)", obnovlenie.ErrPodpis, err)
 		}
+		log.Printf("подпись ядра %s верна (ed25519), распаковываю", ImyaArhiva())
 	}
 	return raspakovat(arhiv, y.Bin)
 }
