@@ -112,8 +112,9 @@ type Sluzhba struct {
 	// должен (см. шапку файла — окно и логика разведены нарочно). nil —
 	// сборка вызывающего кода не подключила хук (например, стенд-тесты
 	// внутри этого пакета) — тогда находка всё равно видна в
-	// /api/sostoyanie, просто без звука.
-	OblachkoObnovleniya func(versiya string)
+	// /api/sostoyanie, просто без звука. Возвращает true, только если пузырь
+	// на деле показан: от этого зависит отметка «объявлено» (povestitEsliNovaya).
+	OblachkoObnovleniya func(versiya string) bool
 
 	// MetkaObnovleniya — как показать СОСТОЯНИЕ «обновление ждёт» на значке
 	// трея (cmd/kelevra/metka_obnovleniya.go: pometitObnovlenie). Отдельный
@@ -789,25 +790,36 @@ func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
 // решения не зависит). Пузырь остаётся ровно для того случая, ради которого
 // его и заводили: окно закрыто, копия висит в трее, и сказать больше нечем.
 //
-// Отметку на диске ставим В ОБОИХ случаях, даже когда пузырь промолчал:
-// сказано — сказано, чем бы ни сказали. Иначе человек, закрывший диалог
-// кнопкой «ПОЗЖЕ» и следом закрывший окно, получил бы на ближайшем тике ещё
-// и пузырь про ту же версию — то самое второе дёрганье об одном и том же,
-// которого эта правка и не должна допускать.
+// Отметку на диске ставим, когда сказано на деле: окно открыто (говорит
+// диалог в нём) или пузырь показан. Иначе человек, закрывший диалог кнопкой
+// «ПОЗЖЕ» и следом закрывший окно, получил бы на ближайшем тике ещё и пузырь
+// про ту же версию — то самое второе дёрганье об одном и том же.
+//
+// Пузырь не показан (значок трея ещё не поднят, Windows отказала, хук не
+// подключён) — отметку НЕ ставим: раньше она ставилась до показа, и версия,
+// о которой человеку так и не сказали, считалась объявленной навсегда.
+// Следующий тик попробует снова.
 func (s *Sluzhba) povestitEsliNovaya(versiya string) {
 	if s.Nastroyki.ObyavlennoeObnovlenie == versiya {
 		return
 	}
+	if s.oknoOtkryto() {
+		log.Printf("обновление %s: окно открыто, говорит диалог в окне — пузырь трея молчит", versiya)
+		s.otmetitObyavlennoe(versiya)
+		return
+	}
+	if s.OblachkoObnovleniya == nil || !s.OblachkoObnovleniya(versiya) {
+		log.Printf("обновление %s: сказать не вышло, отметку не ставлю — скажу на следующей проверке", versiya)
+		return
+	}
+	s.otmetitObyavlennoe(versiya)
+}
+
+// otmetitObyavlennoe — версия объявлена человеку; запоминаем на диске.
+func (s *Sluzhba) otmetitObyavlennoe(versiya string) {
 	s.Nastroyki.ObyavlennoeObnovlenie = versiya
 	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 		log.Printf("не сохранил отметку об объявленном обновлении: %v", err)
-	}
-	if s.oknoOtkryto() {
-		log.Printf("обновление %s: окно открыто, говорит диалог в окне — пузырь трея молчит", versiya)
-		return
-	}
-	if s.OblachkoObnovleniya != nil {
-		s.OblachkoObnovleniya(versiya)
 	}
 }
 

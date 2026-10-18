@@ -389,7 +389,7 @@ func nastroitVersiyuTreya(hwnd syscall.Handle) {
 //
 // Подключается из main.go (s.OblachkoObnovleniya = pokazatOblachkoObnovleniya)
 // — internal/sluzhba про трей не знает ничего, см. комментарий поля.
-func pokazatOblachkoObnovleniya(versiya string) {
+func pokazatOblachkoObnovleniya(versiya string) bool {
 	treyZamok.Lock()
 	hwnd := treyHwnd
 	treyZamok.Unlock()
@@ -397,7 +397,7 @@ func pokazatOblachkoObnovleniya(versiya string) {
 		// Трей ещё не поднялся (или уже погас) — сказать некому, а падать
 		// из-за этого служба с поднятой защитой не имеет права.
 		log.Printf("трей: пузырь про версию %s не показан — окно трея не поднято", versiya)
-		return
+		return false
 	}
 	var d notifyIconDataW
 	d.cbSize = uint32(unsafe.Sizeof(d))
@@ -417,6 +417,7 @@ func pokazatOblachkoObnovleniya(versiya string) {
 		"Вышла версия %s. Нажмите это сообщение, чтобы поставить её.", versiya))
 	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
 	log.Printf("трей: пузырь про версию %s -> Shell_NotifyIconW(NIM_MODIFY) = %v", versiya, r != 0)
+	return r != 0
 }
 
 // obnovitPodskazkuTreya перерисовывает szTip значка под нынешнюю метку

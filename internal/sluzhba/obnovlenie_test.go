@@ -238,7 +238,7 @@ func sprositSostoyanie(t *testing.T, s *Sluzhba, kakOkno bool) {
 func TestPuzyrMolchitPriOtkrytomOkne(t *testing.T) {
 	s := stend(t)
 	skazano := ""
-	s.OblachkoObnovleniya = func(versiya string) { skazano = versiya }
+	s.OblachkoObnovleniya = func(versiya string) bool { skazano = versiya; return true }
 
 	sprositSostoyanie(t, s, true) // окно только что спросило состояние
 	s.povestitEsliNovaya("0.9.0")
@@ -259,7 +259,7 @@ func TestPuzyrMolchitPriOtkrytomOkne(t *testing.T) {
 func TestPuzyrGovoritPriZakrytomOkne(t *testing.T) {
 	s := stend(t)
 	skazano := ""
-	s.OblachkoObnovleniya = func(versiya string) { skazano = versiya }
+	s.OblachkoObnovleniya = func(versiya string) bool { skazano = versiya; return true }
 
 	s.povestitEsliNovaya("0.9.0") // окно состояние не спрашивало ни разу
 
@@ -298,5 +298,33 @@ func TestChuzhoyOprosNeSchitaetsyaOknom(t *testing.T) {
 	sprositSostoyanie(t, s, false)
 	if s.oknoOtkryto() {
 		t.Fatal("обычный опрос состояния без метки okno=1 сочли открытым окном")
+	}
+}
+
+// TestNePokazannyyPuzyrNeOtmechaetsya — пузырь не показан (значок трея ещё не
+// поднят, Windows отказала): версия не считается объявленной, и следующая
+// проверка пробует сказать снова. Раньше отметка ставилась до показа, и о
+// версии человек мог не узнать никогда.
+func TestNePokazannyyPuzyrNeOtmechaetsya(t *testing.T) {
+	s := stend(t)
+	popytok := 0
+	pokazan := false
+	s.OblachkoObnovleniya = func(versiya string) bool { popytok++; return pokazan }
+
+	s.povestitEsliNovaya("0.9.0")
+	if s.Nastroyki.ObyavlennoeObnovlenie == "0.9.0" {
+		t.Fatal("пузырь не показан, а версия помечена объявленной")
+	}
+	pokazan = true
+	s.povestitEsliNovaya("0.9.0")
+	if popytok != 2 {
+		t.Fatalf("попыток сказать %d, ждал 2: после неудачи вторая проверка должна сказать снова", popytok)
+	}
+	if s.Nastroyki.ObyavlennoeObnovlenie != "0.9.0" {
+		t.Fatalf("пузырь показан, а отметка %q", s.Nastroyki.ObyavlennoeObnovlenie)
+	}
+	s.povestitEsliNovaya("0.9.0")
+	if popytok != 2 {
+		t.Fatal("про уже объявленную версию пузырь прозвучал второй раз")
 	}
 }

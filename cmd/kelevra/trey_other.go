@@ -20,8 +20,9 @@ func zapustitTrey(vyhod chan<- struct{}) {}
 // сценам «сказали один раз» / «не повторили» нечего было бы проверить.
 // На Windows этот файл не участвует в сборке вовсе (go:build !windows),
 // поэтому настоящему пузырю (trey_windows.go) эта строка никогда не мешает.
-func pokazatOblachkoObnovleniya(versiya string) {
+func pokazatOblachkoObnovleniya(versiya string) bool {
 	log.Printf("трей (не-Windows заглушка): пузырь про версию %s", versiya)
+	return true
 }
 
 // obnovitPodskazkuTreya вне Windows рисовать негде — значка нет. Строка в
