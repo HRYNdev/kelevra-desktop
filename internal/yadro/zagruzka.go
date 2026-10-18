@@ -13,6 +13,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/podpis"
 )
 
 // Relizy — откуда приложение берёт ядро. Сборка ядра лежит в релизах этого же
@@ -33,7 +36,7 @@ func ImyaArhiva() string {
 // Zagruzit скачивает ядро и кладёт его на место. Пользователю не нужно
 // ничего ставить руками: приложение приносит ядро себе само.
 func (y *Yadro) Zagruzit(ctx context.Context) error {
-	ssylka, err := y.ssylkaNaYadro(ctx)
+	ssylka, ssylkaPodpisi, err := y.ssylkaNaYadro(ctx)
 	if err != nil {
 		return err
 	}
@@ -45,19 +48,26 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 		return err
 	}
 	defer os.Remove(arhiv)
+	// Ядро запускает служба от системы, поэтому архив ставится только с верной
+	// подписью нашего ключа (internal/podpis), до распаковки.
+	if obnovlenie.TrebovatPodpis {
+		if err := obnovlenie.ProveritPodpisFayla(ctx, &http.Client{Timeout: 30 * time.Second}, ssylkaPodpisi, arhiv, ImyaArhiva()); err != nil {
+			return fmt.Errorf("%w: ядро не поставлено (%v)", obnovlenie.ErrPodpis, err)
+		}
+	}
 	return raspakovat(arhiv, y.Bin)
 }
 
-func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, error) {
+func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, y.spisok(), nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	otvet, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
-		return "", fmt.Errorf("не дотянулся до списка сборок ядра: %w", err)
+		return "", "", fmt.Errorf("не дотянулся до списка сборок ядра: %w", err)
 	}
 	defer otvet.Body.Close()
 	if otvet.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("список сборок ядра недоступен (ответ %d)", otvet.StatusCode)
+		return "", "", fmt.Errorf("список сборок ядра недоступен (ответ %d)", otvet.StatusCode)
 	}
 	var relizy []struct {
 		Tag    string `json:"tag_name"`
@@ -67,20 +77,37 @@ func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, error) {
 		} `json:"assets"`
 	}
 	if err := json.NewDecoder(otvet.Body).Decode(&relizy); err != nil {
-		return "", err
+		return "", "", err
 	}
 	nuzhen := ImyaArhiva()
 	for _, r := range relizy { // релизы приходят от свежих к старым
 		if !strings.HasPrefix(r.Tag, "core-") {
 			continue
 		}
+		var ssylka, ssylkaPodpisi string
 		for _, a := range r.Assets {
-			if a.Name == nuzhen {
-				return a.URL, nil
+			switch a.Name {
+			case nuzhen:
+				ssylka = a.URL
+			case nuzhen + podpis.SufiksFayla:
+				ssylkaPodpisi = a.URL
 			}
 		}
+		if ssylka == "" {
+			continue
+		}
+		// Сборка ядра без подписи (выложена до подписей) пропускается: берём
+		// самую свежую ПОДПИСАННУЮ; новых сборок без подписи не бывает, их
+		// подписывает та же сборка (core.yml).
+		if obnovlenie.TrebovatPodpis && ssylkaPodpisi == "" {
+			continue
+		}
+		return ssylka, ssylkaPodpisi, nil
 	}
-	return "", fmt.Errorf("в сборках ядра нет файла %s", nuzhen)
+	if obnovlenie.TrebovatPodpis {
+		return "", "", fmt.Errorf("в сборках ядра нет подписанного файла %s", nuzhen)
+	}
+	return "", "", fmt.Errorf("в сборках ядра нет файла %s", nuzhen)
 }
 
 func skachat(ctx context.Context, ssylka, kuda string) error {

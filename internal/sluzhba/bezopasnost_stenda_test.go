@@ -3,6 +3,8 @@ package sluzhba
 import (
 	"os"
 	"testing"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 )
 
 // Ни одна проверка этого пакета не имеет права трогать настройки сети машины,
@@ -25,5 +27,8 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("KELEVRA_PROKSI", "net"); err != nil {
 		panic(err)
 	}
+	// Установка обновления в этих проверках идёт на заглушках без ключа подписи;
+	// сама подпись проверяется в internal/obnovlenie и internal/podpis.
+	obnovlenie.TrebovatPodpis = false
 	os.Exit(m.Run())
 }

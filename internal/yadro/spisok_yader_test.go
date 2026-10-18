@@ -61,7 +61,7 @@ func TestYadroNahoditsyaVHvosteSpiska(t *testing.T) {
 	}
 	y := &Yadro{Spisok: srv.URL + "?" + boevoy.RawQuery}
 
-	ssylka, err := y.ssylkaNaYadro(context.Background())
+	ssylka, _, err := y.ssylkaNaYadro(context.Background())
 	if err != nil {
 		t.Fatalf("ядро на %d-м месте из %d не найдено при окне %q: %v\n"+
 			"именно так приложение остаётся без ядра у человека",

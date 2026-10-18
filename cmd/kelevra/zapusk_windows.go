@@ -45,7 +45,7 @@ func zapustitSebyaZanovo(args ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	put := putDlyaPerezapuska(sebya)
+	put := putDlyaNovoyKopii(sebya)
 	cmd := exec.Command(put, args...)
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{

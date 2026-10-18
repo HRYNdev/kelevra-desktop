@@ -9,6 +9,7 @@ package obnovlenie
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/podpis"
 )
 
 // SpisokReliza — откуда берём список релизов.
@@ -56,7 +59,18 @@ type Novaya struct {
 	Versiya string
 	Ssylka  string
 	Razmer  int64
+	// SsylkaPodpisi — файл подписи Kelevra.exe.sig из того же релиза. Без неё
+	// (и без верной подписи) PostavitSHodom ничего не ставит.
+	SsylkaPodpisi string
 }
+
+// TrebovatPodpis — ставить обновление только с верной подписью (podpis). У
+// человека всегда true; выключают только тесты пакетов, которые гоняют
+// установку на заглушках без ключа.
+var TrebovatPodpis = true
+
+// ErrPodpis — обновление отвергнуто из-за подписи. Старая версия остаётся.
+var ErrPodpis = errors.New("подпись обновления не подтверждена")
 
 type relizJSON struct {
 	TagName    string `json:"tag_name"`
@@ -144,7 +158,18 @@ func Proverit(ctx context.Context, klient *http.Client, adres, tekushchaya strin
 	}
 	for _, a := range luchshiy.Assets {
 		if a.Name == ImyaFayla && a.Size > 0 {
-			return &Novaya{Versiya: luchshayaV, Ssylka: a.URL, Razmer: a.Size}, nil
+			n := &Novaya{Versiya: luchshayaV, Ssylka: a.URL, Razmer: a.Size}
+			for _, b := range luchshiy.Assets {
+				if b.Name == ImyaFayla+podpis.SufiksFayla && b.Size > 0 {
+					n.SsylkaPodpisi = b.URL
+				}
+			}
+			// Релиз без подписи не предлагаем вовсе: человеку незачем видеть
+			// «доступно обновление», которое всё равно не поставится.
+			if TrebovatPodpis && n.SsylkaPodpisi == "" {
+				return nil, fmt.Errorf("%w: в релизе %s нет %s%s", ErrPodpis, luchshiy.TagName, ImyaFayla, podpis.SufiksFayla)
+			}
+			return n, nil
 		}
 	}
 	// Релиз есть, а файла в нём нет: это моя недосборка, а не повод
@@ -384,6 +409,14 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	// ровно та беда, из-за которой 28.08 у человека (цитата убрана)
 	// : скачался не .exe, а страница-заглушка прокси или обрезок,
 	// который запуститься не может.
+	// Подпись — ДО любых проверок формата и ДО того, как тронут рабочий файл.
+	if TrebovatPodpis {
+		if err := proveritPodpisFayla(ctx, klient, n.SsylkaPodpisi, vremennyy, ImyaFayla); err != nil {
+			log.Printf("обновление %s отвергнуто, остаюсь на прежней версии: %v", n.Versiya, err)
+			return fmt.Errorf("%w (%v) — прежнее приложение не тронуто", ErrPodpis, err)
+		}
+	}
+
 	if err := proveritNovyy(vremennyy, putExe); err != nil {
 		return fmt.Errorf("%w — прежнее приложение не тронуто", err)
 	}
@@ -448,6 +481,35 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	}
 	uspeshno = true
 	return nil
+}
+
+// ProveritPodpisFayla скачивает файл подписи по ссылке и сверяет с ним уже
+// скачанный файл (imya — имя файла в релизе). Общая для приложения и ядра.
+func ProveritPodpisFayla(ctx context.Context, klient *http.Client, ssylka, put, imya string) error {
+	return proveritPodpisFayla(ctx, klient, ssylka, put, imya)
+}
+
+func proveritPodpisFayla(ctx context.Context, klient *http.Client, ssylka, put, imya string) error {
+	if ssylka == "" {
+		return podpis.ErrNetPodpisi
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ssylka, nil)
+	if err != nil {
+		return err
+	}
+	otvet, err := klient.Do(req)
+	if err != nil {
+		return fmt.Errorf("подпись не скачалась: %w", err)
+	}
+	defer otvet.Body.Close()
+	if otvet.StatusCode != http.StatusOK {
+		return fmt.Errorf("подпись не скачалась: ответ %d", otvet.StatusCode)
+	}
+	sig, err := io.ReadAll(io.LimitReader(otvet.Body, podpis.PredelRazmera))
+	if err != nil {
+		return fmt.Errorf("подпись не прочиталась: %w", err)
+	}
+	return podpis.Proverit(put, imya, sig)
 }
 
 // bedaSOtkatom — общий хвост всех неудач замены: вернуть putExe в рабочее

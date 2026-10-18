@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/vinsluzhba"
 )
 
 // Окно старой версии после обновления службы — перезапускается само (17.10).
@@ -59,6 +60,26 @@ func nuzhenPerezapuskOkna(versiyaOkna, versiyaSluzhby string) bool {
 // hvostObnovleniya — «.old», «.old1», «.old2»… в конце пути: так обновление
 // отодвигает прежний файл (internal/obnovlenie: Postavit, svobodnoyeImyaHvosta).
 var hvostObnovleniya = regexp.MustCompile(`(?i)\.old\d*$`)
+
+// putUstanovlennoy — exe службы в Program Files ("" — его там нет). Подменяется
+// в тестах: на машине разработчика служба может стоять по-настоящему.
+var putUstanovlennoy = vinsluzhba.PutUstanovlennoy
+
+// putDlyaNovoyKopii — какой файл запускать, когда окно или значок
+// перезапускаются из-за того, что служба стала новее них.
+//
+// Служба живёт в Program Files и обновляет там свой exe; окно и значок могут
+// быть запущены из Загрузок или другой папки, где лежит прежняя версия.
+// Перезапуск «тем же файлом» дал бы ту же старую версию, служба снова была
+// бы новее, и так по кругу. Поэтому, когда файл службы есть, берём его: он
+// той же версии, что и служба. Нет его (служба не в Program Files, другая
+// система) — прежнее правило putDlyaPerezapuska.
+func putDlyaNovoyKopii(svoy string) string {
+	if p := putUstanovlennoy(); p != "" {
+		return p
+	}
+	return putDlyaPerezapuska(svoy)
+}
 
 // putDlyaPerezapuska — какой файл запускать взамен себя. Свой путь процесса
 // после обновления может указывать уже на отодвинутый хвост (так ведёт себя
