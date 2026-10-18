@@ -79,3 +79,5 @@ jobs:
             sing-box-windows-amd64.zip
             sing-box-windows-amd64.zip.sig
           prerelease: false
+          # Релиз ядра не должен становиться «последним»: latest/download/Kelevra.exe отдал бы 404.
+          make_latest: false
