@@ -158,3 +158,18 @@ func TestPeremennayaStarsheObshchey(t *testing.T) {
 		t.Fatalf("Papka() = %q, а KELEVRA_DIR = %q — переменную перебили", p, svoya)
 	}
 }
+
+func TestSekretClashStabilenISvoy(t *testing.T) {
+	t.Setenv("KELEVRA_DIR", t.TempDir())
+	a := SekretClash()
+	if len(a) != 64 {
+		t.Fatalf("пароль %q: ждал 64 hex-знака", a)
+	}
+	if b := SekretClash(); b != a {
+		t.Fatalf("второй вызов дал другой пароль: %q и %q", a, b)
+	}
+	t.Setenv("KELEVRA_DIR", t.TempDir())
+	if c := SekretClash(); c == a {
+		t.Fatal("у двух устройств один и тот же пароль")
+	}
+}

@@ -176,6 +176,14 @@ type Vybor struct {
 	// в ZametkaPravilaIzKomplekta, чтобы человек в окне видел, от какого числа
 	// работают встроенные правила.
 	PravilaKomplektData string
+	// ClashSekret — пароль служебного порта ядра (Clash API), свой у каждого
+	// устройства: создаётся на нём, сервер его не знает и не присылает.
+	// Вписывается в experimental.clash_api.secret, если профиль своего пароля
+	// не принёс (боевой шаблон его не несёт: порт на 127.0.0.1, но без пароля
+	// его читает и переключает любая программа и любая страница в браузере).
+	// Пароль из профиля главнее: профиль, где он задан, работает как раньше.
+	// Пусто — ничего не вписывается, поведение прежнее.
+	ClashSekret string
 }
 
 // Prigotovit готовит профиль под эту машину.
@@ -316,6 +324,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// fakeip надо по тому, что от dns осталось, а не по тому, что было.
 	soglasovatFakeip(d)
 	okrepitPryamoyResolverVTunnele(d)
+	vpisatSekretClash(d, v.ClashSekret)
 	k.ClashAdres, k.ClashSekret = clash(d)
 	zapomnitVybor(d)
 
@@ -824,6 +833,27 @@ func tunnelnyyVyhod(d map[string]any) string {
 		return urltest
 	}
 	return drugoy
+}
+
+// vpisatSekretClash кладёт пароль устройства в experimental.clash_api, если
+// профиль своего не принёс. Секции clash_api нет — ничего не создаёт: нет
+// служебного порта, нечего закрывать (и приложение его не ждёт).
+func vpisatSekretClash(d map[string]any, sekret string) {
+	if sekret == "" {
+		return
+	}
+	e, ok := d["experimental"].(map[string]any)
+	if !ok {
+		return
+	}
+	c, ok := e["clash_api"].(map[string]any)
+	if !ok {
+		return
+	}
+	if s, _ := c["secret"].(string); s != "" {
+		return
+	}
+	c["secret"] = sekret
 }
 
 func clash(d map[string]any) (adres, sekret string) {

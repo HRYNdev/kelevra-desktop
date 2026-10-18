@@ -300,3 +300,45 @@ func TestPrigotovitDobavlyaetHranilishcheEsliEgoNet(t *testing.T) {
 		t.Fatalf("хранилище не появилось: %+v", c)
 	}
 }
+
+func TestClashSekretUstroystvaVpisyvaetsya(t *testing.T) {
+	gotovyy, k, err := Prigotovit(profil(t), Vybor{ClashSekret: "sekret-ustroystva"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.ClashSekret != "sekret-ustroystva" {
+		t.Fatalf("пароль в картине %q, ждал пароль устройства", k.ClashSekret)
+	}
+	k2, err := Razobrat(gotovyy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k2.ClashSekret != "sekret-ustroystva" {
+		t.Fatalf("в готовом конфиге пароль %q: ядро поднимется без него", k2.ClashSekret)
+	}
+	// Без пароля устройства — как раньше: порт без пароля.
+	_, k3, err := Prigotovit(profil(t), Vybor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k3.ClashSekret != "" {
+		t.Fatalf("пароль %q взялся из ниоткуда", k3.ClashSekret)
+	}
+}
+
+func TestClashSekretProfilyaGlavnee(t *testing.T) {
+	var d map[string]any
+	if err := json.Unmarshal(profil(t), &d); err != nil {
+		t.Fatal(err)
+	}
+	c := d["experimental"].(map[string]any)["clash_api"].(map[string]any)
+	c["secret"] = "ot-profilya"
+	telo, _ := json.Marshal(d)
+	_, k, err := Prigotovit(telo, Vybor{ClashSekret: "sekret-ustroystva"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.ClashSekret != "ot-profilya" {
+		t.Fatalf("пароль %q: пароль профиля должен остаться главным", k.ClashSekret)
+	}
+}
