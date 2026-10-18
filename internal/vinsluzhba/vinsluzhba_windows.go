@@ -5,6 +5,7 @@ package vinsluzhba
 import (
 	"errors"
 	"fmt"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -101,6 +102,12 @@ func otkrytDlya(dostup uint32) (windows.Handle, func(), error) {
 // куда обычный пользователь писать не может: иначе подмена этого файла даёт
 // кому угодно права системы.
 func Ustanovit(putExe string) error {
+	// Последний рубеж: служба от системы не регистрируется на файл, куда может
+	// писать пользователь. Нормальный путь сюда — копия в Program Files из
+	// UstanovitPolnostyu.
+	if pf, err := KatalogProgramFiles(); err == nil && NuzhnoPerenosit(putExe, pf) {
+		return fmt.Errorf("служба должна лежать в %s, а не в %s", Katalog(pf), putExe)
+	}
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("не подключиться к диспетчеру служб: %w", err)
@@ -154,6 +161,35 @@ func Ustanovit(putExe string) error {
 		return fmt.Errorf("служба создана, но без самоподъёма после падения: %w", err)
 	}
 	return s.Start()
+}
+
+// PerenastroitSluzhbu меняет у уже установленной службы только путь к exe (тип
+// запуска, восстановление и описание остаются). Требует прав администратора или
+// системы. Путь с пробелами берётся в кавычки, как это делает CreateService.
+func PerenastroitSluzhbu(novyyPut string) error {
+	m, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return fmt.Errorf("не подключиться к диспетчеру служб: %w", err)
+	}
+	defer windows.CloseServiceHandle(m)
+	imya, err := windows.UTF16PtrFromString(Imya)
+	if err != nil {
+		return err
+	}
+	s, err := windows.OpenService(m, imya, windows.SERVICE_CHANGE_CONFIG)
+	if err != nil {
+		return fmt.Errorf("службу %s не открыть на изменение: %w", Imya, err)
+	}
+	defer windows.CloseServiceHandle(s)
+	komanda, err := windows.UTF16PtrFromString(syscall.EscapeArg(novyyPut) + " " + Argument)
+	if err != nil {
+		return err
+	}
+	if err := windows.ChangeServiceConfig(s, windows.SERVICE_NO_CHANGE, windows.SERVICE_NO_CHANGE,
+		windows.SERVICE_NO_CHANGE, komanda, nil, nil, nil, nil, nil, nil); err != nil {
+		return fmt.Errorf("не изменить путь службы: %w", err)
+	}
+	return nil
 }
 
 // Udalit снимает службу с регистрации, предварительно остановив.

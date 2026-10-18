@@ -57,6 +57,17 @@ jobs:
           cd pack && zip -q "../sing-box-windows-amd64.zip" sing-box.exe
           ls -lh ../sing-box-windows-amd64.zip
 
+      # Подпись архива (internal/podpis): десктоп ставит ядро только с верной
+      # подписью нашего ключа. Подписываем под именем, под которым файл
+      # лежит в релизе. Секрет KELEVRA_SIGN_KEY — тот же, что в vypusk.yml.
+      - name: Подписать архив ядра
+        env:
+          KELEVRA_SIGN_KEY: ${{ secrets.KELEVRA_SIGN_KEY }}
+        run: |
+          git clone --depth 1 https://github.com/${{ github.repository }}.git sign-src
+          (cd sign-src && go run ./cmd/podpisat ../sing-box-windows-amd64.zip sing-box-windows-amd64.zip)
+          test -s sing-box-windows-amd64.zip.sig
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: core-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}-${{ github.run_number }}
@@ -64,5 +75,7 @@ jobs:
           body: |
             Ядро своей сети: апстрим sing-box плюс транспорт xhttp, которого нет в официальных сборках.
             Проверка наличия транспорта проходит в сборке автоматически.
-          files: sing-box-windows-amd64.zip
+          files: |
+            sing-box-windows-amd64.zip
+            sing-box-windows-amd64.zip.sig
           prerelease: false

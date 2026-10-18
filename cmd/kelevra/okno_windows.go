@@ -401,7 +401,7 @@ func zapustitOknoZanovo() {
 		log.Printf("перезапуск окна: не понял свой путь: %v", err)
 		return
 	}
-	put := putDlyaPerezapuska(sebya)
+	put := putDlyaNovoyKopii(sebya)
 	cmd := exec.Command(put)
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{

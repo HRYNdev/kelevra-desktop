@@ -28,3 +28,7 @@ func Ostanovit() error { return neZdes }
 func Krutit(rabota func(ctx context.Context)) error { return neZdes }
 
 func PopravitSamopodyom() {}
+
+func PerenestiVProgramFiles() (bool, error) { return false, nil }
+
+func PutUstanovlennoy() string { return "" }

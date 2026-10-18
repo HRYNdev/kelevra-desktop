@@ -116,6 +116,19 @@ jobs:
           echo "   $(stat -c%s build/Kelevra.exe) байт, версия $VERSIYA внутри найдена"
           sha256sum build/Kelevra.exe | tee build/Kelevra.exe.sha256
 
+      # Подпись выпуска (internal/podpis). Клиенты версии с проверкой подписи
+      # ставят обновление, только если рядом лежит Kelevra.exe.sig, сделанный
+      # нашим ключом: без неё релиз не обновит никого. Закрытый ключ — секрет
+      # репозитория KELEVRA_SIGN_KEY (seed ed25519 в base64); команда сама
+      # сверяет результат со вшитым открытым ключом, так что секрет не от той
+      # пары роняет выпуск здесь, а не у людей. Секрета нет — выпуск падает.
+      - name: Подписать Kelevra.exe
+        env:
+          KELEVRA_SIGN_KEY: ${{ secrets.KELEVRA_SIGN_KEY }}
+        run: |
+          go run ./cmd/podpisat build/Kelevra.exe Kelevra.exe
+          test -s build/Kelevra.exe.sig
+
       # Описание берём из аннотации тега: она пишется человеком в момент
       # выпуска и живёт в git, а не только на странице релиза.
       - name: Описание из аннотации тега
@@ -138,7 +151,9 @@ jobs:
           tag_name: ${{ steps.versiya.outputs.teg }}
           name: Kelevra ${{ steps.versiya.outputs.versiya }}
           body_path: build/opisanie.md
-          files: build/Kelevra.exe
+          files: |
+            build/Kelevra.exe
+            build/Kelevra.exe.sig
           draft: true
           prerelease: ${{ steps.versiya.outputs.predvaritelnyy == 'true' }}
 
@@ -157,6 +172,11 @@ jobs:
             exit 1
           fi
           echo "   в черновике Kelevra.exe: $RAZMER байт"
+          RAZMER_SIG=$(gh release view "$TEG" --json assets             --jq '.assets[] | select(.name=="Kelevra.exe.sig") | .size')
+          if [ -z "${RAZMER_SIG:-}" ] || [ "$RAZMER_SIG" -lt 60 ]; then
+            echo "✗ Kelevra.exe.sig в черновике нет ($RAZMER_SIG) — релиз остаётся ЧЕРНОВИКОМ"
+            exit 1
+          fi
           # Предварительный выпуск не может быть «последним»: GitHub отвечает
           # на такое отказом 422 и релиз остаётся черновиком, то есть человек
           # его не видит вовсе. Последним помечаем только боевые версии.
@@ -180,4 +200,9 @@ jobs:
             echo "✗ скачанное снаружи не совпало со сборкой ($SHA_MOY против $SHA_TAM)"; exit 1
           fi
           echo "✓ sha256 совпал: $SHA_MOY"
+          curl -sSLf -o /tmp/skachano.sig             "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TEG/Kelevra.exe.sig"
+          if ! cmp -s /tmp/skachano.sig build/Kelevra.exe.sig; then
+            echo "✗ подпись снаружи не совпала с сделанной в сборке"; exit 1
+          fi
+          echo "✓ подпись снаружи на месте"
           echo "✓ https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TEG"

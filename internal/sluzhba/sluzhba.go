@@ -547,6 +547,9 @@ func prichinaBedyObnovleniya(err error) string {
 	if errors.As(err, &oshibkaRazbora) {
 		return "GitHub ответил непонятным"
 	}
+	if errors.Is(err, obnovlenie.ErrPodpis) {
+		return "подпись нового выпуска не подтверждена, обновление не предлагается"
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Sprintf("GitHub не ответил за %d секунд", int(srokProverkiObnovleniya/time.Second))
 	}
