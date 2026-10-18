@@ -443,6 +443,10 @@ func PutSekretaClash() string { return filepath.Join(Papka(), "clash_sekret") }
 func SekretClash() string {
 	put := PutSekretaClash()
 	if s := prochestSekret(put); s != "" {
+		// Файл мог остаться от версии, которая создавала его с правами папки
+		// (чтение всем пользователям). Закрываем при каждом чтении: дёшево,
+		// а отказ (нет прав — значит, читаем не от системы) не мешает.
+		_ = ZakrytOtPolzovateley(put)
 		return s
 	}
 	if err := os.MkdirAll(filepath.Dir(put), 0o755); err != nil {
@@ -458,6 +462,13 @@ func SekretClash() string {
 		// Файл успел создать другой процесс — берём его пароль.
 		return prochestSekret(put)
 	}
+	// Права закрываем ДО записи пароля: пустой файл никому ничего не выдаст.
+	// Не закрылось — пароль не пишем: открытый всем пароль хуже, чем никакого.
+	if err := ZakrytOtPolzovateley(put); err != nil {
+		f.Close()
+		_ = os.Remove(put)
+		return ""
+	}
 	_, zerr := f.WriteString(novyy)
 	cerr := f.Close()
 	if zerr != nil || cerr != nil {
@@ -465,6 +476,32 @@ func SekretClash() string {
 		return ""
 	}
 	return novyy
+}
+
+// ZakrytOtPolzovateley оставляет доступ к файлу общей папки
+// (%PROGRAMDATA%\Kelevra) только системе и администраторам. Для пароля
+// Clash API и конфига ядра с этим паролем: их читает служба (система), а
+// окно и значок с ядром говорят через службу и этих файлов не открывают.
+//
+// Файлы вне общей папки (профиль человека, KELEVRA_DIR стенда) не трогаем:
+// там чужих нет, а процесс без прав администратора, закрыв свой файл, сам
+// потерял бы к нему доступ.
+func ZakrytOtPolzovateley(put string) error {
+	if !vObshcheyPapke(put) {
+		return nil
+	}
+	return zakrytFayl(put)
+}
+
+// vObshcheyPapke — лежит ли путь внутри общей папки данных.
+func vObshcheyPapke(put string) bool {
+	o := PapkaObshchaya()
+	if o == "" {
+		return false
+	}
+	o = filepath.Clean(o)
+	p := filepath.Clean(put)
+	return len(p) > len(o) && strings.EqualFold(p[:len(o)], o) && os.IsPathSeparator(p[len(o)])
 }
 
 func prochestSekret(put string) string {
