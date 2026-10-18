@@ -24,8 +24,8 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true
@@ -76,7 +76,7 @@ jobs:
       # значилась проваленной из-за имени файла. Красный по такому поводу
       # хуже бесполезного: он приучает не верить гейту.
       - name: Забрать Kelevra.exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Kelevra-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || github.ref_name }}
           path: build/Kelevra.exe
@@ -95,8 +95,8 @@ jobs:
     name: Тесты на настоящей Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true

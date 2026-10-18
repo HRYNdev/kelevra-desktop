@@ -30,8 +30,8 @@ jobs:
     name: Тесты на настоящей Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true
@@ -52,11 +52,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true
@@ -146,7 +146,7 @@ jobs:
       # не «полвыпуска», а поломка прямо у него: 28.08 выгрузка отдала пустой
       # ответ, и на GitHub полминуты висела версия вообще без .exe.
       - name: Черновик релиза с файлом
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.versiya.outputs.teg }}
           name: Kelevra ${{ steps.versiya.outputs.versiya }}

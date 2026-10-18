@@ -2,6 +2,14 @@ name: core
 
 # Ядро для десктопа: тот же апстрим sing-box плюс наш транспорт xhttp.
 # Патч лежит в репозитории приложения (kelevra-box/core-xhttp) — держим в одном месте.
+#
+# Обе стороны берутся по фиксированной точке: sing-box — по тегу, патч — по
+# коммиту kelevra-box. Раньше патч брался с головы kelevra-box, а там он уже
+# переписан под sing-box v1.14.1 (sing-quic 0.7.0: другой BBR), и сборка
+# v1.14.0-beta.4 падала на congestion_meta2.NewBbrSenderWithProfile, хотя в
+# этом репозитории ничего не менялось. Пара по умолчанию — beta.4 и последний
+# коммит патча, который ещё под неё (до перехода Box на v1.14.1).
+# Сменить ядро — менять тег и коммит патча вместе.
 on:
   workflow_dispatch:
     inputs:
@@ -9,6 +17,19 @@ on:
         description: "Тег sing-box"
         required: false
         default: "v1.14.0-beta.4"
+      patch_ref:
+        description: "Коммит kelevra-box с патчем core-xhttp (SHA, совместимый с тегом выше)"
+        required: false
+        default: "1af139394ca4bd633ff2395cd42899789466fcf7"
+      vypustit:
+        description: "Выложить релиз core-* (иначе только сборка и проверки)"
+        type: boolean
+        required: false
+        default: false
+
+env:
+  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+  PATCH_REF: ${{ github.event.inputs.patch_ref || '1af139394ca4bd633ff2395cd42899789466fcf7' }}
 
 jobs:
   build:
@@ -16,19 +37,26 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: SagerNet/sing-box
-          ref: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+          ref: ${{ env.CORE_REF }}
           path: core
           fetch-depth: 0
 
-      - name: Забрать патч транспорта
+      - uses: actions/checkout@v5
+        with:
+          repository: HRYNdev/kelevra-box
+          ref: ${{ env.PATCH_REF }}
+          path: app
+          sparse-checkout: core-xhttp
+
+      - name: Наложить патч транспорта
         run: |
-          git clone --depth 1 https://github.com/HRYNdev/kelevra-box.git app
+          echo "sing-box $CORE_REF ($(git -C core rev-parse HEAD)), патч kelevra-box $(git -C app rev-parse HEAD)"
           python3 app/core-xhttp/apply.py core
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: core/go.mod
           check-latest: true
@@ -60,18 +88,23 @@ jobs:
       # Подпись архива (internal/podpis): десктоп ставит ядро только с верной
       # подписью нашего ключа. Подписываем под именем, под которым файл
       # лежит в релизе. Секрет KELEVRA_SIGN_KEY — тот же, что в vypusk.yml.
+      # Подписывает код того же коммита, с которого запущена сборка.
+      - uses: actions/checkout@v5
+        with:
+          path: sign-src
+
       - name: Подписать архив ядра
         env:
           KELEVRA_SIGN_KEY: ${{ secrets.KELEVRA_SIGN_KEY }}
         run: |
-          git clone --depth 1 https://github.com/${{ github.repository }}.git sign-src
           (cd sign-src && go run ./cmd/podpisat ../sing-box-windows-amd64.zip sing-box-windows-amd64.zip)
           test -s sing-box-windows-amd64.zip.sig
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
+        if: ${{ github.event.inputs.vypustit == 'true' }}
         with:
-          tag_name: core-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}-${{ github.run_number }}
-          name: Ядро ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }} (сборка ${{ github.run_number }})
+          tag_name: core-${{ env.CORE_REF }}-${{ github.run_number }}
+          name: Ядро ${{ env.CORE_REF }} (сборка ${{ github.run_number }})
           body: |
             Ядро своей сети: апстрим sing-box плюс транспорт xhttp, которого нет в официальных сборках.
             Проверка наличия транспорта проходит в сборке автоматически.
