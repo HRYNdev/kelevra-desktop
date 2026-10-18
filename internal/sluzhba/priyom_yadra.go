@@ -330,7 +330,7 @@ func (s *Sluzhba) otpechatokZhelaemogoKonfiga() string {
 	if err != nil {
 		return ""
 	}
-	vybor := konfig.Vybor{}
+	vybor := konfig.Vybor{ClashSekret: sekretClash()}
 	s.dobavitPravilaIzKesha(&vybor, false)
 	gotovyy, _, err := konfig.Prigotovit(syroy, vybor)
 	if err != nil {

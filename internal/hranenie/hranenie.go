@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -427,4 +428,54 @@ func ZabratFlagPodklyuchit() bool {
 	}
 	_ = os.Remove(put)
 	return true
+}
+
+// PutSekretaClash — файл с паролем служебного порта ядра (Clash API) этого
+// устройства. Рядом с остальными данными приложения, не в профиле: профиль
+// приходит с сервера, а пароль сервер знать не должен.
+func PutSekretaClash() string { return filepath.Join(Papka(), "clash_sekret") }
+
+// SekretClash отдаёт пароль Clash API этого устройства, при первом вызове
+// создавая его (32 случайных байта, hex). Файл создаётся только если его нет
+// (O_EXCL): два процесса, пришедшие одновременно, получат один и тот же пароль.
+// Не вышло прочитать и создать (нет прав на папку) — пустая строка: ядро
+// тогда поднимется без пароля, как до этой правки, а не не поднимется вовсе.
+func SekretClash() string {
+	put := PutSekretaClash()
+	if s := prochestSekret(put); s != "" {
+		return s
+	}
+	if err := os.MkdirAll(filepath.Dir(put), 0o755); err != nil {
+		return ""
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	novyy := hex.EncodeToString(b)
+	f, err := os.OpenFile(put, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		// Файл успел создать другой процесс — берём его пароль.
+		return prochestSekret(put)
+	}
+	_, zerr := f.WriteString(novyy)
+	cerr := f.Close()
+	if zerr != nil || cerr != nil {
+		_ = os.Remove(put)
+		return ""
+	}
+	return novyy
+}
+
+func prochestSekret(put string) string {
+	b, err := os.ReadFile(put)
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(b))
+	if len(s) < 32 {
+		// Обрезанный файл (оборванная запись) паролем не считается.
+		return ""
+	}
+	return s
 }

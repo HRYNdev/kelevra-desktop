@@ -243,5 +243,7 @@ func ZhivoPoZapiske(papka string) (Peredacha, bool) {
 		return p, false
 	}
 	defer otvet.Body.Close()
-	return p, otvet.StatusCode == http.StatusOK
+	// 401: порт ядра закрыт паролем устройства (experimental.clash_api.secret),
+	// а записка пароля не хранит. Отвечает ядро — значит, живо.
+	return p, otvet.StatusCode == http.StatusOK || otvet.StatusCode == http.StatusUnauthorized
 }

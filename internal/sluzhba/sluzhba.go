@@ -414,6 +414,7 @@ func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(konfig.Vybor{})
 // perestroit принимает отступления от обычной сборки конфига (имя адаптера,
 // правила с диска).
 func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
+	dop.ClashSekret = sekretClash()
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
 		return err
@@ -3235,4 +3236,19 @@ func (s *Sluzhba) ustupitMestoRuchka(w http.ResponseWriter, r *http.Request) {
 		}
 		os.Exit(0)
 	}()
+}
+
+// sekretClash — пароль служебного порта ядра для этого устройства (создаётся
+// при первом обращении). Нет возможности его сохранить — пусто, ядро
+// поднимется без пароля, как раньше; об этом один раз пишем в журнал.
+var sekretClashOdinRaz sync.Once
+
+func sekretClash() string {
+	s := hranenie.SekretClash()
+	if s == "" {
+		sekretClashOdinRaz.Do(func() {
+			log.Printf("пароль Clash API не создан (нет записи в %s): служебный порт ядра останется без пароля", hranenie.PutSekretaClash())
+		})
+	}
+	return s
 }
