@@ -44,6 +44,14 @@ type nablyudatelYadra struct {
 	put       string
 	smeshenie int64
 	razmer    int64
+	// fayl — какой именно файл читаем. Ядро на каждом своём старте
+	// откладывает прошлый журнал в .prev и заводит новый (yadro.sozdatZhurnalYadra):
+	// другой файл — читаем с начала, даже если он уже дорос до старого смещения.
+	fayl os.FileInfo
+	// seredinaStroki — смещение поставлено на конец куска, написанного до
+	// старта службы, и он мог оборваться посреди строки: её остаток при
+	// первом чтении пропускается.
+	seredinaStroki bool
 
 	oknoNachalo time.Time
 	soed        int
@@ -76,6 +84,7 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 	if s.Yadro != nil {
 		n.spravochnik = yadro.NovyeImena(s.Yadro)
 	}
+	n.nachatSKonca()
 	// Обстановка одной записью на старте: по ней видно, с какими правами и в
 	// каком режиме работала машина, когда случилось остальное.
 	n.pisatel.Sreda(map[string]any{"rezhim": s.rezhimKartiny(), "prava": s.estPrava()})
@@ -107,28 +116,62 @@ func (n *nablyudatelYadra) zahod(seychas time.Time) {
 	}
 }
 
+// nachatSKonca ставит смещение на нынешний конец журнала ядра.
+//
+// Смещение живёт только в памяти. Раньше после перезапуска службы оно
+// начиналось с нуля, и журнал, уже разобранный прошлой копией службы,
+// разбирался заново: старые отказы ложились в одно свежее окно и давали
+// ложную «беду» (ноутбук 07–08.10: «отказов 1023 из 1466» при выключенном
+// ядре — ровно сумма трёх настоящих окон утра). Всё, что лежит в журнале к
+// старту службы, к этой её жизни не относится; новое ядро она поднимет со
+// свежим журналом (его узнаём по смене файла и читаем с начала).
+// Цена — строки, которые ядро без хозяина дописало, пока службы не было:
+// они не учитываются. Ложная тревога хуже.
+func (n *nablyudatelYadra) nachatSKonca() {
+	f, err := os.Open(n.put)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() == 0 {
+		return
+	}
+	n.fayl = st
+	n.razmer = st.Size()
+	n.smeshenie = st.Size()
+	b := make([]byte, 1)
+	_, err = f.ReadAt(b, st.Size()-1)
+	n.seredinaStroki = err != nil || b[0] != '\n'
+}
+
 // prochitatNovoe — только то, что дописалось с прошлого захода.
 //
 // Ротация узнаётся по размеру: файл стал меньше запомненного — значит ядро
 // перезапустилось и журнал начат заново, читаем с начала. Иначе после каждого
 // перезапуска ядра мы читали бы мимо файла и молча ничего не находили.
 func (n *nablyudatelYadra) prochitatNovoe() ([]string, error) {
-	st, err := os.Stat(n.put)
-	if err != nil {
-		return nil, err
-	}
-	if st.Size() < n.razmer {
-		n.smeshenie = 0
-	}
-	n.razmer = st.Size()
-	if n.smeshenie >= st.Size() {
-		return nil, nil
-	}
+	// Сведения о файле — через открытый файл, а не os.Stat по пути: на Windows
+	// os.SameFile у сведений по пути узнаёт файл по пути же в момент сравнения
+	// и принял бы новый журнал за прежний.
 	f, err := os.Open(n.put)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if st.Size() < n.razmer || (n.fayl != nil && !os.SameFile(n.fayl, st)) {
+		n.smeshenie = 0
+		n.seredinaStroki = false
+	}
+	n.fayl = st
+	n.razmer = st.Size()
+	if n.smeshenie >= st.Size() {
+		return nil, nil
+	}
 	if _, err := f.Seek(n.smeshenie, io.SeekStart); err != nil {
 		return nil, err
 	}
@@ -151,6 +194,17 @@ func (n *nablyudatelYadra) prochitatNovoe() ([]string, error) {
 	// Если куска целиком нет — оставляем и смещение, и хвост нетронутыми,
 	// иначе следующий заход снова упрётся в тот же неполный кусок и будет
 	// бесконечно его перечитывать, не продвигаясь.
+	if n.seredinaStroki {
+		// Остаток строки, начатой до старта службы, — не наш: пропускаем до
+		// первого перевода строки. Его ещё нет — ждём следующего захода.
+		perviy := bytes.IndexByte(bufer, '\n')
+		if perviy < 0 {
+			return nil, nil
+		}
+		n.smeshenie += int64(perviy + 1)
+		bufer = bufer[perviy+1:]
+		n.seredinaStroki = false
+	}
 	poslednPerevod := bytes.LastIndexByte(bufer, '\n')
 	if poslednPerevod < 0 {
 		return nil, nil
