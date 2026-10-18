@@ -59,6 +59,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
           check-latest: true
 
       - name: Сборка под Windows
