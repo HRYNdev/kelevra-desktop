@@ -23,6 +23,7 @@ KOREN=$(cd "$(dirname "$0")/.." && pwd)
 export PATH="$PATH:/usr/local/go/bin"
 export HOME=${HOME:-/root}
 export GOCACHE=${GOCACHE:-$HOME/.cache/go-build}
+. "$KOREN/stend/obshchee.sh"
 
 STEND="$KOREN/.stend/obnovlenie_postavit"
 RELIZY_DOM="$STEND/relizy"
@@ -74,14 +75,9 @@ print(v if not isinstance(v, bool) else str(v).lower())
 }
 
 pishi_relizy() { # pishi_relizy <версия-в-теге> <размер-в-json>
-  python3 -c '
-import json, sys
-teg, port, razmer = sys.argv[1], sys.argv[2], sys.argv[3]
-print(json.dumps([{
-    "tag_name": teg, "draft": False, "prerelease": False,
-    "assets": [{"name": "Kelevra.exe", "browser_download_url": f"http://127.0.0.1:{port}/Kelevra", "size": int(razmer)}],
-}]))
-' "$1" "$PORT" "$2" > "$RELIZY_DOM/relizy.json"
+  pishi_relizy_s_podpisyu "$RELIZY_DOM/relizy.json" "$1" \
+    "http://127.0.0.1:$PORT/Kelevra" "$2" \
+    "http://127.0.0.1:$PORT/Kelevra.sig"
 }
 
 # ubit_i_dozhdatsya <образец для pkill -f> — убить и ДОЖДАТЬСЯ смерти,
@@ -123,15 +119,28 @@ trap pochistit EXIT
 
 rm -rf "$STEND"
 mkdir -p "$STEND" "$RELIZY_DOM"
+podpis_test_paru "$STEND"
+PODPISAT="$STEND/podpisat"
 
 versiya() { echo "-X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$1"; }
-if ! ( cd "$KOREN" && go build -ldflags "$(versiya "$STARAYA_VERSIYA")" -o "$BIN_STARAYA" ./cmd/kelevra ) > "$STEND/build_staraya.log" 2>&1; then
+if ! sobrat_s_podpisyu "$KOREN" "$BIN_STARAYA" ./cmd/kelevra "$(versiya "$STARAYA_VERSIYA")" > "$STEND/build_staraya.log" 2>&1; then
   past "сборка" "go build ./cmd/kelevra (версия $STARAYA_VERSIYA)" "сборка не прошла" "$(cat "$STEND/build_staraya.log")"
 fi
-if ! ( cd "$KOREN" && go build -ldflags "$(versiya "$NOVAYA_VERSIYA")" -o "$BIN_NOVAYA" ./cmd/kelevra ) > "$STEND/build_novaya.log" 2>&1; then
+if ! sobrat_s_podpisyu "$KOREN" "$BIN_NOVAYA" ./cmd/kelevra "$(versiya "$NOVAYA_VERSIYA")" > "$STEND/build_novaya.log" 2>&1; then
   past "сборка" "go build ./cmd/kelevra (версия $NOVAYA_VERSIYA)" "сборка не прошла" "$(cat "$STEND/build_novaya.log")"
 fi
+if ! sobrat_s_podpisyu "$KOREN" "$PODPISAT" ./cmd/podpisat "" > "$STEND/build_podpisat.log" 2>&1; then
+  past "сборка" "go build ./cmd/podpisat" "сборка не прошла" "$(cat "$STEND/build_podpisat.log")"
+fi
 chmod +x "$BIN_STARAYA" "$BIN_NOVAYA"
+# Релиз без ПОДПИСАННОГО Kelevra.exe.sig с df682ca8 либо не предложится вовсе
+# (ErrPodpis), либо установка честно откажет (ErrNeVerna) — подписываем
+# именно "релизным" именем Kelevra.exe: podpis.go кладёт имя в сам хеш
+# сообщения, а не берёт его из пути файла на диске (internal/obnovlenie.go:513,
+# proveritPodpisFayla(..., ImyaFayla)).
+if ! KELEVRA_SIGN_KEY="$PODPIS_SEED_B64" "$PODPISAT" "$BIN_NOVAYA" "Kelevra.exe" > "$STEND/podpisat.log" 2>&1; then
+  past "подпись фикстуры" "podpisat Kelevra (версия $NOVAYA_VERSIYA)" "не подписалось" "$(cat "$STEND/podpisat.log")"
+fi
 RAZMER=$(stat -c%s "$BIN_NOVAYA")
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
@@ -198,7 +207,7 @@ echo "── площадка готова: старая $STARAYA_VERSIYA, но�
 # старой и уходит на смену — новая копия поднимается сама, ровно тем же путём,
 # каким это уже умеет prava.Poprosit после UAC (cmd/kelevra: --smena, zhdatSmenu).
 # =============================================================================
-zapusti_sluzhbu a
+zapusti_sluzhbu a bez_fona
 ADR_A=$ADR; DOM_A=$DOM; PID_A=$PID_SLUZHBY
 
 curl -s -o /dev/null --max-time 5 -X POST "${ADR_A}api/obnovlenie_proverit"
@@ -339,7 +348,7 @@ kill -KILL "$PID_B" 2>/dev/null; wait "$PID_B" 2>/dev/null
 # =============================================================================
 pishi_relizy "app-v$NOVAYA_VERSIYA" "$((RAZMER + 1))" # порча JSON: размер на 1 байт больше настоящего
 [ "$KONTROL" = "c" ] && pishi_relizy "app-v$NOVAYA_VERSIYA" "$RAZMER" # (порча стенда c) — размер на самом деле верный
-zapusti_sluzhbu v
+zapusti_sluzhbu v bez_fona
 ADR_V=$ADR; DOM_V=$DOM; PID_V=$PID_SLUZHBY
 curl -s -o /dev/null --max-time 5 -X POST "${ADR_V}api/obnovlenie_proverit"
 NAYDENO_V=""
@@ -377,7 +386,7 @@ kill -KILL "$PID_V" 2>/dev/null; wait "$PID_V" 2>/dev/null
 # idetProverkaObnovleniya держит его у фоновой проверки (stend/obnovlenie_fon.sh).
 # =============================================================================
 pishi_relizy "app-v$NOVAYA_VERSIYA" "$RAZMER" # возвращаем верный размер после сцены в)
-zapusti_sluzhbu g
+zapusti_sluzhbu g bez_fona
 ADR_G=$ADR; DOM_G=$DOM; PID_G=$PID_SLUZHBY
 curl -s -o /dev/null --max-time 5 -X POST "${ADR_G}api/obnovlenie_proverit"
 for _ in $(seq 1 20); do

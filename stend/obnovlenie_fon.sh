@@ -25,6 +25,7 @@ KOREN=$(cd "$(dirname "$0")/.." && pwd)
 export PATH="$PATH:/usr/local/go/bin"
 export HOME=${HOME:-/root}
 export GOCACHE=${GOCACHE:-$HOME/.cache/go-build}
+. "$KOREN/stend/obshchee.sh"
 
 STEND="$KOREN/.stend/obnovlenie_fon"
 BIN="$STEND/kelevra_linux"
@@ -74,14 +75,9 @@ print(v if not isinstance(v, bool) else str(v).lower())
 }
 
 pishi_relizy() { # pishi_relizy <версия-в-теге> — переписывает relizy.json без перезапуска http.server
-  python3 -c '
-import json, sys
-teg, port = sys.argv[1], sys.argv[2]
-print(json.dumps([{
-    "tag_name": teg, "draft": False, "prerelease": False,
-    "assets": [{"name": "Kelevra.exe", "browser_download_url": f"http://127.0.0.1:{port}/Kelevra.exe", "size": 42}],
-}]))
-' "$1" "$PORT" > "$RELIZY_DOM/relizy.json"
+  pishi_relizy_s_podpisyu "$RELIZY_DOM/relizy.json" "$1" \
+    "http://127.0.0.1:$PORT/Kelevra.exe" "$RAZMER_FIKS" \
+    "http://127.0.0.1:$PORT/Kelevra.exe.sig"
 }
 
 pochistit() {
@@ -97,6 +93,15 @@ mkdir -p "$STEND" "$RELIZY_DOM"
 if ! ( cd "$KOREN" && go build -ldflags "-X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$STARAYA_VERSIYA" -o "$BIN" ./cmd/kelevra ) > "$STEND/build.log" 2>&1; then
   past "сборка" "go build ./cmd/kelevra (версия $STARAYA_VERSIYA)" "сборка не прошла" "$(cat "$STEND/build.log")"
 fi
+# Этот стенд проверяет только НАХОДКУ (ProveritObnovlenieFonom смотрит лишь на
+# список assets в relizy.json — имя и size>0, файл не скачивает), установку
+# покрывает stend/obnovlenie_postavit.sh. Поэтому Kelevra.exe/.sig НАМЕРЕННО
+# не лежат на диске (как и раньше с одним asset): с df682ca8 без .sig в
+# списке релиз не предложат вовсе (ErrPodpis), а служи реальным файлом —
+# тихая фоновая установка (postavitTiho) честно завершится и перезапустит
+# процесс под НОВЫМ pid, что ломает сцену г) ниже (она держит СТАРЫЙ pid живым
+# нарочно, проверяя только замок параллельных толчков, не установку).
+RAZMER_FIKS=42
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 pishi_relizy "app-v$NOVAYA_VERSIYA"
