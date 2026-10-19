@@ -744,6 +744,19 @@ func (s *Sluzhba) otpechatokFayla(put string, kesh *string) string {
 // поднимается заново сама, если была поднята. Фоновый тик редкий, поэтому одной
 // попытки на версию достаточно, а неудача попадёт в журнал.
 func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
+	// KELEVRA_BEZ_OBNOVLENIYA=1 — тот же переключатель, что глушит немедленную
+	// проверку в SleditZaObnovleniem: на нём стоит масса стендов (stend/*.sh),
+	// которым нужна находка (naydennoeObnovlenie уже выставлена выше по
+	// ProveritObnovlenieFonom), но НЕ нужна тихая установка в этот момент —
+	// иначе ручной тычок (obnovleniePostavitRuchka), который сцена вызывает
+	// следом, ставит ПОВТОРНО уже поставленную версию и затирает .old копией
+	// новой сборки вместо старой (стенд обнаружил это на obnovlenie_postavit.sh
+	// после появления подписи: df682ca8 перестал ронять тихую установку как
+	// неподписанную, и гонка стала настоящей). У человека эта переменная
+	// не задана — тихая установка идёт как и раньше.
+	if os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") == "1" {
+		return
+	}
 	s.zamok.Lock()
 	uzhe := s.idetUstanovkaObnovleniya
 	stavili := s.tihoStavili
