@@ -106,6 +106,9 @@ type Sluzhba struct {
 	// (8с, см. там же, почему именно столько) — своё поле только ради
 	// теста «заход завис», чтобы не ждать боевые 8с на каждый прогон.
 	avtorezhimKnopkaTaimaut time.Duration
+	// estSetDlyaStenda — чем проверки подменяют признак «сеть есть» при
+	// ожидании сети после сна (povtor_seti.go). nil в бою — avtorezhim.EstShlyuz.
+	estSetDlyaStenda func() bool
 	// OblachkoObnovleniya — как сказать о находке пузырём в трее (cmd/kelevra/
 	// trey_windows.go: pokazatOblachkoObnovleniya), подключается снаружи из
 	// main.go: пакет sluzhba про Windows-трей ничего не знает и знать не
@@ -524,6 +527,13 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 // иначе пришлось бы ждать настоящие 6 секунд на каждый прогон.
 var srokProverkiObnovleniya = 6 * time.Second
 
+// srokFonovoyProverkiObnovleniya — тот же вопрос GitHub, но фоном (тикер и
+// толчок от другой копии): тут никто не стоит и не смотрит, а до
+// api.github.com через туннель у части людей ответ идёт около 10 секунд
+// (разбор журналов 19.10.2026: шесть секунд кнопки давали в фоне
+// «context deadline exceeded» раз за разом). Полминуты — с запасом втрое.
+var srokFonovoyProverkiObnovleniya = 30 * time.Second
+
 // srokUstanovkiObnovleniya — сколько ждём скачивание найденной сборки по
 // тычку в пузырь (та же величина, что и у холодного обновления в
 // cmd/kelevra/obnovlenie.go: srokZagruzki, ~8 МБ по обычной сети укладываются
@@ -611,11 +621,23 @@ func (s *Sluzhba) obnovlenieProveritRuchka(w http.ResponseWriter, r *http.Reques
 //
 // idetProverkaObnovleniya не даёт наложиться двум одновременным проверкам
 // (тик и толчок совпали): вторая тихо выходит, не трогая сеть повторно.
+//
+// Повтора после сетевого отказа у толчка нет: он разовый, а повторяет сам
+// тикер (SleditZaObnovleniem через fonovoeDelo).
 func (s *Sluzhba) ProveritObnovlenieFonom() {
+	if err := s.proveritObnovlenieRaz(context.Background()); setevoyOtkaz(err) {
+		log.Printf("фоновая проверка обновления: сеть не ответила (%s), работаю как есть", korotkoOSeti(err))
+	}
+}
+
+// proveritObnovlenieRaz — одна фоновая проверка. Сетевую ошибку возвращает,
+// не печатая: строку о ней пишет тот, кто решает про повтор (fonovoeDelo).
+// Остальные отказы (ответ GitHub, подпись) печатает сама и тоже возвращает.
+func (s *Sluzhba) proveritObnovlenieRaz(ctx context.Context) error {
 	s.zamok.Lock()
 	if s.idetProverkaObnovleniya {
 		s.zamok.Unlock()
-		return
+		return nil
 	}
 	s.idetProverkaObnovleniya = true
 	s.zamok.Unlock()
@@ -629,14 +651,17 @@ func (s *Sluzhba) ProveritObnovlenieFonom() {
 	if svoy := os.Getenv("KELEVRA_RELIZY"); svoy != "" {
 		adres = svoy // стенд
 	}
-	ctx, otmena := context.WithTimeout(context.Background(), srokProverkiObnovleniya)
+	ctx, otmena := context.WithTimeout(ctx, srokFonovoyProverkiObnovleniya)
 	defer otmena()
-	n, err := obnovlenie.Proverit(ctx, &http.Client{Timeout: srokProverkiObnovleniya}, adres, podpiska.Versiya)
+	n, err := obnovlenie.Proverit(ctx, &http.Client{Timeout: srokFonovoyProverkiObnovleniya}, adres, podpiska.Versiya)
 	if err != nil {
 		// Нет сети — обычное дело для приложения, которое чинит сеть: тихо,
-		// без паники и без падения процесса. Следующий тик попробует снова.
-		log.Printf("фоновая проверка обновления: не вышло (%v), работаю как есть", err)
-		return
+		// без паники и без падения процесса. Сетевой отказ повторит тикер
+		// (fonovoeDelo), остальные ждут следующего тика.
+		if !setevoyOtkaz(err) {
+			log.Printf("фоновая проверка обновления: не вышло (%v), работаю как есть", err)
+		}
+		return err
 	}
 	s.zamok.Lock()
 	s.naydennoeObnovlenie = n // может стать снова nil — «версия и так свежая», это тоже правда
@@ -655,6 +680,7 @@ func (s *Sluzhba) ProveritObnovlenieFonom() {
 		s.povestitEsliNovaya(n.Versiya)
 		s.postavitTiho(*n)
 	}
+	return nil
 }
 
 // SobratPasport — чем устройство описывает себя серверу сверх имени и версии.
@@ -996,25 +1022,14 @@ func (s *Sluzhba) ZadatVyhod(f func()) { s.vyhod = f }
 // раньше.
 // period внедряемый (не голая obnovlenie.PeriodFonovoyProverki внутри
 // функции): стенд гоняет его в миллисекундах, а не ждёт настоящих часов.
+//
+// Сетевой отказ (машина только что проснулась, Wi-Fi ещё не поднят)
+// повторяется сам с нарастающей паузой, а тик после сна сперва ждёт сеть —
+// см. fonovoeDelo в povtor_seti.go.
 func (s *Sluzhba) SleditZaObnovleniem(ctx context.Context, period time.Duration) {
-	if os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") != "1" {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			s.ProveritObnovlenieFonom()
-		}
-	}
-	t := time.NewTicker(period)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.ProveritObnovlenieFonom()
-		}
-	}
+	d := s.delo("фоновая проверка обновления", period, s.proveritObnovlenieRaz)
+	d.srazu = os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") != "1"
+	d.krutit(ctx)
 }
 
 // VecherOtpravkiZhurnalov — во сколько по МЕСТНОМУ времени клиент отдаёт свои
@@ -2868,29 +2883,33 @@ func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 	if shag < 15*time.Minute {
 		shag = 15 * time.Minute
 	}
-	t := time.NewTicker(shag)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
-				continue
-			}
-			// Подписка едет вместе с профилем: срок, объём и список устройств
-			// меняются на сервере сами по себе, без участия этой машины.
-			s.ObnovitSvedeniya(ctx)
-			k, err := s.vzyatProfil(ctx)
-			if err != nil {
-				log.Printf("плановое обновление профиля не удалось: %v", err)
-				continue // сеть могла лечь; работаем на прежнем конфиге
-			}
-			if err := s.SohranitProfil(k); err != nil {
-				log.Printf("плановое обновление профиля не сохранилось: %v", err)
-			}
-		}
+	// Сетевой отказ повторяется сам, тик после сна сперва ждёт сеть
+	// (povtor_seti.go): раньше тут был голый тикер, и профиль, упавший на
+	// «no such host» в первую секунду после сна, ждал следующего часа.
+	s.delo("обновление профиля", shag, s.obnovitProfilRaz).krutit(ctx)
+}
+
+// obnovitProfilRaz — один плановый заход за профилем и сведениями о подписке.
+//
+// Профиль первым: при сетевом отказе сведения упали бы на той же сети, и их
+// строка в журнале (с адресом подписки) лишь удвоила бы строку повтора.
+func (s *Sluzhba) obnovitProfilRaz(ctx context.Context) error {
+	if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
+		return nil
 	}
+	k, err := s.vzyatProfil(ctx)
+	if err != nil {
+		if setevoyOtkaz(err) {
+			return err // строку о повторе пишет fonovoeDelo; работаем на прежнем конфиге
+		}
+		log.Printf("плановое обновление профиля не удалось: %v", err)
+	} else if err := s.SohranitProfil(k); err != nil {
+		log.Printf("плановое обновление профиля не сохранилось: %v", err)
+	}
+	// Подписка едет вместе с профилем: срок, объём и список устройств
+	// меняются на сервере сами по себе, без участия этой машины.
+	s.ObnovitSvedeniya(ctx)
+	return err
 }
 
 // ShagUchetaTrafika — как часто спрашивать у ядра его счётчики.
@@ -3134,17 +3153,11 @@ func (s *Sluzhba) SveryatPravila(ctx context.Context, shag time.Duration) {
 	// Первый заход — сразу, не дожидаясь тика: на свежей машине кеша ещё нет
 	// вовсе, а через полчаса человек уже сто раз нажмёт «Подключить». Тот же
 	// приём, что у ObnovlyatProfil со сведениями о подписке.
-	s.ObnovitKeshPravil(ctx)
-	t := time.NewTicker(shag)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.ObnovitKeshPravil(ctx)
-		}
-	}
+	// Сетевой отказ повторяется сам, тик после сна сперва ждёт сеть
+	// (povtor_seti.go).
+	d := s.delo("сверка правил", shag, s.ObnovitKeshPravil)
+	d.srazu = true
+	d.krutit(ctx)
 }
 
 // ObnovitKeshPravil сверяет наборы правил с сервером и обновляет изменившиеся.
@@ -3152,14 +3165,18 @@ func (s *Sluzhba) SveryatPravila(ctx context.Context, shag time.Duration) {
 // Зовётся ФОНОМ: на старте ядра сеть занята собой, и именно поэтому кеш
 // вообще понадобился (шапка internal/pravila/kesh.go). Два повода: удачный
 // подъём связи и свои часы (SveryatPravila).
-func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) {
+//
+// Ошибку возвращает для повтора (fonovoeDelo): сетевой отказ своими часами
+// повторяется скоро и строку о себе получает там же, остальные печатаются
+// здесь и ждут тика.
+func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) error {
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
-		return
+		return nil // профиля ещё нет — сверять нечего, это не отказ
 	}
 	adresa := konfig.AdresaPravil(syroy)
 	if len(adresa) == 0 {
-		return
+		return nil
 	}
 	tegi := make([]string, 0, len(adresa))
 	for teg := range adresa {
@@ -3167,24 +3184,30 @@ func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) {
 	}
 	vozrast := pravila.Vozrast(hranenie.PapkaYadra(), tegi)
 	if !pravila.Ustarel(hranenie.PapkaYadra(), tegi) {
-		return
+		return nil
 	}
-	log.Printf("сверяю правила с сервером (%d наборов, последняя сверка %s назад)", len(adresa), okruglit(vozrast))
+	// Возраст прошлой сверки — в строке итога, а не отдельной строкой «сверяю…»
+	// до похода в сеть: при сетевом отказе та строка повторялась бы на каждом
+	// повторе рядом со строкой самого повтора.
 	itog, err := pravila.Obnovit(ctx, &http.Client{Timeout: 2 * time.Minute}, adresa, hranenie.PapkaYadra())
 	if err != nil {
-		log.Printf("правила сверены не полностью: %d из %d, обновлено %d, отказов %d (%v) — на старте возьмётся то, что есть",
-			itog.Svereno, len(adresa), itog.Obnovleno, itog.Otkazy, err)
-		return
+		if setevoyOtkaz(err) && itog.Svereno == 0 {
+			return err // ни один набор не дошёл — сети нет; строку пишет повтор
+		}
+		log.Printf("правила сверены не полностью: %d из %d, обновлено %d, отказов %d (%v), прошлая сверка %s назад — на старте возьмётся то, что есть",
+			itog.Svereno, len(adresa), itog.Obnovleno, itog.Otkazy, err, okruglit(vozrast))
+		return err
 	}
 	if itog.Obnovleno == 0 {
-		log.Printf("правила сверены: %d наборов, на сервере ничего не менялось", itog.Svereno)
-		return
+		log.Printf("правила сверены: %d наборов, на сервере ничего не менялось (прошлая сверка %s назад)", itog.Svereno, okruglit(vozrast))
+		return nil
 	}
 	// Ядро читает наборы только при старте: свежие файлы на диске попадут в
 	// работу при следующем подъёме связи. Говорим об этом прямо, чтобы
 	// «обновлено 3» из журнала не читалось как «уже действует».
-	log.Printf("правила сверены: %d наборов, обновилось %d — в работу пойдут при следующем подключении", itog.Svereno, itog.Obnovleno)
+	log.Printf("правила сверены: %d наборов, обновилось %d — в работу пойдут при следующем подключении (прошлая сверка %s назад)", itog.Svereno, itog.Obnovleno, okruglit(vozrast))
 	s.zapomnitSvezhiePravila(itog.Obnovleno)
+	return nil
 }
 
 // zapomnitSvezhiePravila запоминает, что на диске появились новые наборы.

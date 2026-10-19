@@ -88,6 +88,20 @@ type shlyuzIntrfeysa struct {
 	indeks uint32
 }
 
+// EstShlyuz — есть ли у машины сеть: шлюз IPv4 хотя бы на одном физическом
+// адаптере (не loopback, не туннель, не наш TUN — тот же отбор, что у
+// MakiShlyuzov).
+//
+// Зачем. Служба ждёт по нему сеть после сна машины (internal/sluzhba,
+// dozhdatsyaSeti): пока Wi-Fi не получил адрес, шлюза нет, ядро пишет
+// «missing default interface», а любой запрос падает на «no such host».
+// В отличие от MakiShlyuzov, ARP-записи соседа не требует: сразу после сна
+// её может ещё не быть, а сеть уже есть.
+func EstShlyuz() bool {
+	shlyuzy, err := shlyuzyFizicheskihAdapterov()
+	return err == nil && len(shlyuzy) > 0
+}
+
 // shlyuzFizicheskogoAdaptera — IPv4 шлюза и индекс интерфейса физического
 // адаптера.
 //

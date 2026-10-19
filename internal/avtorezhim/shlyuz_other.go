@@ -127,3 +127,11 @@ func makIzArp(put, adres string) (string, error) {
 	}
 	return "", fmt.Errorf("соседа %s в %s нет", adres, put)
 }
+
+// EstShlyuz — версия для стенда: есть ли маршрут по умолчанию на физическом
+// интерфейсе (та же таблица, что у MakiShlyuzov). Смысл и потребитель — в
+// windows-версии.
+func EstShlyuz() bool {
+	shlyuzy, err := shlyuzyIzTablicyMarshrutov("/proc/net/route")
+	return err == nil && len(shlyuzy) > 0
+}
