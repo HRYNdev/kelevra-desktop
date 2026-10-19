@@ -123,6 +123,11 @@ fi
 cp "$PROFIL" "$DOM/profil.json"
 ln -sf "$LZHE" "$DOM/yadro/sing-box"
 pishi_scenariy '{}'
+# popytka.marker — лже-ядро (см. его шапку) на самом первом старте в рабочей
+# папке нарочно падает строкой «system proxy», это сценарий для stend/proksi.sh
+# (#5), не для этого стенда. Создаём маркер заранее, чтобы замер проверял
+# /api/zamerit, а не чужую порчу первой попытки (см. stend/vybor_uzla.sh).
+touch "$DOM/yadro/popytka.marker"
 
 rm -f "$STEND/sluzhba.log"
 # KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" — см. пояснение в stend/proksi.sh:
@@ -133,7 +138,18 @@ rm -f "$STEND/sluzhba.log"
 # KELEVRA_AVTOREZHIM_SHLYUZ — стенд физически стоит внутри домашней сети,
 # без подмены ARP-шлюз честно совпадает с домашним и авторежим решает «дома»
 # (та же беда, другой канал обнаружения — см. dom_po_shlyuzu.go).
-KELEVRA_DIR="$DOM" KELEVRA_PRAVA=net KELEVRA_BEZ_OBNOVLENIYA=1 \
+#
+# Без KELEVRA_PRAVA=net (0.6.77, e36411b): PodnyatZashchitu теперь отказывает
+# БЕЗ ПРАВ ещё до старта ядра (OshibkaNetPrav, sluzhba.go:2277). У стендов с
+# НАСТОЯЩИМ ядром (sing-box, напр. zhivoy_trafik.sh) права гасят принудительно:
+# реальные права этого контейнера (root) заставили бы настоящее ядро поднять
+# TUN на хосте. Здесь ядро — лже-ядро (cmd/lzhe_yadro): оно только разбирает
+# config.json и отвечает фейковым Clash API, никакого TUN/auto_route/сетевых
+# вызовов не делает (проверено — в main.go их нет), так что права этого
+# контейнера ему безопасны. Без этого рычага все четыре сцены не доходили до
+# ядра вовсе (⚫ ПРИБОР МЁРТВ на самом podklyuchit) — см. stend/vybor_uzla.sh,
+# тот же диагноз и то же решение для того же лже-ядра.
+KELEVRA_DIR="$DOM" KELEVRA_BEZ_OBNOVLENIYA=1 \
   KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" \
   KELEVRA_AVTOREZHIM_SHLYUZ="de:ad:be:ef:00:01" \
   "$BIN" --sluzhba > "$STEND/sluzhba.log" 2>&1 &
@@ -152,15 +168,36 @@ if [ -z "$URL" ]; then
   exit 7
 fi
 
-PODKL_KOD=$(curl -s -o "$STEND/podklyuchit.json" -w '%{http_code}' --max-time 30 \
-  -X POST "${URL}api/podklyuchit") || PODKL_KOD="000"
-BEDA_PODKL=$(pole "$STEND/podklyuchit.json" beda 2>/dev/null || true)
+# Без KELEVRA_PRAVA=net авторежим сам пытается поднять защиту ПРИ СТАРТЕ
+# (обстановка «вне дома» из-за KELEVRA_AVTOREZHIM_SHLYUZ выше) — это нажатие
+# кнопки отсюда гонится с тем же вызовом параллельно: оба пишут config.json
+# через одно и то же временное имя (perestroit), и кто-то из двух изредка
+# ловит чужой rename («no such file or directory»). Продукт тут ни при чём
+# (гонка только двух СТЕНДОВЫХ попыток поднять одно и то же), а не доказывать
+# удержание /api/zamerit при произвольной forme ответа — поэтому один-два
+# повтора нажатия, а не ослабление проверки кода/беды ниже.
+for _ in $(seq 1 5); do
+  PODKL_KOD=$(curl -s -o "$STEND/podklyuchit.json" -w '%{http_code}' --max-time 30 \
+    -X POST "${URL}api/podklyuchit") || PODKL_KOD="000"
+  BEDA_PODKL=$(pole "$STEND/podklyuchit.json" beda 2>/dev/null || true)
+  [ "$PODKL_KOD" = "200" ] && [ -z "$BEDA_PODKL" ] && break
+  sleep 0.3
+done
 if [ "$PODKL_KOD" != "200" ] || [ -n "$BEDA_PODKL" ]; then
   echo "⚫ ПРИБОР МЁРТВ: POST api/podklyuchit не удался (код $PODKL_KOD, беда: ${BEDA_PODKL:-нет}) — путь человека до кнопки не пройден" >&2
   cat "$STEND/sluzhba.log" >&2
   exit 7
 fi
-SOST0=$(curl -s --max-time 5 "${URL}api/sostoyanie")
+# Тот же манёвр авторежима за кулисами может отдать нашему нажатию 200 БЕЗ
+# самого подъёма («пока спрашивал обстановку, человек решил иначе — защиту не
+# трогаю», sluzhba.go:2718) — поднимает её в этот момент именно авторежимная
+# попытка, и ей нужно время. Поэтому sost ждём, а не читаем один раз сразу
+# после ответа кнопки.
+for _ in $(seq 1 20); do
+  SOST0=$(curl -s --max-time 5 "${URL}api/sostoyanie")
+  [ "$(printf '%s' "$SOST0" | pole - sost)" = "rabotaet" ] && break
+  sleep 0.3
+done
 if [ "$(printf '%s' "$SOST0" | pole - sost)" != "rabotaet" ]; then
   echo "⚫ ПРИБОР МЁРТВ: api/sostoyanie.sost != rabotaet после podklyuchit ($SOST0)" >&2
   exit 7
