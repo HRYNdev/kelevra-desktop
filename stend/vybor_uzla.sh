@@ -126,12 +126,28 @@ fi
 cp "$PROFIL" "$DOM/profil.json"
 ln -sf "$LZHE" "$DOM/yadro/sing-box"
 pishi_scenariy '{}'
+# popytka.marker — лже-ядро (см. его шапку) на самом первом старте в рабочей
+# папке нарочно падает строкой «system proxy», это сценарий для stend/proksi.sh
+# (#5), не для этого стенда. Создаём маркер заранее, чтобы клик по узлу
+# проверял /api/vybrat, а не чужую порчу первой попытки.
+touch "$DOM/yadro/popytka.marker"
 
 rm -f "$STEND/sluzhba.log"
 # KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" — см. пояснение в stend/proksi.sh:
 # контейнер сам отвечает fake-ip подменой, без неё domaSeychas (#78) честно,
 # но ложно решает «дома» и podklyuchit не поднимает защиту.
-KELEVRA_DIR="$DOM" KELEVRA_PRAVA=net KELEVRA_BEZ_OBNOVLENIYA=1 \
+#
+# Без KELEVRA_PRAVA=net (0.6.77, e36411b): PodnyatZashchitu теперь отказывает
+# БЕЗ ПРАВ ещё до старта ядра (OshibkaNetPrav, sluzhba.go:2277) — у остальных
+# стендов на этой машине (zhivoy_trafik.sh, zamer_skorosti.sh) ядро настоящее
+# (sing-box), и реальные права в LXC заставили бы его поднимать настоящий TUN
+# на хосте, поэтому там права гасят принудительно. Здесь ядро — наш лже-ядро
+# (cmd/lzhe_yadro, см. шапку файла): оно только разбирает config.json и
+# отвечает фейковым Clash API, никакого TUN/auto_route/сетевых вызовов не
+# делает (проверено — в main.go их нет), так что реальные права этого
+# контейнера (root) ему безопасны. Без этого рычага сцены а/в (живой Clash
+# API, --kontrol=a/c) не доходили до ядра вовсе и были ложно-зелёными.
+KELEVRA_DIR="$DOM" KELEVRA_BEZ_OBNOVLENIYA=1 \
   KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" \
   "$BIN" --sluzhba > "$STEND/sluzhba.log" 2>&1 &
 SLUZHBA_PID=$!
