@@ -120,7 +120,7 @@ shag "изолированный дом" "$DOM: profil.json + yadro/sing-box (с
 rm -f "$STEND/sluzhba.log"
 # KELEVRA_AVTOREZHIM_DNS+KELEVRA_AVTOREZHIM_SHLYUZ — см. пояснение в
 # stend/proksi.sh: без ОБЕИХ подмен domaSeychas (#78) честно, но ложно решает
-# «дома» (стенд физически в домашней сети Вовы) и podklyuchit возвращает
+# «дома» (стенд физически в домашней сети владельца) и podklyuchit возвращает
 # 200 без попытки поднять защиту вовсе, не добираясь до прав — без SHLYUZ
 # здесь ровно так и было (sost остался «stoit», шаг 4 ловил не беду продукта).
 KELEVRA_DIR="$DOM" KELEVRA_PRAVA=net KELEVRA_BEZ_OBNOVLENIYA=1 \
