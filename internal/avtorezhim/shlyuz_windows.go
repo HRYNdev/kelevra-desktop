@@ -88,6 +88,42 @@ type shlyuzIntrfeysa struct {
 	indeks uint32
 }
 
+// EstShlyuz — есть ли у машины сеть: шлюз IPv4 хотя бы на одном физическом
+// адаптере (не loopback, не туннель, не наш TUN — тот же отбор, что у
+// MakiShlyuzov).
+//
+// Зачем. Служба ждёт по нему сеть после сна машины (internal/sluzhba,
+// dozhdatsyaSeti): пока Wi-Fi не получил адрес, шлюза нет, ядро пишет
+// «missing default interface», а любой запрос падает на «no such host».
+// В отличие от MakiShlyuzov, ARP-записи соседа не требует: сразу после сна
+// её может ещё не быть, а сеть уже есть.
+//
+// Одного шлюза мало: у отключённого адаптера GetAdaptersInfo оставляет
+// прежний шлюз в списке, а адрес обнуляет. Замер на стенде 19.10: сеть VM
+// выключена (link_down), у адаптера gw=192.168.1.1 при IP 0.0.0.0 — и
+// ожидание сети после сна считало, что сеть уже есть. Поэтому нужен ещё и
+// свой ненулевой IPv4 на том же адаптере.
+func EstShlyuz() bool {
+	adaptery, err := poluchitSvedeniyaAdapterov()
+	if err != nil {
+		return false
+	}
+	for a := adaptery; a != nil; a = a.Next {
+		if a.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK || a.Type == windows.IF_TYPE_TUNNEL || a.Type == propVirtual {
+			continue
+		}
+		if svoyPoOpisaniyu(a) {
+			continue
+		}
+		// pervyyShlyuzIPv4 годится и для списка адресов: тот же тип списка,
+		// и «0.0.0.0» он так же считает пустым местом.
+		if pervyyShlyuzIPv4(&a.GatewayList) != "" && pervyyShlyuzIPv4(&a.IpAddressList) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // shlyuzFizicheskogoAdaptera — IPv4 шлюза и индекс интерфейса физического
 // адаптера.
 //
