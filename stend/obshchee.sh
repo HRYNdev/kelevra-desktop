@@ -129,6 +129,64 @@ proverit_i_pochinit_wineprefix() {
   fi
 }
 
+# === подпись обновления (df682ca8): служба ставит только релиз с Kelevra.exe.sig ===
+#
+# Диагноз (наряд 1019-160335): с df682ca8 продукт (internal/obnovlenie) даже
+# не ПРЕДЛАГАЕТ релиз без asset Kelevra.exe.sig, а при неверной подписи честно
+# отказывается ставить. Копии pishi_relizy() в стендах отдавали релиз без
+# .sig и собирали бинарь без тестового ключа — стенды краснели не из-за беды
+# продукта, а из-за того, что сами не умели пройти его же честную проверку.
+# Законный путь уже заложен хозяином: podpis.KlyuchHex — var, подменяется
+# ldflags; cmd/podpisat подписывает файл и тут же сам себя проверяет вшитым
+# ключом. Три функции ниже — вместо девятой копии того же самого в каждом
+# стенде.
+
+# podpis_test_paru <katalog> — тестовая пара ed25519 НА ЭТОТ ПРОГОН (в
+# $katalog, который лежит под .stend/ — см. stend/.gitignore, в git не
+# попадает). Выставляет PODPIS_SEED_B64 (приватный, для KELEVRA_SIGN_KEY) и
+# PODPIS_PUB_HEX (публичный, для -X .../podpis.KlyuchHex=).
+podpis_test_paru() {
+  local katalog=$1
+  mkdir -p "$katalog"
+  python3 -c '
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization as s
+import base64
+k = Ed25519PrivateKey.generate()
+seed = k.private_bytes(s.Encoding.Raw, s.PrivateFormat.Raw, s.NoEncryption())
+pub = k.public_key().public_bytes(s.Encoding.Raw, s.PublicFormat.Raw)
+print(base64.b64encode(seed).decode())
+print(pub.hex())
+' > "$katalog/podpis_para.txt"
+  PODPIS_SEED_B64=$(sed -n '1p' "$katalog/podpis_para.txt")
+  PODPIS_PUB_HEX=$(sed -n '2p' "$katalog/podpis_para.txt")
+}
+
+# sobrat_s_podpisyu <koren> <vyhod> <paket> [dop-ldflags] — go build с вшитым
+# тестовым открытым ключом (PODPIS_PUB_HEX из podpis_test_paru), плюс любые
+# доп. -X той же сборке (версия и т.п.).
+sobrat_s_podpisyu() {
+  local koren=$1 vyhod=$2 paket=$3 dop=${4:-}
+  ( cd "$koren" && go build -ldflags "-X github.com/HRYNdev/kelevra-desktop/internal/podpis.KlyuchHex=$PODPIS_PUB_HEX $dop" -o "$vyhod" "$paket" )
+}
+
+# pishi_relizy_s_podpisyu <relizy.json> <teg> <url_exe> <razmer_exe> <url_sig> —
+# общий relizy.json с ОБОИМИ assets, без которых df682ca8 релиз даже не
+# предложит (см. internal/obnovlenie/obnovlenie.go:169).
+pishi_relizy_s_podpisyu() {
+  python3 -c '
+import json, sys
+vyhod, teg, url_exe, razmer, url_sig = sys.argv[1:6]
+json.dump([{
+    "tag_name": teg, "draft": False, "prerelease": False,
+    "assets": [
+        {"name": "Kelevra.exe", "browser_download_url": url_exe, "size": int(razmer)},
+        {"name": "Kelevra.exe.sig", "browser_download_url": url_sig, "size": 1},
+    ],
+}], open(vyhod, "w"))
+' "$1" "$2" "$3" "$4" "$5"
+}
+
 wine_zapusti() {
   local log=$1 zhurnal=$2 stroka=$3 taimaut=$4
   shift 4
