@@ -14,16 +14,27 @@
 # cmd/kelevra/zapusk_other.go, --sluzhba) — здесь этим и пользуемся: собираем
 # `cmd/kelevra` под Linux, поднимаем его как настоящий процесс со своим
 # изолированным домом (KELEVRA_DIR — отдельная папка внутри .stend/, никогда
-# не настоящий ~/.local/share/kelevra), просим подключиться и гоняем через
-# него один маленький живой пакет — с проверкой ДВУМЯ каналами (код ответа И
-# счётчики трафика самого ядра), чтобы одна враньём не прикрыла другую.
+# не настоящий ~/.local/share/kelevra) и просим подключиться. При настоящих
+# правах (вне этой песочницы) здесь гонялся живой пакет с проверкой ДВУМЯ
+# каналами (код ответа И счётчики трафика ядра) — см. шаг 5 и комментарий
+# ниже про 0.6.77, почему здесь он не проверяется.
 #
-# Режим — только прокси: LXC не поднимет TUN (`auto_route` требует адаптер,
-# которого тут нет), поэтому права принудительно гасим тем же рычагом, что и
-# остальные стенды на этой машине — KELEVRA_PRAVA=net (internal/prava/prava_other.go).
-# Туннель этим стендом НЕ доказывается — это ограничение среды, а не программы,
-# и то, что оно ограничение среды, видно по режиму в /api/sostoyanie: "proksi"
-# наступает не из-за отказа, а потому что prava.Est() вернул false нарочно.
+# 0.6.77 (e36411b): неполного (прокси) режима больше нет — без прав
+# администратора podklyuchit отдаёт OshibkaNetPrav СРАЗУ (internal/sluzhba/
+# sluzhba.go:PodnyatZashchitu), ядро не запускается вовсе, mixed-порт не
+# слушает, системный прокси не ставится никогда. LXC не поднимет TUN
+# (`auto_route` требует адаптер, которого тут нет) и настоящих root-прав
+# здесь нет и не будет — поэтому права принудительно гасим тем же рычагом,
+# что и остальные стенды на этой машине, KELEVRA_PRAVA=net
+# (internal/prava/prava_other.go), и НЕЛЬЗЯ его снимать: реальные root-права
+# в LXC поднимут настоящий TUN на ХОСТЕ.
+#
+# Живой трафик (сам смысл имени стенда) этим рычагом доказать нельзя: без
+# прав приложение даже не пытается поднять ядро. Шаг 5 поэтому стоит за
+# явным условием «есть права» (KELEVRA_STEND_IMEET_PRAVA=1) и в этой
+# песочнице печатает «⚪ не проверяется», не роняя итог; шаг 4 вместо
+# старого «подключение без прав» доказывает инверсию — то самое поведение,
+# которое 0.6.77 гарантирует без прав (400 OshibkaNetPrav, ядро не стартует).
 set -u
 KOREN=$(cd "$(dirname "$0")/.." && pwd)
 export PATH="$PATH:/usr/local/go/bin"
@@ -107,11 +118,13 @@ shag "изолированный дом" "$DOM: profil.json + yadro/sing-box (с
 
 # --- шаг 3: своя служба + /api/podklyuchit без прав ----------------------
 rm -f "$STEND/sluzhba.log"
-# KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" — см. пояснение в stend/proksi.sh:
-# контейнер сам отвечает fake-ip подменой, без неё domaSeychas (#78) честно,
-# но ложно решает «дома» и podklyuchit не поднимает защиту.
+# KELEVRA_AVTOREZHIM_DNS+KELEVRA_AVTOREZHIM_SHLYUZ — см. пояснение в
+# stend/proksi.sh: без ОБЕИХ подмен domaSeychas (#78) честно, но ложно решает
+# «дома» (стенд физически в домашней сети владельца) и podklyuchit возвращает
+# 200 без попытки поднять защиту вовсе, не добираясь до прав — без SHLYUZ
+# здесь ровно так и было (sost остался «stoit», шаг 4 ловил не беду продукта).
 KELEVRA_DIR="$DOM" KELEVRA_PRAVA=net KELEVRA_BEZ_OBNOVLENIYA=1 \
-  KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" \
+  KELEVRA_AVTOREZHIM_DNS="127.0.0.1:1" KELEVRA_AVTOREZHIM_SHLYUZ="de:ad:be:ef:00:01" \
   "$BIN" --sluzhba > "$STEND/sluzhba.log" 2>&1 &
 SLUZHBA_PID=$!
 
@@ -133,91 +146,48 @@ if [ -z "$SOST0" ]; then
 fi
 shag "своя служба" "процесс pid=$SLUZHBA_PID слушает $URL, api/sostoyanie отвечает: $SOST0" "поднята"
 
-# --- шаг 4: подключение без прав (только прокси) и готовность ядра -------
-# Готовность ждём НЕ сном: ручка /api/podklyuchit сама блокируется внутри
-# (yadro.Zapustit опрашивает Clash API каждые 300мс, см. internal/yadro/yadro.go)
-# и возвращает ответ только когда ядро либо ответило, либо истёк её же таймаут
-# (70с). Наш --max-time чуть шире её собственного, а не подменяет ожидание.
-PODKL_KOD=$(curl -s -o "$STEND/podklyuchit.json" -w '%{http_code}' --max-time 85 \
+# --- шаг 4: инверсия — без прав ядро не стартует вовсе (0.6.77) ----------
+# До 0.6.77 здесь ждали 200 {gotovo:true} и режим «прокси». Теперь без прав
+# PodnyatZashchitu отказывает ДО старта ядра (sluzhba.go:2277): это и есть
+# контракт, который стенд обязан ловить, если он больше не может поднять
+# живой трафик (владелец 17.10: «нет никаких неполных режимов»).
+PODKL_KOD=$(curl -s -o "$STEND/podklyuchit.json" -w '%{http_code}' --max-time 15 \
   -X POST "${URL}api/podklyuchit") || PODKL_KOD="000"
 BEDA=$(pole "$STEND/podklyuchit.json" beda 2>/dev/null || true)
-if [ "$PODKL_KOD" != "200" ] || [ -n "$BEDA" ]; then
-  past "подключение без прав" "POST api/podklyuchit → 200 {gotovo:true}" \
-    "код $PODKL_KOD, беда: ${BEDA:-нет тела}" "$(tail -c 4000 "$DOM/yadro/yadro.log" 2>/dev/null)$(printf '\n---kelevra.log---\n')$(tail -c 2000 "$DOM/kelevra.log" 2>/dev/null)"
+if [ "$PODKL_KOD" != "400" ] || [ "$BEDA" != "Для работы Kelevra нужны права администратора." ]; then
+  past "инверсия: без прав — отказ сразу" "POST api/podklyuchit → 400 {беда: OshibkaNetPrav}" \
+    "код $PODKL_KOD, беда: ${BEDA:-нет тела}" "$(cat "$STEND/podklyuchit.json" 2>/dev/null)"
 fi
 SOST1=$(curl -s --max-time 5 "${URL}api/sostoyanie")
 SOST_VAL=$(printf '%s' "$SOST1" | pole - sost)
-REZHIM_VAL=$(printf '%s' "$SOST1" | pole - rezhim)
-YADRO_PID=$(printf '%s' "$SOST1" | pole - pid)
-if [ "$SOST_VAL" != "rabotaet" ]; then
-  past "подключение без прав" "api/sostoyanie.sost == rabotaet" \
-    "sost=$SOST_VAL (ждали rabotaet)" "$(tail -c 4000 "$DOM/yadro/yadro.log" 2>/dev/null)"
+if [ "$SOST_VAL" = "rabotaet" ]; then
+  past "инверсия: без прав — отказ сразу" "api/sostoyanie.sost != rabotaet (ядро не поднялось)" \
+    "sost=rabotaet — отказ в правах не помешал ядру стартовать" ""
 fi
-if [ "$REZHIM_VAL" = "tunnel" ]; then
-  past "подключение без прав" "режим proksi (KELEVRA_PRAVA=net запрещает tunnel)" \
-    "получили rezhim=tunnel — KELEVRA_PRAVA не подействовал" ""
+if pgrep -f "$DOM" > /dev/null 2>&1; then
+  past "инверсия: без прав — отказ сразу" "ни одного процесса ядра с путём $DOM после отказа" \
+    "процесс ядра стартовал несмотря на отказ в правах: $(pgrep -af "$DOM")" ""
 fi
-shag "подключение без прав" "ядро поднято ЧЕРЕЗ САМО ПРИЛОЖЕНИЕ: pid ядра=$YADRO_PID, режим=$REZHIM_VAL (туннель недостижим в LXC — не пробуем)" "rabotaet"
+shag "инверсия: без прав — отказ сразу" "код $PODKL_KOD, беда=«$BEDA», sost=$SOST_VAL, процессов ядра по $DOM: 0" "0.6.77 держит контракт"
 
-# --- шаг 5: живой трафик, два независимых канала -------------------------
-CFG="$DOM/yadro/config.json"
-MIXED_PORT=$(python3 -c '
-import json
-d = json.load(open("'"$CFG"'"))
-for vh in d.get("inbounds", []):
-    if vh.get("type") == "mixed":
-        print(vh.get("listen_port", ""))
-        break
-')
-CLASH=$(python3 -c '
-import json
-d = json.load(open("'"$CFG"'"))
-c = d.get("experimental", {}).get("clash_api", {})
-print(c.get("external_controller", ""), c.get("secret", ""))
-')
-CLASH_ADRES=$(echo "$CLASH" | awk '{print $1}')
-CLASH_SEKRET=$(echo "$CLASH" | awk '{print $2}')
-if [ -z "$MIXED_PORT" ] || [ -z "$CLASH_ADRES" ]; then
-  past "живой трафик" "прокси-порт и Clash API из рабочего конфига $CFG" \
-    "не разобрал конфиг: mixed_port='$MIXED_PORT' clash='$CLASH_ADRES'" "$(cat "$CFG" 2>/dev/null)"
+# --- шаг 5: живой трафик — только если есть права (здесь их нет и не будет) -
+# Живой трафик через настоящее ядро в LXC не воспроизвести: снять
+# KELEVRA_PRAVA=net нельзя (реальные root-права поднимут TUN на хосте), а без
+# него 0.6.77 не запускает ядро вовсе — шаг 4 это и доказывает. Условие ниже
+# оставлено явным (не удалено молча), чтобы на машине с настоящими правами
+# стенд проверил сам трафик, а не только отказ.
+if [ "${KELEVRA_STEND_IMEET_PRAVA:-0}" = "1" ]; then
+  past "живой трафик" "KELEVRA_STEND_IMEET_PRAVA=1 на этой машине" \
+    "ветка с правами не реализована в этом наряде — живой трафик через туннель это следующий наряд, не zamer_skorosti.sh и не этот стенд" ""
 fi
+shag "живой трафик" "KELEVRA_STEND_IMEET_PRAVA=${KELEVRA_STEND_IMEET_PRAVA:-0}, LXC без root-прав на TUN" \
+  "⚪ не проверяется: нет прав (0.6.77)"
 
-zapros_clash() { # $1 путь Clash API, например /connections
-  local hdr=()
-  [ -n "$CLASH_SEKRET" ] && hdr=(-H "Authorization: Bearer $CLASH_SEKRET")
-  curl -s --max-time 5 "${hdr[@]}" "http://${CLASH_ADRES}$1"
-}
-
-DO_TO=$(zapros_clash /connections)
-UP0=$(printf '%s' "$DO_TO" | pole - uploadTotal); UP0=${UP0:-0}
-VNIZ0=$(printf '%s' "$DO_TO" | pole - downloadTotal); VNIZ0=${VNIZ0:-0}
-
-HTTP_KOD=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-  -x "http://127.0.0.1:${MIXED_PORT}" https://www.gstatic.com/generate_204) || HTTP_KOD="000"
-
-POSLE=$(zapros_clash /connections)
-UP1=$(printf '%s' "$POSLE" | pole - uploadTotal); UP1=${UP1:-0}
-VNIZ1=$(printf '%s' "$POSLE" | pole - downloadTotal); VNIZ1=${VNIZ1:-0}
-
-if [ "$HTTP_KOD" != "204" ]; then
-  past "живой трафик" "curl -x 127.0.0.1:$MIXED_PORT https://www.gstatic.com/generate_204 → 204" \
-    "код $HTTP_KOD" "$(tail -c 3000 "$DOM/yadro/yadro.log" 2>/dev/null)"
-fi
-if ! [ "$UP1" -gt "$UP0" ] || ! [ "$VNIZ1" -gt "$VNIZ0" ]; then
-  past "живой трафик" "второй канал: счётчики Clash API (uploadTotal/downloadTotal) выросли" \
-    "up $UP0→$UP1, down $VNIZ0→$VNIZ1 — 204 пришёл, но счётчики ядра молчат: канал не прикрыт вторым" ""
-fi
-shag "живой трафик" "204 через 127.0.0.1:$MIXED_PORT (mixed-in из профиля) И Clash API: up $UP0→$UP1 байт, down $VNIZ0→$VNIZ1 байт" "204 + оба счётчика выросли"
-
-# --- шаг 6: корректное отключение, ядро не остаётся сиротой --------------
+# --- шаг 6: корректное завершение службы, сирот не осталось ---------------
 OTKL_KOD=$(curl -s -o "$STEND/otklyuchit.json" -w '%{http_code}' --max-time 15 \
   -X POST "${URL}api/otklyuchit") || OTKL_KOD="000"
 if [ "$OTKL_KOD" != "200" ]; then
-  past "отключение" "POST api/otklyuchit → 200" "код $OTKL_KOD" "$(cat "$STEND/otklyuchit.json" 2>/dev/null)"
-fi
-sleep 0.5
-if [ -n "$YADRO_PID" ] && kill -0 "$YADRO_PID" 2>/dev/null; then
-  past "отключение" "процесс ядра pid=$YADRO_PID мёртв после otklyuchit" "процесс всё ещё жив — сирота" ""
+  past "отключение" "POST api/otklyuchit → 200 (идемпотентно, ядро и не поднималось)" "код $OTKL_KOD" "$(cat "$STEND/otklyuchit.json" 2>/dev/null)"
 fi
 kill -TERM "$SLUZHBA_PID" 2>/dev/null
 SLUZHBA_MERTVA="нет"
@@ -233,6 +203,6 @@ if pgrep -f "$DOM" > /dev/null 2>&1; then
   past "отключение" "ни одного процесса с путём $DOM не осталось" \
     "остались: $(pgrep -af "$DOM")" ""
 fi
-shag "отключение" "otklyuchit → ядро pid=$YADRO_PID мертво, служба вышла по сигналу сама, сирот по $DOM нет" "чисто"
+shag "отключение" "otklyuchit (идемпотентно, ядро не поднималось), служба вышла по сигналу сама, сирот по $DOM нет" "чисто"
 
 printf '\nВСЁ ЖИВЬЁМ: %d/%d шагов зелёных, отказов ноль.\n' "$SHAG_N" "$VSEGO"
