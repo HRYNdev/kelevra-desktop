@@ -58,6 +58,12 @@ NASTR='HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
 ZHURNAL="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/kelevra.log"
 bed=0
 
+# PROKSI_SC — какие сценарии гонять (по умолчанию все 8). Нужна для изоляции
+# одного сценария от соседей при разборе гонки (18.10): не удаляем соседей,
+# просто не запускаем их в этом прогоне. "6" гоняет только сц.6.
+PROKSI_SC=${PROKSI_SC:-"1 2 3 4 5 6 7 8"}
+sc_vkl() { case " $PROKSI_SC " in *" $1 "*) return 0;; *) return 1;; esac; }
+
 reg_get() { # $1 имя значения -> печатает значение (или пусто)
   # wine пишет вывод с \r\n (виндовый формат): без tr -d '\r' сравнение строк
   # в скрипте молча ломается — 0x0 с хвостовым CR не равен чистому "0x0".
@@ -150,6 +156,7 @@ if ! GOOS=windows GOARCH=amd64 go build -o "$STEND/lzhe_yadro.exe" "$KORFN/cmd/l
   echo "  НЕ СОБРАЛСЯ"; exit 1
 fi
 
+if sc_vkl 1; then
 echo "── сценарий 1: прокси был включён нами, «Отключить» должен снять его ──"
 reg_set 1 127.0.0.1:2412
 do_before=$(reg_get ProxyEnable); server_before=$(reg_get ProxyServer)
@@ -180,7 +187,9 @@ else
   fi
 fi
 ostanovit
+fi
 
+if sc_vkl 2; then
 echo "── сценарий 2: прокси и так выключен, «Отключить» не должен трогать чужую настройку ──"
 reg_set 0 10.0.0.9:9999
 do_before=$(reg_get ProxyEnable); server_before=$(reg_get ProxyServer)
@@ -208,7 +217,9 @@ else
   fi
 fi
 ostanovit
+fi
 
+if sc_vkl 3; then
 echo "── сценарий 3: ядро прописало прокси и упало при старте — «Подключить» должен снять его тоже ──"
 # Диагноз 20.08 (второй заход): ядро прописывает системный прокси ДО того, как
 # ответит его Clash API — Zapustit() может упасть или не дождаться API за
@@ -244,6 +255,7 @@ else
   fi
 fi
 ostanovit
+fi
 
 # Сценарии 4/5/8 до e36411b (17.10) доказывали ПОСТАНОВКУ системного прокси
 # тремя разными входами (успешная постановка ядром, подстраховка приложением
@@ -340,53 +352,49 @@ ostanovit_zhestko() {
   sleep 1
 }
 
+if sc_vkl 4; then
 echo "── сценарий 4 (бывш. «удачное подключить ставит прокси»): настоящее ядро, вход тот же — постановки больше нет ──"
 cp "$KORFN/internal/konfig/testdata/profil_stend_bez_seti.json" "$PROFIL"
 cp "$YADRO_ISTOCHNIK" "$YADRO_PAPKA/sing-box.exe"
 bez_prav_odin_i_tot_zhe_itog 4 "настоящее sing-box.exe"
 ostanovit_zhestko
+fi
 
+if sc_vkl 5; then
 echo "── сценарий 5 (бывш. «подстраховка после громкого отказа ядра»): лже-ядро, вход тот же — подстраховки ставить нечего ──"
 cp "$STEND/lzhe_yadro.exe" "$YADRO_PAPKA/sing-box.exe"
 bez_prav_odin_i_tot_zhe_itog 5 "лже-ядро (имитирует отказ «system proxy»)"
 ostanovit_zhestko
+fi
 
+if sc_vkl 8; then
 echo "── сценарий 8 (бывш. «подстраховка после тихого отказа ядра»): лже-ядро с tiho.marker, вход тот же ──"
 : > "$YADRO_PAPKA/tiho.marker"
 bez_prav_odin_i_tot_zhe_itog 8 "лже-ядро (имитирует тихий успех без прокси)"
 rm -f "$YADRO_PAPKA/tiho.marker"
 ostanovit_zhestko
+fi
 
-echo "── сценарий 6: след СТАРОЙ версии (до 0.6.77) переживший жёсткую смерть — обязан снять СЛЕДУЮЩИЙ запуск окна ──"
-# До 0.6.77 ядро само ставило системный прокси, и жёсткая смерть (Диспетчер
-# задач, пропадание питания — оконная сборка без консоли SIGTERM не получает)
-# оставляла его висеть (жалоба 20.08 10:23). С 0.6.77 этот путь ПОСТАНОВКИ
-# больше не существует вовсе (см. правку e36411b, konfig.go: set_system_proxy
-# не ставится никогда) — живьём воспроизвести «ядро поставило прокси и умерло»
-# нечем: сборка уже не умеет его ставить, а без прав администратора (их у
-# этого wine-процесса в этой песочнице нет и не будет) до запуска ядра дело
-# вообще не доходит.
-#
-# Проверка, которую это ломает, НЕ про постановку — она про УБОРКУ следа
-# версии, обновившейся ИЗ прокси-режима (ровно задача proksi.UbratSled,
-# см. его шапку). Этот след сюда кладём руками, как кладёт его старая
-# версия: реестр + файл-метка, — а не через живое «Подключить», которого
-# больше нет. Служба (--sluzhba) запускается, но без podklyuchit: UbratSled
-# в сервисной сборке зовётся только на подъёме туннеля и на выходе
-# (cmd/kelevra/main.go), поэтому голая служба ничего не трогает, а SIGKILL
-# снимает её, как Диспетчер задач — без единого штатного выхода.
+if sc_vkl 6; then
+echo "── сценарий 6: след СТАРОЙ версии (до 0.6.77) обязан быть снят уже ПЕРВЫМ стартом следующей копии ──"
+# Разбор 18.10 (изоляция от соседей, PROKSI_SC=6): прежняя версия сценария
+# ждала жёсткую смерть + ПОВТОРНЫЙ запуск окна — это описывало поведение ДО
+# правки с приёмом живого ядра. Сейчас уборка идёт раньше и иначе: при
+# !estPrava() (прав у wine-процесса в этой песочнице нет и не будет — см.
+# сц.4/5/8) PrinyatZhivoeYadro зовёт ubratYadroBezPrav(), а та —
+# s.snyatProksi() безусловно (internal/sluzhba/priyom_yadra.go:55-58,150-168).
+# Это СИНХРОННЫЙ вызов на каждом старте службы и происходит ДО строки «служба
+# слушает» (cmd/kelevra/main.go: вызов на 919-й, лог — на 966-й). Значит след
+# снимает уже первый обычный старт, SIGKILL и второе окно тут ни при чём —
+# старый вариант сценария проверял путь, которого в коде давно нет, и красноту
+# «реестр сам расчистился» выдавал за брак, а не за то, что сам же описывал
+# в шапке (proksi.UbratSled призван убирать след старых версий).
 METKA="$WINEPREFIX/drive_c/users/$(whoami)/AppData/Local/Kelevra/proksi.json"
 mkdir -p "$(dirname "$METKA")"
-# Площадка здесь — та же папка AppData, что и у сц.4/5/8 перед этим: их
-# завершение (ostanovit → SIGTERM) идёт через ШТАТНЫЙ выход процесса, а он
-# сам зовёт proksi.UbratSled()+tunnel.UbratMetku() (cmd/kelevra/main.go,
-# rabotaSluzhby, ветка sTreem) — то есть вайп метки и реестра на их СВОЁМ
-# выходе предусмотрен кодом, а не брак площадки. Беда в ДРУГОМ: bash видит
-# процесс мёртвым (pgrep молчит) раньше, чем wineserver успевает донести
-# этот вайп до диска/реестра — хвост приезжает уже ПОСЛЕ "до:" этого
-# сценария и стирает то, что мы только что положили руками (тот же класс
-# гонки, что в zhdat_tishiny_reestra выше, только по файлу, не по реестру).
-# Пишем метку и ждём секунду: не пережила — хвост ещё в пути, перекладываем снова.
+# Площадку кладём с проверкой-перестраховкой (цена три попытки по секунде):
+# прямого источника гонки для неё в 4/5/8 не нашли (там OshibkaNetPrav летит
+# раньше, чем код касается реестра или метки), но тишина реестра дешева, а
+# её отсутствие — красный «ПРИБОР МЁРТВ» без единого самого теста.
 for popytka in 1 2 3; do
   rm -f "$METKA"
   reg_set 1 127.0.0.1:2412
@@ -407,43 +415,23 @@ fi
 if [ -z "$url" ]; then
   echo "  служба не поднялась, журнал:"; tail -8 "$ZHURNAL" 2>/dev/null; bed=1
 else
-  echo "  служба: $url (жду, трогаю её только SIGKILL — ни api/podklyuchit, ни штатного выхода)"
-  echo "  убиваю Kelevra.exe жёстко (kill -9, без выхода)"
-  pkill -KILL -f '[K]elevra\.exe' 2>/dev/null
-  sleep 1
-  posle_kill=$(reg_get ProxyEnable); server_posle_kill=$(reg_get ProxyServer)
-  echo "  после жёсткой смерти: ProxyEnable=$posle_kill ProxyServer=$server_posle_kill, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
-  if [ "$posle_kill" != "0x1" ]; then
-    echo "  КРАСНЫЙ: реестр сам расчистился без нашей починки — сценарий не воспроизвёл беду"; bed=1
-  elif [ ! -s "$METKA" ]; then
-    echo "  КРАСНЫЙ: метка пропала сама по себе — сценарий не воспроизвёл беду"; bed=1
+  echo "  служба: $url (уборка должна была пройти ДО этой строки — она в журнале позже)"
+  posle=$(reg_get ProxyEnable); server_posle=$(reg_get ProxyServer)
+  echo "  после старта службы: ProxyEnable=$posle ProxyServer=$server_posle, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
+  if [ "$posle" != "0x0" ]; then
+    echo "  КРАСНЫЙ: ProxyEnable не снят первым стартом службы (осталось $posle)"; bed=1
+  elif [ -n "$server_posle" ]; then
+    echo "  КРАСНЫЙ: ProxyServer не стёрт первым стартом службы (осталось $server_posle)"; bed=1
+  elif [ -s "$METKA" ]; then
+    echo "  КРАСНЫЙ: прокси сняли, а метка на диске осталась — следующий запуск снова полезет её проверять зря"; bed=1
   else
-    echo "  подтверждено: ProxyEnable=0x1 висит без службы за ним — след старой версии воспроизведён"
-    echo "  запускаю Kelevra.exe СНОВА, в режиме окна (--tiho, без --sluzhba)"
-    wine_zapusti "$STEND/proksi_zapusk6_okno.log" "$ZHURNAL" "--- запуск Kelevra" 25 -- \
-      env KELEVRA_BEZ_OBNOVLENIYA=1 KELEVRA_AVTOREZHIM_DNS="$AVTOREZHIM_DNS_PODMENA" KELEVRA_AVTOREZHIM_SHLYUZ="$AVTOREZHIM_SHLYUZ_PODMENA" \
-      timeout 30 "$WINE" "$STEND/Kelevra.exe" --tiho
-    rc=$?
-    if [ "$rc" -eq 77 ]; then
-      echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
-      exit 7
-    fi
-    sleep 2
-    itog=$(reg_get ProxyEnable); server_itog=$(reg_get ProxyServer)
-    echo "  после повторного запуска окна: ProxyEnable=$itog ProxyServer=$server_itog, метка: $([ -s "$METKA" ] && cat "$METKA" || echo 'НЕТ')"
-    if [ "$itog" != "0x0" ]; then
-      echo "  КРАСНЫЙ: ProxyEnable не снят повторным запуском окна (осталось $itog)"; bed=1
-    elif [ -n "$server_itog" ]; then
-      echo "  КРАСНЫЙ: ProxyServer не стёрт повторным запуском окна (осталось $server_itog)"; bed=1
-    elif [ -s "$METKA" ]; then
-      echo "  КРАСНЫЙ: прокси сняли, а метка на диске осталась — следующий запуск снова полезет её проверять зря"; bed=1
-    else
-      echo "  зелёный: след старой версии снят повторным запуском окна, метка убрана"
-    fi
+    echo "  зелёный: след старой версии снят первым же стартом службы, метка убрана"
   fi
 fi
 ostanovit
+fi
 
+if sc_vkl 7; then
 echo "── сценарий 7 (страховка): чужой прокси без нашей метки повторный запуск окна не трогает ──"
 # Симметричная проверка сценарию 6: если метки на диске нет вовсе (мы прокси
 # не ставили — это прокси человека, прописанный им самим руками или другой
@@ -473,6 +461,7 @@ else
   echo "  зелёный: чужой включённый прокси без нашей метки не тронут"
 fi
 ostanovit
+fi
 
 echo "── итог: $([ $bed -eq 0 ] && echo ЗЕЛЁНЫЙ || echo КРАСНЫЙ) ──"
 exit $bed
