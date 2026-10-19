@@ -27,6 +27,16 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("KELEVRA_PROKSI", "net"); err != nil {
 		panic(err)
 	}
+	// И ни одна не имеет права стучаться на боевой сервер. Замер 19.10: тесты, где
+	// туннель «не встаёт», шлют срочный журнал (OtpravitZhurnalySrochno), а адрес
+	// без KELEVRA_PODPISKA — боевой subkv; каждый такой прогон заводил в учёте людей
+	// безымянные устройства (64 с ПК, 5 из-под wine за 17–19.10). Сервер — закрытый
+	// порт на себе: запрос сразу получает отказ и никуда не уходит.
+	for k, v := range map[string]string{"KELEVRA_PODPISKA": "127.0.0.1:1", "KELEVRA_SHEMA": "http"} {
+		if err := os.Setenv(k, v); err != nil {
+			panic(err)
+		}
+	}
 	// Установка обновления в этих проверках идёт на заглушках без ключа подписи;
 	// сама подпись проверяется в internal/obnovlenie и internal/podpis.
 	obnovlenie.TrebovatPodpis = false
