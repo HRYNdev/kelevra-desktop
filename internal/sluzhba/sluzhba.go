@@ -1139,6 +1139,11 @@ func otkazDoPeredachi(err error) bool {
 	return false
 }
 
+// bezOtpravkiZhurnalov — стендовый выключатель отправки журналов (расписание и срочная).
+func bezOtpravkiZhurnalov() bool {
+	return os.Getenv("KELEVRA_BEZ_OTPRAVKI_ZHURNALOV") == "1"
+}
+
 // SleditZaZhurnalami крутит суточную отправку по расписанию, пока живёт
 // служба — тем же тикером и тем же ctx, что SleditZaObnovleniem выше.
 //
@@ -2143,7 +2148,7 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 		var err error
 		adres, err = s.Podpiska.Voyti(ctx, kod, s.dveri())
 		if err != nil {
-			log.Printf("вход по коду не удался: %v", err)
+			log.Printf("вход по коду не удался: %s", podpiska.SkrytKod(err.Error()))
 			otdat(w, nil, err)
 			return
 		}

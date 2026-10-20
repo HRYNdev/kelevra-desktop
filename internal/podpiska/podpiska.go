@@ -243,7 +243,7 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 		}
 		otvet, err := k.http().Do(req)
 		if err != nil {
-			posledn, neTolko404 = err, true
+			posledn, neTolko404 = SkrytKodVOshibke(err), true
 			continue
 		}
 		telo, _ := io.ReadAll(io.LimitReader(otvet.Body, 64<<10))
@@ -435,6 +435,32 @@ func Maska(kod string) string {
 	return "***" + string(znaki[len(znaki)-2:])
 }
 
+// kodVAdrese — путь вида /k/<код>, /s/<код>, /u/<ключ> внутри строки (адрес целиком или
+// текст ошибки). Захватывает префикс, код и то, что за ним.
+var kodVAdrese = regexp.MustCompile(`(/(?:k|s|u)/)([A-Za-z0-9_-]{4,64})([/?"\s:]|$)`)
+
+// SkrytKod прячет код доступа (и ключ устройства) в произвольной строке — адресе
+// или тексте ошибки — тем же видом, что Maska. Нужна везде, где адрес с кодом может
+// попасть в журнал: журнал уезжает на сервер, а в нём без этого лежал бы рабочий код
+// целиком («вход по коду не удался: Post https://…/k/<КОД>/ustroystvo»).
+func SkrytKod(tekst string) string {
+	return kodVAdrese.ReplaceAllStringFunc(tekst, func(m string) string {
+		g := kodVAdrese.FindStringSubmatch(m)
+		return g[1] + Maska(g[2]) + g[3]
+	})
+}
+
+// SkrytKodVOshibke — ошибка сети (*url.Error) носит адрес с кодом в тексте; отдаёт
+// ту же ошибку с замаскированным адресом, цепочка errors.Is/As сохраняется.
+// Прочие ошибки возвращаются как есть.
+func SkrytKodVOshibke(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return &url.Error{Op: ue.Op, URL: SkrytKod(ue.URL), Err: ue.Err}
+	}
+	return err
+}
+
 // SvedeniyaPoAdresu — то же, что Svedeniya, по сохранённому адресу подписки (+ /info).
 func (k *Klient) SvedeniyaPoAdresu(ctx context.Context, adres string) (*Svedeniya, error) {
 	u := strings.TrimSuffix(adres, "/") + "/info"
@@ -493,7 +519,7 @@ func (k *Klient) vzyat(ctx context.Context, url string) ([]byte, int, error) {
 	}
 	otvet, err := k.http().Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, SkrytKodVOshibke(err)
 	}
 	defer otvet.Body.Close()
 	// Потолок в 8 МБ: конфиг заведомо меньше, а битый сервер не должен съесть память.
