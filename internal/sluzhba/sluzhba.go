@@ -1139,6 +1139,11 @@ func otkazDoPeredachi(err error) bool {
 	return false
 }
 
+// bezOtpravkiZhurnalov — стендовый выключатель отправки журналов (расписание и срочная).
+func bezOtpravkiZhurnalov() bool {
+	return os.Getenv("KELEVRA_BEZ_OTPRAVKI_ZHURNALOV") == "1"
+}
+
 // SleditZaZhurnalami крутит суточную отправку по расписанию, пока живёт
 // служба — тем же тикером и тем же ctx, что SleditZaObnovleniem выше.
 //
@@ -1148,7 +1153,7 @@ func otkazDoPeredachi(err error) bool {
 // KELEVRA_BEZ_OTPRAVKI_ZHURNALOV=1 глушит слежку целиком — на нём стоят
 // стенды (stend/*.sh), которым сеть тут не нужна и не должна понадобиться.
 func (s *Sluzhba) SleditZaZhurnalami(ctx context.Context, shag time.Duration) {
-	if os.Getenv("KELEVRA_BEZ_OTPRAVKI_ZHURNALOV") == "1" {
+	if bezOtpravkiZhurnalov() {
 		return
 	}
 	if shag <= 0 {
@@ -2143,7 +2148,7 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 		var err error
 		adres, err = s.Podpiska.Voyti(ctx, kod, s.dveri())
 		if err != nil {
-			log.Printf("вход по коду не удался: %v", err)
+			log.Printf("вход по коду не удался: %s", podpiska.SkrytKod(err.Error()))
 			otdat(w, nil, err)
 			return
 		}
@@ -3100,6 +3105,11 @@ func (s *Sluzhba) snyatProksi() {
 // наложиться, а отметка об удаче не даёт ночной посылке уйти второй раз с
 // теми же байтами.
 func (s *Sluzhba) OtpravitZhurnalySrochno(ctx context.Context) {
+	// Стендовый выключатель гасит и срочную посылку, не только расписание:
+	// копия на стенде с ним не должна слать журнал никуда.
+	if bezOtpravkiZhurnalov() {
+		return
+	}
 	s.zamok.Lock()
 	if s.zhurnalyIdut {
 		s.zamok.Unlock()

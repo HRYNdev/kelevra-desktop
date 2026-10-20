@@ -135,6 +135,10 @@ jobs:
         env:
           TEG: ${{ steps.versiya.outputs.teg }}
         run: |
+          # actions/checkout кладёт ЛЁГКИЙ тег (ссылка прямо на коммит), и
+          # %(contents) тогда отдаёт сообщение коммита, а не аннотацию.
+          # Перетягиваем настоящий тег с сервера, перезаписав локальный.
+          git fetch --force origin "refs/tags/$TEG:refs/tags/$TEG"
           git tag -l --format='%(contents)' "$TEG" > build/opisanie.md
           if [ ! -s build/opisanie.md ]; then
             echo "Сборка $TEG." > build/opisanie.md
