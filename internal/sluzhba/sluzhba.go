@@ -948,7 +948,7 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 	put, err := obnovlenie.PutSebya()
 	if err != nil {
 		log.Printf("установка обновления по тычку: не знаю, где лежу: %v", err)
-		return "", fmt.Errorf("не знаю, где лежу: %w", err)
+		return "", fmt.Errorf("путь к программе не определён: %w", err)
 	}
 	ctx, otmena := context.WithTimeout(context.Background(), srokUstanovkiObnovleniya)
 	defer otmena()
@@ -964,7 +964,7 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 	}
 	if err := obnovlenie.PostavitSHodom(ctx, &http.Client{Timeout: srokUstanovkiObnovleniya}, n, put, hod); err != nil {
 		log.Printf("установка обновления по тычку: не вышло (%v), работаю старой версией", err)
-		return "", fmt.Errorf("не поставилось: %w", err)
+		return "", fmt.Errorf("обновление не установлено: %w", err)
 	}
 	log.Printf("установка обновления по тычку: версия %s встала на диск", n.Versiya)
 
@@ -1326,7 +1326,7 @@ func (s *Sluzhba) vybrat(w http.ResponseWriter, r *http.Request) {
 		Uzel   string `json:"uzel"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
-		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		otdat(w, nil, fmt.Errorf("запрос не разобран"))
 		return
 	}
 	if vhod.Gruppa == "" || vhod.Uzel == "" {
@@ -1433,7 +1433,7 @@ func (s *Sluzhba) zamerit(w http.ResponseWriter, r *http.Request) {
 		Uzly []string `json:"uzly"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&vhod); err != nil {
-		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		otdat(w, nil, fmt.Errorf("запрос не разобран"))
 		return
 	}
 	if len(vhod.Uzly) > 32 {
@@ -1837,7 +1837,7 @@ func (s *Sluzhba) avtozapuskRuchka(w http.ResponseWriter, r *http.Request) {
 		Vklyuchit bool `json:"vklyuchit"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
-		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		otdat(w, nil, fmt.Errorf("запрос не разобран"))
 		return
 	}
 	var err error
@@ -1856,7 +1856,7 @@ func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
 		Vklyuchit bool `json:"vklyuchit"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
-		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		otdat(w, nil, fmt.Errorf("запрос не разобран"))
 		return
 	}
 	if vhod.Vklyuchit {
@@ -2133,7 +2133,7 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 		Kod string `json:"kod"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&vhod); err != nil {
-		otdat(w, nil, fmt.Errorf("не разобрал запрос"))
+		otdat(w, nil, fmt.Errorf("запрос не разобран"))
 		return
 	}
 	kod := strings.TrimSpace(vhod.Kod)
@@ -2369,7 +2369,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	s.dobavitPravilaIzKesha(&vybor, true)
 	if err := s.perestroit(vybor); err != nil {
 		log.Printf("не подготовил конфиг: %v", err)
-		return fmt.Errorf("не подготовил конфиг: %w", err)
+		return fmt.Errorf("конфигурация не подготовлена: %w", err)
 	}
 	// Имя адаптера из профиля — от него считается сдвиг адресов на повторах.
 	s.zamok.Lock()
@@ -2401,7 +2401,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	iskhodnyyZapusk := zapustit
 	zapustit = func(c context.Context) error {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("подъём защиты прерван: %w", err)
+			return fmt.Errorf("подъём связи прерван: %w", err)
 		}
 		return iskhodnyyZapusk(c)
 	}

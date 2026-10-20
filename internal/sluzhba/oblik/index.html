@@ -1340,7 +1340,7 @@
       <div class="karta karta-nastroyki" id="karta-set">
         <div class="perekl-ryad nastroyki-ryad" id="ryad-avtozapusk" hidden>
           <span class="perekl-tekst">Запускать вместе с Windows
-            <span class="podpis">Kelevra включится сам при входе в систему.</span>
+            <span class="podpis">Kelevra включается при входе в систему.</span>
             <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
           </span>
           <button class="perekl" id="perekl-avtozapusk" type="button" role="switch" aria-checked="false">
@@ -1541,7 +1541,7 @@ const PRIMETY = [
    delat: "Требуется перезагрузка компьютера."},
   {kogda: /address already in use|only one usage of each socket address|bind: /i,
    chto: "Порт занят другой программой",
-   delat: "Чаще всего порт удерживает другой VPN-клиент. Завершите его работу и повторите подключение."},
+   delat: "Порт может удерживать другой VPN-клиент. Завершите его работу и повторите подключение."},
   {kogda: /\b40[13]\b|unauthorized|forbidden|authentication failed|auth failed/i,
    chto: "Код доступа не принят",
    delat: "Откройте «Сменить код доступа» и введите действующий код."},
@@ -2334,8 +2334,8 @@ async function obnovit() {
   }
 
   let beda = s.beda || "", spokoyno = false;
-  if (s.kachaem_yadro) { beda = "Докачиваю рабочий файл — это разово, пара минут."; spokoyno = true; }
-  else if (!s.yadro_est) { beda = "Всё нужное докачается само при первом подключении."; spokoyno = true; }
+  if (s.kachaem_yadro) { beda = "Загружается рабочий файл."; spokoyno = true; }
+  else if (!s.yadro_est) { beda = "Рабочий файл будет загружен при первом подключении."; spokoyno = true; }
   // Без прав беды нет: состояние объяснено строкой над кнопкой «Дать права».
   if (bezPrav(s)) { beda = ""; spokoyno = false; }
   // Туннель не поднялся — заголовок беды говорит служба (s.otkaz, официальным
