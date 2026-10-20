@@ -123,9 +123,18 @@ func kakSluzhba(t *testing.T) {
 	if err != nil {
 		t.Fatalf("не узнать учётную запись проверки: %v", err)
 	}
-	sidProverki = tu.User.Sid.String()
+	sid := tu.User.Sid.String()
+	// В строке прав известные учётные записи пишутся сокращением (встроенный
+	// администратор раннера CI — «LA», а не S-1-5-21-…-500): сверять надо с
+	// тем видом, каким учётную запись покажет sddlFayla.
+	sd, err := windows.SecurityDescriptorFromString("D:(A;;FA;;;" + sid + ")")
+	if err != nil {
+		t.Fatalf("не разобрать учётную запись проверки %s: %v", sid, err)
+	}
+	vid := strings.TrimSuffix(sd.String(), ")")
+	sidProverki = vid[strings.LastIndex(vid, ";")+1:]
 	bylo := sddlTolkoSistema
-	sddlTolkoSistema = bylo + "(A;;FA;;;" + sidProverki + ")"
+	sddlTolkoSistema = bylo + "(A;;FA;;;" + sid + ")"
 	t.Cleanup(func() { sddlTolkoSistema = bylo })
 }
 
