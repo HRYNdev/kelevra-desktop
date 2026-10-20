@@ -35,6 +35,7 @@ RELIZY_DOM="$STEND/relizy"
 KELEVRA_DIR="$STEND/dannye"
 STARAYA_VERSIYA="0.6.22"
 NOVAYA_VERSIYA="0.6.24"
+. "$KOREN/stend/obshchee.sh"
 
 VSEGO=3
 SCENA_N=0
@@ -88,21 +89,31 @@ rm -rf "$STEND"
 mkdir -p "$(dirname "$DOM_BIN")" "$RELIZY_DOM" "$KELEVRA_DIR"
 
 versiya() { echo "-X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$1"; }
-if ! ( cd "$KOREN" && go build -ldflags "$(versiya "$STARAYA_VERSIYA")" -o "$DOM_BIN" ./cmd/kelevra ) > "$STEND/build_staraya.log" 2>&1; then
+# С df682ca8 служба даже не ПРЕДЛАГАЕТ релиз без asset Kelevra.exe.sig
+# (internal/obnovlenie/obnovlenie.go:169) — DOM_BIN обязан нести вшитый
+# тестовый открытый ключ (sobrat_s_podpisyu), а копия в RELIZY_DOM — подписанный
+# тем же тестовым секретом файл (podpisat), иначе тычок честно откажет по
+# ErrNeVerna вместо находки.
+podpis_test_paru "$STEND"
+PODPISAT="$STEND/podpisat"
+if ! sobrat_s_podpisyu "$KOREN" "$DOM_BIN" ./cmd/kelevra "$(versiya "$STARAYA_VERSIYA")" > "$STEND/build_staraya.log" 2>&1; then
   past "сборка" "go build ./cmd/kelevra (версия $STARAYA_VERSIYA)" "сборка не прошла" "$(cat "$STEND/build_staraya.log")"
 fi
-if ! ( cd "$KOREN" && go build -ldflags "$(versiya "$NOVAYA_VERSIYA")" -o "$RELIZY_DOM/Kelevra.exe" ./cmd/kelevra ) > "$STEND/build_novaya.log" 2>&1; then
+if ! sobrat_s_podpisyu "$KOREN" "$RELIZY_DOM/Kelevra.exe" ./cmd/kelevra "$(versiya "$NOVAYA_VERSIYA")" > "$STEND/build_novaya.log" 2>&1; then
   past "сборка" "go build ./cmd/kelevra (версия $NOVAYA_VERSIYA)" "сборка не прошла" "$(cat "$STEND/build_novaya.log")"
 fi
-
-RAZMER=$(stat -c%s "$RELIZY_DOM/Kelevra.exe")
-cat > "$RELIZY_DOM/relizy.json" <<JSON
-[{"tag_name":"app-v$NOVAYA_VERSIYA","draft":false,"prerelease":false,
-  "assets":[{"name":"Kelevra.exe","browser_download_url":"http://127.0.0.1:PORT_PODSTANOVKA/Kelevra.exe","size":$RAZMER}]}]
-JSON
+if ! sobrat_s_podpisyu "$KOREN" "$PODPISAT" ./cmd/podpisat > "$STEND/build_podpisat.log" 2>&1; then
+  past "сборка" "go build ./cmd/podpisat" "сборка не прошла" "$(cat "$STEND/build_podpisat.log")"
+fi
+if ! KELEVRA_SIGN_KEY="$PODPIS_SEED_B64" "$PODPISAT" "$RELIZY_DOM/Kelevra.exe" "Kelevra.exe" > "$STEND/podpisat.log" 2>&1; then
+  past "подпись фикстуры" "podpisat Kelevra.exe (версия $NOVAYA_VERSIYA)" "не подписалось" "$(cat "$STEND/podpisat.log")"
+fi
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
-sed -i "s/PORT_PODSTANOVKA/$PORT/" "$RELIZY_DOM/relizy.json"
+RAZMER=$(stat -c%s "$RELIZY_DOM/Kelevra.exe")
+pishi_relizy_s_podpisyu "$RELIZY_DOM/relizy.json" "app-v$NOVAYA_VERSIYA" \
+  "http://127.0.0.1:$PORT/Kelevra.exe" "$RAZMER" \
+  "http://127.0.0.1:$PORT/Kelevra.exe.sig"
 # ПРЯМЫМ ребёнком, не в подоболочке (см. obnovlenie_fon.sh о сиротах, которые
 # держат конвейер приёмки): pkill в pochistit ниже целится строкой "$PORT".
 python3 -m http.server "$PORT" --directory "$RELIZY_DOM" >/dev/null 2>&1 &
@@ -118,7 +129,15 @@ DO=$(md5sum < "$DOM_BIN")
 # напрямую — служба сама обновление никогда не проверяла и не обязана.
 # =============================================================================
 rm -f "$STEND/kolodnyy.log"
+# KELEVRA_BEZ_OBNOVLENIYA=1 — с 10.09.2026 (postavitTiho, internal/sluzhba.go)
+# служба после ЛЮБОЙ находки тихо ставит её сама, не дожидаясь тычка; без
+# этого выключателя сцена 1 стала бы красной не по беде, а по новой законной
+# фиче (та же переменная уже гасит тихую установку в
+# stend/obnovlenie_postavit.sh). Она же откладывает первую проверку с «сразу»
+# на первый тик периода — KELEVRA_PERIOD_OBNOVLENIYA держит тик коротким (как
+# в stend/trey_punkt_obnovleniya.sh), сцена 2 уже ждёт находку в цикле до 10с.
 KELEVRA_DIR="$KELEVRA_DIR" KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" \
+  KELEVRA_BEZ_OBNOVLENIYA=1 KELEVRA_PERIOD_OBNOVLENIYA=2s \
   "$DOM_BIN" --tiho > "$STEND/kolodnyy.log" 2>&1 &
 PID_HOLODNYY=$!
 PIDY+=("$PID_HOLODNYY")
