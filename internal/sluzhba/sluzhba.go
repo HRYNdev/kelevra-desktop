@@ -1153,7 +1153,7 @@ func bezOtpravkiZhurnalov() bool {
 // KELEVRA_BEZ_OTPRAVKI_ZHURNALOV=1 глушит слежку целиком — на нём стоят
 // стенды (stend/*.sh), которым сеть тут не нужна и не должна понадобиться.
 func (s *Sluzhba) SleditZaZhurnalami(ctx context.Context, shag time.Duration) {
-	if os.Getenv("KELEVRA_BEZ_OTPRAVKI_ZHURNALOV") == "1" {
+	if bezOtpravkiZhurnalov() {
 		return
 	}
 	if shag <= 0 {
@@ -3105,6 +3105,11 @@ func (s *Sluzhba) snyatProksi() {
 // наложиться, а отметка об удаче не даёт ночной посылке уйти второй раз с
 // теми же байтами.
 func (s *Sluzhba) OtpravitZhurnalySrochno(ctx context.Context) {
+	// Стендовый выключатель гасит и срочную посылку, не только расписание:
+	// копия на стенде с ним не должна слать журнал никуда.
+	if bezOtpravkiZhurnalov() {
+		return
+	}
 	s.zamok.Lock()
 	if s.zhurnalyIdut {
 		s.zamok.Unlock()
