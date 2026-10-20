@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -150,8 +151,9 @@ type Nastroyki struct {
 	// это молча за него нельзя — отсутствующее поле в старом файле настроек
 	// разбирается json.Unmarshal в false, ничего доделывать не нужно.
 	Avtorezhim bool `json:"avtorezhim"`
-	// RuchnoyVybor — человек САМ отказался от автомата: выключил тумблер
-	// /api/avtorezhim или нажал «Отключить» при работающем автомате. Пока
+	// RuchnoyVybor — человек САМ отказался от автомата: выбрал «Вручную»
+	// (/api/avtorezhim). «Отключить» поле не ставит: она автомат только
+	// приостанавливает, и следующее «Подключиться» его возвращает. Пока
 	// поле ложно, кнопка «Подключиться» включает авторежим сама и дальше
 	// решает клиент (заказ 27.08: нажал «подключить» — программа сама
 	// определяет: дома «режим ожидания», вне дома включается). Как только
@@ -373,7 +375,43 @@ func Zagruzit() (*Nastroyki, error) {
 		uzhe := true
 		n.PravaZaprosheny = &uzhe
 	}
+	// Настройки и профиль, оставшиеся от версий до этой правки, лежат с
+	// правами папки (чтение всем пользователям ПК). Zagruzit зовёт служба на
+	// каждом своём старте (sluzhba.Novaya), в том числе первом после
+	// обновления, — здесь их и закрываем.
+	ZakrytLichnoe()
 	return n, nil
+}
+
+// lichnyeFayly — файлы общей папки, которые читает только служба: код
+// доступа и ключ устройства (nastroyki.json), профиль с ключами узлов
+// (profil.json), пароль Clash API (clash_sekret). Окно и значок с ними
+// не работают: всё, что им нужно, они берут у службы по её адресу
+// (/api/sostoyanie и соседи).
+func lichnyeFayly() []string {
+	return []string{putNastroek(), PutProfilya(), PutSekretaClash()}
+}
+
+// lichnoeImya — относится ли имя файла к lichnyeFayly (для переноса данных
+// из старой папки, см. Perenesti).
+func lichnoeImya(imya string) bool {
+	for _, p := range lichnyeFayly() {
+		if strings.EqualFold(filepath.Base(p), imya) {
+			return true
+		}
+	}
+	return false
+}
+
+// ZakrytLichnoe оставляет доступ к lichnyeFayly только системе и
+// администраторам. Нет файла или нет прав (вызвано не от системы) — молча
+// пропускает: закрыть не вышло сейчас, закроет следующий старт службы.
+func ZakrytLichnoe() {
+	for _, p := range lichnyeFayly() {
+		if _, err := os.Stat(p); err == nil {
+			_ = ZakrytOtPolzovateley(p)
+		}
+	}
 }
 
 // Sohranit пишет настройки атомарно: чтобы обрыв не оставил половину файла.
@@ -387,11 +425,38 @@ func Sohranit(n *Nastroyki) error {
 	if err != nil {
 		return err
 	}
-	vremenny := putNastroek() + ".tmp"
-	if err := os.WriteFile(vremenny, b, 0o600); err != nil {
+	return ZapisatZakryto(putNastroek(), b)
+}
+
+// ZapisatZakryto пишет файл атомарно (временный рядом и замена), закрывая
+// права временного файла ДО записи содержимого. Переименование в Windows
+// сохраняет права самого файла, поэтому без этого каждая перезапись
+// настроек или профиля в общей папке заново открывала бы их на чтение
+// всем пользователям ПК (права нового файла наследуются от папки).
+// Вне общей папки права не трогаются (см. ZakrytOtPolzovateley).
+func ZapisatZakryto(put string, telo []byte) error {
+	vremenny := put + ".tmp"
+	_ = os.Remove(vremenny)
+	f, err := os.OpenFile(vremenny, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Rename(vremenny, putNastroek())
+	// Не закрылось — не пишем: открытые всем код доступа и ключи хуже,
+	// чем несохранённая настройка.
+	if err := ZakrytOtPolzovateley(vremenny); err != nil {
+		f.Close()
+		_ = os.Remove(vremenny)
+		return fmt.Errorf("не закрыть права на %s: %w", filepath.Base(put), err)
+	}
+	_, zerr := f.Write(telo)
+	if cerr := f.Close(); zerr == nil {
+		zerr = cerr
+	}
+	if zerr != nil {
+		_ = os.Remove(vremenny)
+		return zerr
+	}
+	return os.Rename(vremenny, put)
 }
 
 func novyyID() string {
@@ -452,11 +517,10 @@ func SekretClash() string {
 	if err := os.MkdirAll(filepath.Dir(put), 0o755); err != nil {
 		return ""
 	}
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	novyy := novyySekret()
+	if novyy == "" {
 		return ""
 	}
-	novyy := hex.EncodeToString(b)
 	f, err := os.OpenFile(put, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		// Файл успел создать другой процесс — берём его пароль.
@@ -476,6 +540,49 @@ func SekretClash() string {
 		return ""
 	}
 	return novyy
+}
+
+// metkaZakrytogoSekreta — начало пароля, созданного уже закрытым (с этой
+// правки). Пароли версий до 0.6.80 (без метки) лежали в общей папке с
+// правами папки, то есть их мог прочитать любой пользователь ПК; 0.6.80
+// закрыла файл, но сам пароль остался прежним. Метка — часть самого пароля,
+// а не отдельный файл: прежняя версия при откате читает файл целиком и
+// работает с ним как с обычным паролем.
+const metkaZakrytogoSekreta = "k2-"
+
+// novyySekret — 32 случайных байта в hex с меткой закрытого пароля; пусто,
+// если системный генератор отказал.
+func novyySekret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return metkaZakrytogoSekreta + hex.EncodeToString(b)
+}
+
+// SmenitStaryySekret меняет пароль Clash API, созданный до закрытия файла
+// (без metkaZakrytogoSekreta), на новый. true — пароль сменён.
+//
+// Звать ТОЛЬКО когда ядро не запущено и сразу после этого собирать конфиг
+// заново: работающее ядро держит пароль из своего конфига, и смена под ним
+// дала бы 401 на каждом запросе службы к нему до перезапуска ядра
+// (sluzhba.smenitStaryyParolPeredStartom). Файла нет — менять нечего, новый
+// создаст SekretClash уже с меткой. Не вышло записать — старый пароль
+// остаётся на месте, попытка повторится при следующем запуске ядра.
+func SmenitStaryySekret() (bool, error) {
+	put := PutSekretaClash()
+	staryy := prochestSekret(put)
+	if staryy == "" || strings.HasPrefix(staryy, metkaZakrytogoSekreta) {
+		return false, nil
+	}
+	novyy := novyySekret()
+	if novyy == "" {
+		return false, fmt.Errorf("не получить случайные байты для пароля")
+	}
+	if err := ZapisatZakryto(put, []byte(novyy)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ZakrytOtPolzovateley оставляет доступ к файлу общей папки
