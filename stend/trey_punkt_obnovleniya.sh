@@ -100,6 +100,15 @@ if ! xdpyinfo -display "$DISPLAY_TREYA" >/dev/null 2>&1; then
 fi
 
 rm -rf "$STEND"; mkdir -p "$STEND/dom" "$STEND/relizy"
+# С df682ca8 служба даже не ПРЕДЛАГАЕТ релиз без asset Kelevra.exe.sig
+# (internal/obnovlenie/obnovlenie.go:169) — DOM (запущенная копия) обязан
+# нести вшитый тестовый открытый ключ (sobrat_s_podpisyu), а копия в
+# $STEND/relizy — подписанный тем же тестовым секретом файл (podpisat).
+podpis_test_paru "$STEND"
+PODPISAT="$STEND/podpisat"
+if ! sobrat_s_podpisyu "$KOREN" "$PODPISAT" "$KOREN/cmd/podpisat" > "$STEND/build_podpisat.log" 2>&1; then
+  echo "  НЕ СОБРАЛСЯ podpisat"; cat "$STEND/build_podpisat.log"; exit 1
+fi
 
 TREY_SRC="$KOREN/cmd/kelevra/trey_windows.go"
 otkatit_porchu() { # безусловный откат исходника — вызывается и при выходе, и явно
@@ -124,8 +133,9 @@ if [ "$KONTROL" = "1" ]; then
   fi
   echo "  (порча: WndProc временно слушает idMenuObnovit+1 вместо idMenuObnovit — пункт меню виден, но не узнан)"
 fi
-if ! GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$STARAYA_VERSIYA" \
-    -o "$STEND/Kelevra.exe" "$KOREN/cmd/kelevra" > "$STEND/build_staraya.log" 2>&1; then
+if ! GOOS=windows GOARCH=amd64 sobrat_s_podpisyu "$KOREN" "$STEND/Kelevra.exe" "$KOREN/cmd/kelevra" \
+    "-H windowsgui -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$STARAYA_VERSIYA" \
+    > "$STEND/build_staraya.log" 2>&1; then
   echo "  НЕ СОБРАЛСЯ"; cat "$STEND/build_staraya.log"
   otkatit_porchu
   exit 1
@@ -134,20 +144,25 @@ otkatit_porchu # исходник возвращён СРАЗУ после сб�
 SHA_STARAYA=$(sha256sum "$STEND/Kelevra.exe" | awk '{print $1}')
 
 echo "── сборка релиза Kelevra.exe (версия $NOVAYA_VERSIYA, для поддельного источника) ──"
-if ! GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$NOVAYA_VERSIYA" \
-    -o "$STEND/relizy/Kelevra.exe" "$KOREN/cmd/kelevra" > "$STEND/build_novaya.log" 2>&1; then
+if ! GOOS=windows GOARCH=amd64 sobrat_s_podpisyu "$KOREN" "$STEND/relizy/Kelevra.exe" "$KOREN/cmd/kelevra" \
+    "-H windowsgui -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$NOVAYA_VERSIYA" \
+    > "$STEND/build_novaya.log" 2>&1; then
   echo "  НЕ СОБРАЛСЯ"; cat "$STEND/build_novaya.log"; exit 1
 fi
 SHA_NOVAYA=$(sha256sum "$STEND/relizy/Kelevra.exe" | awk '{print $1}')
-RAZMER=$(stat -c%s "$STEND/relizy/Kelevra.exe")
 if [ "$SHA_STARAYA" = "$SHA_NOVAYA" ]; then
   echo "⚫ ПРИБОР МЁРТВ: старая и новая сборки совпали байт в байт — заменой нечего доказывать"
   exit 7
 fi
+if ! KELEVRA_SIGN_KEY="$PODPIS_SEED_B64" "$PODPISAT" "$STEND/relizy/Kelevra.exe" "Kelevra.exe" > "$STEND/podpisat.log" 2>&1; then
+  echo "  ПОДПИСЬ НЕ ВЫШЛА"; cat "$STEND/podpisat.log"; exit 1
+fi
+RAZMER=$(stat -c%s "$STEND/relizy/Kelevra.exe")
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
-printf '[{"tag_name":"app-v%s","draft":false,"prerelease":false,"assets":[{"name":"Kelevra.exe","browser_download_url":"http://127.0.0.1:%s/Kelevra.exe","size":%s}]}]' \
-  "$NOVAYA_VERSIYA" "$PORT" "$RAZMER" > "$STEND/relizy/relizy.json"
+pishi_relizy_s_podpisyu "$STEND/relizy/relizy.json" "app-v$NOVAYA_VERSIYA" \
+  "http://127.0.0.1:$PORT/Kelevra.exe" "$RAZMER" \
+  "http://127.0.0.1:$PORT/Kelevra.exe.sig"
 python3 -m http.server "$PORT" --directory "$STEND/relizy" >/dev/null 2>&1 &
 PIDY+=("$!")
 sleep 1

@@ -40,8 +40,17 @@ if ! xdpyinfo -display :97 >/dev/null 2>&1; then Xvfb :97 -screen 0 1280x800x24 
 export DISPLAY=${DISPLAY:-:97}
 
 versiya() { echo "-X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$1"; }
-GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui $(versiya 0.4.2)" -o "$S/dom/Kelevra.exe" "$KORFN/cmd/kelevra" || exit 1
-GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui $(versiya 0.5.0)" -o "$S/novaya/Kelevra.exe" "$KORFN/cmd/kelevra" || exit 1
+# С df682ca8 служба даже не ПРЕДЛАГАЕТ релиз без asset Kelevra.exe.sig
+# (internal/obnovlenie/obnovlenie.go:169) — dom-копия обязана нести вшитый
+# тестовый открытый ключ (sobrat_s_podpisyu), а novaya-копия — подписанный
+# тем же тестовым секретом файл (podpisat), иначе тычок честно откажет по
+# ErrNeVerna вместо находки.
+podpis_test_paru "$S"
+PODPISAT="$S/podpisat"
+GOOS=windows GOARCH=amd64 sobrat_s_podpisyu "$KORFN" "$S/dom/Kelevra.exe" "$KORFN/cmd/kelevra" "-H windowsgui $(versiya 0.4.2)" || exit 1
+GOOS=windows GOARCH=amd64 sobrat_s_podpisyu "$KORFN" "$S/novaya/Kelevra.exe" "$KORFN/cmd/kelevra" "-H windowsgui $(versiya 0.5.0)" || exit 1
+sobrat_s_podpisyu "$KORFN" "$PODPISAT" "$KORFN/cmd/podpisat" || exit 1
+KELEVRA_SIGN_KEY="$PODPIS_SEED_B64" "$PODPISAT" "$S/novaya/Kelevra.exe" "Kelevra.exe" || exit 1
 MD5_STARAYA_DO=$(md5sum < "$S/dom/Kelevra.exe")
 MD5_NOVAYA=$(md5sum < "$S/novaya/Kelevra.exe")
 
@@ -50,7 +59,8 @@ cat > "$S/relizy.json" <<JSON
 [{"tag_name":"core-v1.14.0-beta.4-1","draft":false,"prerelease":false,
   "assets":[{"name":"sing-box-windows-amd64.zip","browser_download_url":"http://127.0.0.1:$PORT/net","size":9}]},
  {"tag_name":"app-v0.5.0","draft":false,"prerelease":false,
-  "assets":[{"name":"Kelevra.exe","browser_download_url":"http://127.0.0.1:$PORT/novaya/Kelevra.exe","size":$RAZMER}]}]
+  "assets":[{"name":"Kelevra.exe","browser_download_url":"http://127.0.0.1:$PORT/novaya/Kelevra.exe","size":$RAZMER},
+            {"name":"Kelevra.exe.sig","browser_download_url":"http://127.0.0.1:$PORT/novaya/Kelevra.exe.sig","size":1}]}]
 JSON
 # Прямым ребёнком с пойманным pid и снос по EXIT: уборка ниже работает только
 # на счастливом пути, а past выходит раньше — и сервер оставался жить сиротой
@@ -69,8 +79,18 @@ rm -f "$ZH"
 # уже проверенная копия. --tiho — тот же путь, которым приложение стартует
 # из автозапуска Windows: поиск обновления — дело службы сразу после
 # подъёма, окна не открывается.
+# KELEVRA_BEZ_OBNOVLENIYA=1 — с 10.09.2026 (postavitTiho, internal/sluzhba.go)
+# служба после ЛЮБОЙ находки тихо ставит её сама, не дожидаясь тычка; без
+# этого выключателя сцена «.exe не подменился холодным стартом» ниже стала бы
+# красной не по беде, а по новой законной фиче (та же переменная, что уже
+# глушит тихую установку в stend/obnovlenie_postavit.sh). Она же откладывает
+# первую проверку с «сразу» на первый тик периода — KELEVRA_PERIOD_OBNOVLENIYA
+# держит тик коротким (как в stend/trey_punkt_obnovleniya.sh), чтобы находка
+# всё равно пришла за секунды, просто не обгоняла проверку "не подменился".
 wine_zapusti "$S/run.log" "$ZH" "служба слушает" 25 -- \
-  env KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" timeout 90 "$WINE" "$S/dom/Kelevra.exe" --tiho
+  env KELEVRA_RELIZY="http://127.0.0.1:$PORT/relizy.json" \
+  KELEVRA_BEZ_OBNOVLENIYA=1 KELEVRA_PERIOD_OBNOVLENIYA=2s \
+  timeout 90 "$WINE" "$S/dom/Kelevra.exe" --tiho
 mertv=$?
 if [ "$mertv" -eq 77 ]; then
   echo "⚫ ПРИБОР МЁРТВ: wine не запустил exe (ни одной строки в логе) — продукт НЕ проверялся"
@@ -85,6 +105,12 @@ proverit() { # проверит <что должно быть в журнале>
 proverit_net() { # проверит_нет <что НЕ должно быть в журнале> <что это значит>
   if grep -qF "$1" "$ZH" 2>/dev/null; then echo "  ✗ $2"; bed=1; else echo "  ✓ $2"; fi
 }
+# "служба слушает" печатается раньше первого тика (2с) — ждём находку отдельно,
+# иначе проверка ниже успевает заглянуть в журнал раньше срабатывания тика.
+for _ in $(seq 1 10); do
+  grep -qF "фоновая проверка обновления: найдена версия 0.5.0" "$ZH" 2>/dev/null && break
+  sleep 0.5
+done
 proverit "фоновая проверка обновления: найдена версия 0.5.0" "нашла свежую сборку сама, без клика (и не спутала её с релизом ядра)"
 proverit_net "версия 0.5.0 встала, перезапускаюсь" "холодный старт САМ ничего не поставил (старой строки автоподмены больше нет)"
 if [ "$(md5sum < "$S/dom/Kelevra.exe")" = "$MD5_STARAYA_DO" ]; then
