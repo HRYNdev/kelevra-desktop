@@ -87,6 +87,14 @@ func kopirovat(iz, v string, rezhim os.FileMode) error {
 	}
 	putVrem := vrem.Name()
 	defer os.Remove(putVrem)
+	// Код доступа, профиль и пароль Clash API в общей папке читает только
+	// служба: права закрываем до копирования содержимого, иначе файл до
+	// первого старта службы лежал бы с правами папки (чтение всем). Не
+	// закрылось — переносим всё равно: потерять код доступа хуже, а служба
+	// закроет файл на первом же старте (Zagruzit -> ZakrytLichnoe).
+	if lichnoeImya(filepath.Base(v)) {
+		_ = ZakrytOtPolzovateley(putVrem)
+	}
 	if _, err := io.Copy(vrem, src); err != nil {
 		vrem.Close()
 		return err

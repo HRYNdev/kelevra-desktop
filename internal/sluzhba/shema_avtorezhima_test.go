@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
@@ -76,28 +78,9 @@ func TestPodklyuchitBezVyboraChelovekaSamVklyuchaetAvtomat(t *testing.T) {
 	}
 }
 
-// TestOtklyuchitRukamiGasitAvtomatIBolsheNeReshaetSam — «человек выключил
-// автомат руками → клиент больше не решает сам».
-//
-// Без этого нажатие «Отключить» вне дома не значило ничего: приведение
-// (avtorezhimKolbek) поднимало защиту обратно на ближайшем же заходе, и кнопка
-// выглядела сломанной. Телефон делает то же самое — chooseManually() ставит
-// Settings.autoModeEnabled = false и круг перестаёт решать (AutoMode.kt:1035).
-func TestOtklyuchitRukamiGasitAvtomatIBolsheNeReshaetSam(t *testing.T) {
-	s := gotovStendLestnicy(t)
-	t.Cleanup(s.OstanovitAvtorezhim)
-
-	// Человек уже в автоматическом режиме, служитель крутится.
-	if err := s.vklyuchitAvtorezhim(avtorezhim.VneDoma); err != nil {
-		t.Fatalf("не включил авторежим: %v", err)
-	}
-	s.avtorezhimZamok.Lock()
-	krutitsya := s.avtorezhimOtmena != nil
-	s.avtorezhimZamok.Unlock()
-	if !krutitsya {
-		t.Fatal("служитель авторежима не поднялся — проверять нечего")
-	}
-
+// postOtklyuchit — нажатие «Отключить» через настоящую ручку.
+func postOtklyuchit(t *testing.T, s *Sluzhba) {
+	t.Helper()
 	m := s.Obsluzhit()
 	r := httptest.NewRequest("POST", "/"+s.klyuch+"/api/otklyuchit", nil)
 	w := httptest.NewRecorder()
@@ -105,38 +88,128 @@ func TestOtklyuchitRukamiGasitAvtomatIBolsheNeReshaetSam(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("POST /api/otklyuchit вернул код %d: %s", w.Code, w.Body.String())
 	}
+}
 
-	if s.Nastroyki.Avtorezhim {
-		t.Fatal("«Отключить» не выключила автомат — вне дома он поднимет защиту обратно, и кнопка не значит ничего")
-	}
-	if !s.Nastroyki.RuchnoyVybor {
-		t.Fatal("«Отключить» не запомнила ручной выбор — следующее «Подключиться» снова включит автомат за человека")
-	}
+func avtomatKrutitsya(s *Sluzhba) bool {
 	s.avtorezhimZamok.Lock()
-	krutitsya = s.avtorezhimOtmena != nil
-	s.avtorezhimZamok.Unlock()
-	if krutitsya {
-		t.Fatal("служитель авторежима остался крутиться после ручного «Отключить»")
-	}
+	defer s.avtorezhimZamok.Unlock()
+	return s.avtorezhimOtmena != nil
+}
 
-	// И следующее нажатие «Подключиться» автомат обратно НЕ включает: решение
-	// человека держится, пока он сам не вернёт тумблер.
+// TestOtklyuchitPriostanavlivaetAvtomatIPodklyuchitVozvrashchaet —
+// «Отключить → Подключиться → автомат вернулся».
+//
+// «Отключить» обязана остановить автомат: иначе вне дома приведение
+// (avtorezhimKolbek) подняло бы защиту обратно на ближайшем заходе, и кнопка
+// не значила бы ничего. Но остановка — пауза, а не отказ от автомата
+// (просьба владельца 05.09): до этой правки «Отключить» ставила ручной выбор,
+// и следующее «Подключиться» поднимало туннель вручную, а автомат пропадал
+// до похода в настройки. Перезапуск службы между нажатиями (перезагрузка)
+// автомат сам не поднимает: на диске Avtorezhim ложно.
+func TestOtklyuchitPriostanavlivaetAvtomatIPodklyuchitVozvrashchaet(t *testing.T) {
+	s := gotovStendLestnicy(t)
+	t.Cleanup(s.OstanovitAvtorezhim)
 	popytok := 0
 	s.zapustitYadro = func(ctx context.Context) error { popytok++; return nil }
+
+	// Человек в автоматическом режиме, служитель крутится.
+	if err := s.vklyuchitAvtorezhim(avtorezhim.VneDoma); err != nil {
+		t.Fatalf("не включил авторежим: %v", err)
+	}
+	if !avtomatKrutitsya(s) {
+		t.Fatal("служитель авторежима не поднялся — проверять нечего")
+	}
+
+	postOtklyuchit(t, s)
+
+	if s.Nastroyki.Avtorezhim {
+		t.Fatal("«Отключить» не остановила автомат — вне дома он поднимет защиту обратно, и кнопка не значит ничего")
+	}
+	if s.Nastroyki.RuchnoyVybor {
+		t.Fatal("«Отключить» записала ручной выбор — следующее «Подключиться» не вернёт автомат")
+	}
+	if avtomatKrutitsya(s) {
+		t.Fatal("служитель авторежима остался крутиться после «Отключить»")
+	}
+	// То, что переживёт перезагрузку: служба поднимает служителя только при
+	// Avtorezhim (cmd/kelevra/main.go), значит после неё туннель сам не встанет.
+	naDiske, err := hranenie.Zagruzit()
+	if err != nil {
+		t.Fatalf("настройки не прочитались: %v", err)
+	}
+	if naDiske.Avtorezhim || naDiske.RuchnoyVybor {
+		t.Fatalf("на диске после «Отключить»: avtorezhim=%v ruchnoy_vybor=%v, ждал оба false", naDiske.Avtorezhim, naDiske.RuchnoyVybor)
+	}
+	o := sostoyanieStenda(t, s)
+	if o.AvtorezhimVklyuchen || o.AvtorezhimRuchnoy {
+		t.Fatalf("окну после «Отключить»: vklyuchen=%v ruchnoy=%v, ждал оба false (выбран авто, автомат на паузе)", o.AvtorezhimVklyuchen, o.AvtorezhimRuchnoy)
+	}
+
+	// Следующее «Подключиться» возвращает автомат и (вне дома) поднимает связь.
+	postPodklyuchitIProverit(t, s)
+	if !s.Nastroyki.Avtorezhim {
+		t.Fatal("после «Отключить» кнопка «Подключиться» не вернула автомат")
+	}
+	if s.Nastroyki.RuchnoyVybor {
+		t.Fatal("после «Подключиться» остался ручной выбор")
+	}
+	if !avtomatKrutitsya(s) {
+		t.Fatal("автомат включён в настройках, но служитель не крутится")
+	}
+	if popytok != 1 {
+		t.Fatalf("вне дома защита обязана подняться ровно 1 раз, поднята %d раз(а)", popytok)
+	}
+	naDiske, err = hranenie.Zagruzit()
+	if err != nil {
+		t.Fatalf("настройки не прочитались: %v", err)
+	}
+	if !naDiske.Avtorezhim {
+		t.Fatal("возвращённый автомат не записан на диск — перезапуск службы его потеряет")
+	}
+}
+
+// TestOtklyuchitVRuchnomRezhimeOstavlyaetRuchnoy — ручной режим, выбранный
+// полосой «Вручную», «Отключить» не трогает: следующее «Подключиться» поднимает
+// связь безусловно и автомат не включает.
+func TestOtklyuchitVRuchnomRezhimeOstavlyaetRuchnoy(t *testing.T) {
+	s := gotovStendLestnicy(t)
+	t.Cleanup(s.OstanovitAvtorezhim)
+	popytok := 0
+	s.zapustitYadro = func(ctx context.Context) error { popytok++; return nil }
+
+	if err := s.vklyuchitAvtorezhim(avtorezhim.VneDoma); err != nil {
+		t.Fatalf("не включил авторежим: %v", err)
+	}
+	// Полоса «Вручную».
+	m := s.Obsluzhit()
+	r := httptest.NewRequest("POST", "/"+s.klyuch+"/api/avtorezhim", strings.NewReader(`{"vklyuchit":false}`))
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("POST /api/avtorezhim вернул код %d: %s", w.Code, w.Body.String())
+	}
+	if !s.Nastroyki.RuchnoyVybor {
+		t.Fatal("«Вручную» не записала ручной выбор")
+	}
+
+	postOtklyuchit(t, s)
+	if !s.Nastroyki.RuchnoyVybor || s.Nastroyki.Avtorezhim {
+		t.Fatalf("«Отключить» в ручном режиме изменила выбор: avtorezhim=%v ruchnoy=%v", s.Nastroyki.Avtorezhim, s.Nastroyki.RuchnoyVybor)
+	}
+
 	postPodklyuchitIProverit(t, s)
 	if s.Nastroyki.Avtorezhim {
-		t.Fatal("после ручного «Отключить» кнопка «Подключиться» снова включила автомат за человека")
+		t.Fatal("в ручном режиме «Подключиться» включила автомат за человека")
 	}
 	if popytok != 1 {
 		t.Fatalf("ручной режим: защита обязана подняться безусловно ровно 1 раз, поднята %d раз(а)", popytok)
 	}
-
 	o := sostoyanieStenda(t, s)
 	if !o.AvtorezhimRuchnoy {
 		t.Fatalf("окну не сказано, что решает человек: %+v", o)
 	}
 	if o.AvtorezhimPolozhenie != "автоматический режим выключен, переключение вручную" {
-		t.Fatalf("положение авторежима = %q, хочу «решаете вы: автомат выключен»", o.AvtorezhimPolozhenie)
+		t.Fatalf("положение авторежима = %q", o.AvtorezhimPolozhenie)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -162,8 +163,8 @@ func TestPeremennayaStarsheObshchey(t *testing.T) {
 func TestSekretClashStabilenISvoy(t *testing.T) {
 	t.Setenv("KELEVRA_DIR", t.TempDir())
 	a := SekretClash()
-	if len(a) != 64 {
-		t.Fatalf("пароль %q: ждал 64 hex-знака", a)
+	if !strings.HasPrefix(a, metkaZakrytogoSekreta) || len(a) != len(metkaZakrytogoSekreta)+64 {
+		t.Fatalf("пароль %q: ждал метку %q и 64 hex-знака", a, metkaZakrytogoSekreta)
 	}
 	if b := SekretClash(); b != a {
 		t.Fatalf("второй вызов дал другой пароль: %q и %q", a, b)
@@ -171,5 +172,38 @@ func TestSekretClashStabilenISvoy(t *testing.T) {
 	t.Setenv("KELEVRA_DIR", t.TempDir())
 	if c := SekretClash(); c == a {
 		t.Fatal("у двух устройств один и тот же пароль")
+	}
+}
+
+// Пароль, созданный до закрытия файла (без метки, лежал открытым всем
+// пользователям ПК), меняется ровно один раз; новый с меткой не трогается.
+func TestSmenitStaryySekretMenyaetOdinRaz(t *testing.T) {
+	t.Setenv("KELEVRA_DIR", t.TempDir())
+	if smenen, err := SmenitStaryySekret(); smenen || err != nil {
+		t.Fatalf("файла нет — менять нечего, а вышло smenen=%v err=%v", smenen, err)
+	}
+	staryy := strings.Repeat("ab", 32) // как писали версии до 0.6.80
+	if err := os.WriteFile(PutSekretaClash(), []byte(staryy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := SekretClash(); got != staryy {
+		t.Fatalf("до смены SekretClash обязан отдавать прежний пароль (им живёт запущенное ядро): %q", got)
+	}
+	smenen, err := SmenitStaryySekret()
+	if err != nil || !smenen {
+		t.Fatalf("старый пароль не сменён: smenen=%v err=%v", smenen, err)
+	}
+	novyy := SekretClash()
+	if novyy == staryy || !strings.HasPrefix(novyy, metkaZakrytogoSekreta) {
+		t.Fatalf("после смены пароль %q", novyy)
+	}
+	if smenen, err := SmenitStaryySekret(); smenen || err != nil {
+		t.Fatalf("второй вызов сменил уже новый пароль: smenen=%v err=%v", smenen, err)
+	}
+	if again := SekretClash(); again != novyy {
+		t.Fatalf("пароль сменился без причины: %q и %q", novyy, again)
+	}
+	if _, err := os.Stat(PutSekretaClash() + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("остался временный файл: %v", err)
 	}
 }

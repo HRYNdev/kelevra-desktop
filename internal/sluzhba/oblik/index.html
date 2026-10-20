@@ -1583,6 +1583,17 @@ function perevestiBedu(syroe) {
 // Показываем причину не в круге, а в заметке под ключом доступа — том же
 // блоке, что уже говорит, что идёт через Kelevra (ZametkaVes и соседи,
 // internal/konfig/konfig.go).
+// vybranAvtorezhim — какой режим выбран, а не крутится ли автомат прямо
+// сейчас: полоса режима, карточка выхода и подсветка узлов показывают выбор.
+// «Отключить» приостанавливает автомат (avtorezhim_vklyuchen ложно), но не
+// отменяет: пока человек не выбрал «Вручную» (avtorezhim_ruchnoy),
+// следующее «Подключиться» включает автомат снова (sluzhba.go: otklyuchit,
+// Podklyuchit). Поэтому выбор «Автоматически» — всё, кроме явного «Вручную».
+function vybranAvtorezhim(s) {
+  if (!s) return false;
+  return !!s.avtorezhim_vklyuchen || !s.avtorezhim_ruchnoy;
+}
+
 function zametkaAvtorezhima(s) {
   // Обстановку (дома/не дома) кнопка «Подключиться» спрашивает САМА, одним
   // доверенным заходом (domaSeychas, sluzhba.go), независимо от тумблера
@@ -2310,7 +2321,7 @@ async function obnovit() {
   // auto.auto): в авто он просто не подсвечен ни у одного узла (см.
   // rezhimAvto внутри risovatUzly), но продолжает показывать, из чего
   // автомат выбирает. Подпись под полосой — эталон 402-412.
-  const rezhimAvto = !!s.avtorezhim_vklyuchen;
+  const rezhimAvto = vybranAvtorezhim(s);
   $("rezhim-avto").classList.toggle("aktivna", rezhimAvto);
   $("rezhim-ruchnoy").classList.toggle("aktivna", !rezhimAvto);
   $("shtorka-podskazka").textContent = rezhimAvto
@@ -2370,7 +2381,7 @@ function risovatUzly(gruppy) {
   // выбирает), но подсветку не получает НИКТО — раньше в авто подсвечивался
   // узел, который выбрал сам автомат, и список читался как ручной выбор,
   // которого не было.
-  const rezhimAvto = !!(poslednee && poslednee.avtorezhim_vklyuchen);
+  const rezhimAvto = vybranAvtorezhim(poslednee);
   const koren2 = $("uzly");
   koren2.innerHTML = "";
   let vybranEl = null;
@@ -2499,7 +2510,7 @@ let poslednyayaGruppy = [];
 function obnovitKartuVyhoda() {
   const s = poslednee;
   if (!s) return;
-  const rezhimAvto = !!s.avtorezhim_vklyuchen;
+  const rezhimAvto = vybranAvtorezhim(s);
   const podklyucheno = s.sost === "rabotaet";
   const vsegoUzlov = poslednyayaGruppy.reduce((n, g) => n + (g.uzly ? g.uzly.length : 0), 0);
   const title = s.ozhidanie_doma ? "Не нужен"
@@ -2578,7 +2589,7 @@ async function obnovitUzly() {
   // замера, подпись задержки («—» против чисел) и подсветка выбранного узла
   // (см. rezhimAvto в risovatUzly) зависят именно от этих двух полей.
   const slepok = JSON.stringify(d.gruppy) + "|" + (poslednee && poslednee.sost) +
-      "|" + (poslednee && poslednee.avtorezhim_vklyuchen);
+      "|" + vybranAvtorezhim(poslednee);
   if (slepok === uzlySlepok) { obnovitKartuVyhoda(); return; }
   uzlySlepok = slepok;
   risovatUzly(d.gruppy);
@@ -2629,13 +2640,13 @@ $("krug-blok").onclick = async () => {
   // от него можно хотеть, — погасить.
   //
   // Выключение — ОДНА ручка, /api/otklyuchit, и второй тут не нужно: она
-  // сама гасит автомат (Nastroyki.Avtorezhim=false, RuchnoyVybor=true,
+  // сама приостанавливает автомат (Nastroyki.Avtorezhim=false,
   // OstanovitAvtorezhim) и только потом опускает защиту (sluzhba.go:
-  // otklyuchit). Без гашения автомата выключение было бы ненастоящим —
-  // человек вышел бы из дома, и туннель поднялся бы сам, хотя его просили
-  // выключить. Обратный ход при этом не потерян: следующее нажатие идёт по
-  // ветке «ручной режим» (RuchnoyVybor уже стоит) и поднимает защиту
-  // безусловно, ничего не переспрашивая.
+  // otklyuchit). Без этого выключение было бы ненастоящим — человек вышел
+  // бы из дома, и туннель поднялся бы сам, хотя его просили выключить.
+  // Обратный ход: RuchnoyVybor «Отключить» не ставит, поэтому следующее
+  // нажатие включает автомат обратно (дома — ожидание, вне дома —
+  // подключение); выбранный полосой ручной режим нажатие не трогает.
   // Без прав подключаться нечем: нажатие круга — та же просьба прав.
   if (poslednee && bezPrav(poslednee)) { datPrava(); return; }
   const otklyuchit = !!(poslednee &&
@@ -2686,7 +2697,7 @@ $("perekl-avtozapusk").onclick = async () => {
 // действует), нажатие на вторую половину переключает авторежим ручкой
 // /api/avtorezhim — той же самой, что раньше дёргал тумблер в настройках.
 async function vybratRezhim(vklyuchitAvto) {
-  if (poslednee && !!poslednee.avtorezhim_vklyuchen === vklyuchitAvto) return;
+  if (poslednee && vybranAvtorezhim(poslednee) === vklyuchitAvto) return;
   $("rezhim-avto").disabled = true; $("rezhim-ruchnoy").disabled = true;
   try { await api("avtorezhim", {vklyuchit: vklyuchitAvto}); }
   catch (e) {
