@@ -26,6 +26,7 @@ KOREN=$(cd "$(dirname "$0")/.." && pwd)
 export PATH="$PATH:/usr/local/go/bin"
 export HOME=${HOME:-/root}
 export GOCACHE=${GOCACHE:-$HOME/.cache/go-build}
+. "$KOREN/stend/obshchee.sh"
 
 STEND="$KOREN/.stend/trey_oblachko"
 BIN="$STEND/kelevra_linux"
@@ -60,15 +61,18 @@ past() { # $1 имя  $2 что замерено  $3 причина провал
   exit 1
 }
 
+# Этот стенд проверяет только НАХОДКУ (NaitiNovuyu смотрит лишь на список
+# assets в relizy.json — имя и size>0, файл не скачивает) — с df682ca8 без
+# Kelevra.exe.sig в списке релиз не предложат вовсе (ErrPodpis). Сами файлы
+# НАМЕРЕННО не лежат на диске: подай их реальными, тихая фоновая установка
+# (postavitTiho) честно скачает и попытается поставить, перезапустив процесс
+# под новым pid, — а сцены ниже держат исходный pid живым нарочно.
+RAZMER_FIKS=42
+
 pishi_relizy() { # pishi_relizy <версия-в-теге> — переписывает relizy.json без перезапуска http.server
-  python3 -c '
-import json, sys
-teg, port = sys.argv[1], sys.argv[2]
-print(json.dumps([{
-    "tag_name": teg, "draft": False, "prerelease": False,
-    "assets": [{"name": "Kelevra.exe", "browser_download_url": f"http://127.0.0.1:{port}/Kelevra.exe", "size": 42}],
-}]))
-' "$1" "$PORT" > "$RELIZY_DOM/relizy.json"
+  pishi_relizy_s_podpisyu "$RELIZY_DOM/relizy.json" "$1" \
+    "http://127.0.0.1:$PORT/Kelevra.exe" "$RAZMER_FIKS" \
+    "http://127.0.0.1:$PORT/Kelevra.exe.sig"
 }
 
 pochistit() {

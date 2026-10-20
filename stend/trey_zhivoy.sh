@@ -136,9 +136,16 @@ fi
 VERSIYA_STARAYA="0.1.0-rabota"
 VERSIYA_NOVAYA="9.9.9"
 mkdir -p "$STEND/relizy"
+# Этот стенд проверяет только НАХОДКУ (пузырь) — с df682ca8 без
+# Kelevra.exe.sig в списке assets релиз не предложат вовсе (ErrPodpis).
+# Сам файл Kelevra.exe в $STEND/relizy НАМЕРЕННО не лежит — подай его
+# реальным, тихая фоновая установка (postavitTiho) попытается скачать и
+# поставить, подменив живой процесс под wine новым до конца сцены 2.
+RAZMER_FIKS=42
 pishi_relizy() { # pishi_relizy <версия-в-теге>
-  printf '[{"tag_name":"app-v%s","draft":false,"prerelease":false,"assets":[{"name":"Kelevra.exe","browser_download_url":"http://127.0.0.1:%s/Kelevra.exe","size":42}]}]' \
-    "$1" "$PORT" > "$STEND/relizy/relizy.json"
+  pishi_relizy_s_podpisyu "$STEND/relizy/relizy.json" "app-v$1" \
+    "http://127.0.0.1:$PORT/Kelevra.exe" "$RAZMER_FIKS" \
+    "http://127.0.0.1:$PORT/Kelevra.exe.sig"
 }
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 if [ "$KONTROL" = "a" ]; then
