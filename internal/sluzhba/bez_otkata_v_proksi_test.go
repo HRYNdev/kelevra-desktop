@@ -17,6 +17,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+	"github.com/HRYNdev/kelevra-desktop/internal/zapasnoy"
 	"github.com/HRYNdev/kelevra-desktop/internal/zhurnaly"
 )
 
@@ -63,6 +64,12 @@ func tipyVhodov(t *testing.T, s *Sluzhba) []string {
 	for _, v := range vhody {
 		m, ok := v.(map[string]any)
 		if !ok {
+			continue
+		}
+		// Вход службы (internal/zapasnoy) — не прокси для человека: socks на
+		// 127.0.0.1 только с паролем устройства, для повтора запросов самой
+		// службы через туннель. Системе о нём не сообщается.
+		if teg, _ := m["tag"].(string); teg == zapasnoy.TegVhoda {
 			continue
 		}
 		tip, _ := m["type"].(string)

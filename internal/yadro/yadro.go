@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/zapasnoy"
 )
 
 // ApiAdres — куда стучаться, если конфиг про Clash API молчит. Настоящий адрес
@@ -51,6 +52,20 @@ type Yadro struct {
 	umer    chan struct{}
 	poslLog string
 	sost    Sostoyanie
+	// vhodSluzhby — адрес входа службы в конфиге ЖИВОГО ядра (см.
+	// VhodSluzhby): свой — из конфига на старте, принятый — из записки.
+	vhodSluzhby string
+}
+
+// VhodSluzhby — адрес входа службы (internal/zapasnoy) у работающего ядра;
+// пусто — ядро не работает или входа в его конфиге нет.
+func (y *Yadro) VhodSluzhby() string {
+	y.zamok.Lock()
+	defer y.zamok.Unlock()
+	if y.derzh == nil || y.sost != Rabotaet {
+		return ""
+	}
+	return y.vhodSluzhby
 }
 
 // derzhatel — процесс ядра, за которым следит эта копия приложения.
@@ -174,6 +189,11 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 		return fmt.Errorf("нет конфига: сначала введите код доступа")
 	}
 
+	// Вход службы — из того самого конфига, с которым ядро стартует.
+	var vhod string
+	if b, err := os.ReadFile(y.PutKonfiga()); err == nil {
+		vhod = zapasnoy.AdresVhoda(b)
+	}
 	cmd := exec.Command(y.Bin, "run", "-c", y.PutKonfiga(), "-D", y.Papka)
 	cmd.Dir = y.Papka
 	zhurnalYadra, err := sozdatZhurnalYadra(y.Papka)
@@ -192,6 +212,7 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 	log.Printf("ядро запущено: pid %d, конфиг %s, Clash API %s", cmd.Process.Pid, y.PutKonfiga(), y.api())
 	svoy := &derzhatel{pid: cmd.Process.Pid, cmd: cmd}
 	y.derzh, y.sost, y.umer = svoy, Podnimaem, make(chan struct{})
+	y.vhodSluzhby = vhod
 	umer := y.umer
 	y.zamok.Unlock()
 
@@ -234,12 +255,13 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 				// оставить преемнице приглашение принять ядро, которое ещё
 				// может упасть на подъёме.
 				ZapisatPeredachu(y.Papka, Peredacha{
-					PID:        cmd.Process.Pid,
-					Bin:        y.Bin,
-					Api:        y.api(),
-					Otpechatok: OtpechatokKonfiga(y.PutKonfiga()),
-					Adapter:    ImyaAdapteraIzKonfiga(y.PutKonfiga()),
-					Kogda:      time.Now(),
+					PID:         cmd.Process.Pid,
+					Bin:         y.Bin,
+					Api:         y.api(),
+					Otpechatok:  OtpechatokKonfiga(y.PutKonfiga()),
+					Adapter:     ImyaAdapteraIzKonfiga(y.PutKonfiga()),
+					VhodSluzhby: vhod,
+					Kogda:       time.Now(),
 				})
 				log.Printf("ядро ответило: связь работает")
 				return nil
@@ -370,6 +392,7 @@ func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
 	}
 	prinyatoe := &derzhatel{pid: p.PID, proc: proc}
 	y.derzh, y.sost, y.umer = prinyatoe, Rabotaet, make(chan struct{})
+	y.vhodSluzhby = p.VhodSluzhby
 	umer := y.umer
 	y.zamok.Unlock()
 

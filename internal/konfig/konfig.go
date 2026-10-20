@@ -26,7 +26,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"time"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/zapasnoy"
 )
 
 // OshibkaBezTunnelya — в профиле нет входа-туннеля, поднимать нечего.
@@ -85,6 +89,9 @@ type Kartina struct {
 	PravilaOtkuda string `json:"pravila_otkuda,omitempty"`
 	// PravilNaborov — сколько наборов правил в конфиге.
 	PravilNaborov int `json:"pravil_naborov,omitempty"`
+	// VhodSluzhby — адрес входа службы (host:port), если он вписан в конфиг
+	// (см. Vybor.VhodSluzhby); пусто — не вписан.
+	VhodSluzhby string `json:"vhod_sluzhby,omitempty"`
 }
 
 // ClashPoUmolchaniyu — адрес, если профиль про Clash API молчит.
@@ -184,6 +191,23 @@ type Vybor struct {
 	// Пароль из профиля главнее: профиль, где он задан, работает как раньше.
 	// Пусто — ничего не вписывается, поведение прежнее.
 	ClashSekret string
+	// VhodSluzhby — вход для запросов самой службы через туннель (запасной
+	// путь, internal/zapasnoy). nil — входа нет, поведение прежнее.
+	VhodSluzhby *VhodSluzhby
+}
+
+// VhodSluzhby — локальный вход ядра, через который служба повторяет свои
+// запросы (подписка, правила, журналы, обновление), когда прямой путь режется.
+//
+// Это НЕ прокси-режим и не системный прокси (решение владельца 17.10 «нет
+// никаких неполных режимов» в силе): socks на 127.0.0.1, только с паролем
+// устройства, системе о нём не сообщается, и порт не 2412 — на тот мог
+// остаться смотреть системный прокси старой версии. Трафик с этого входа ядро
+// ведёт в тот же выход, что и заблокированное (селектор), — ровно как телефон
+// своей страховкой LifeLine ведёт наш домен в туннель.
+type VhodSluzhby struct {
+	Port  int    // 127.0.0.1:<Port>; занятый порт выбирает служба заранее
+	Parol string // пароль устройства; пусто — вход не вписывается
 }
 
 // Prigotovit готовит профиль под эту машину.
@@ -327,6 +351,12 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	vpisatSekretClash(d, v.ClashSekret)
 	k.ClashAdres, k.ClashSekret = clash(d)
 	zapomnitVybor(d)
+	// Вход службы — ПОСЛЕДНИМ: правила про QUIC и локальную сеть выше
+	// ограничены входами человека (tegiVhodov), и наш вход в них попасть не
+	// должен; а его правило обязано встать первым в route.rules.
+	if v.VhodSluzhby != nil {
+		k.VhodSluzhby = dobavitVhodSluzhby(d, *v.VhodSluzhby, k.ClashAdres)
+	}
 
 	gotovyy, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
@@ -833,6 +863,95 @@ func tunnelnyyVyhod(d map[string]any) string {
 		return urltest
 	}
 	return drugoy
+}
+
+// dobavitVhodSluzhby вписывает вход службы и правило «с него — в туннель».
+// Возвращает адрес входа; пусто — не вписан (нет пароля, нет туннельного
+// выхода, порт совпал с чужим). Без входа всё работает как раньше, только
+// без запасного пути — уронить из-за него подъём связи нельзя.
+func dobavitVhodSluzhby(d map[string]any, vh VhodSluzhby, clashAdres string) string {
+	if vh.Port <= 0 || vh.Port > 65535 || vh.Parol == "" {
+		return ""
+	}
+	vyhod := vyhodDlyaSluzhby(d)
+	if vyhod == "" {
+		return ""
+	}
+	adres := fmt.Sprintf("127.0.0.1:%d", vh.Port)
+	if _, port, err := splitPort(clashAdres); err == nil && port == vh.Port {
+		return ""
+	}
+	vhody, _ := d["inbounds"].([]any)
+	for _, v := range vhody {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := m["tag"].(string); t == zapasnoy.TegVhoda {
+			return "" // уже есть (чужой профиль или повторная сборка) — не дублируем
+		}
+		if int(portChislom(m["listen_port"])) == vh.Port {
+			return ""
+		}
+	}
+	d["inbounds"] = append(vhody, map[string]any{
+		"type":        "socks",
+		"tag":         zapasnoy.TegVhoda,
+		"listen":      "127.0.0.1",
+		"listen_port": vh.Port,
+		"users":       []any{map[string]any{"username": zapasnoy.Polzovatel, "password": vh.Parol}},
+	})
+	r, ok := d["route"].(map[string]any)
+	if !ok {
+		r = map[string]any{}
+		d["route"] = r
+	}
+	pravila, _ := r["rules"].([]any)
+	// Первым правилом: до сниффа, рекламы, частных адресов и среза QUIC —
+	// ничто из них к запросам службы отношения не имеет.
+	r["rules"] = append([]any{map[string]any{
+		"inbound":  []any{zapasnoy.TegVhoda},
+		"outbound": vyhod,
+	}}, pravila...)
+	return adres
+}
+
+// vyhodDlyaSluzhby — куда вести запросы службы: туда же, куда профиль ведёт
+// заблокированное (выход первого правила с rule_set, не прямой); в
+// упрощённом режиме — route.final; иначе — туннельный выход по типу.
+func vyhodDlyaSluzhby(d map[string]any) string {
+	if r, ok := d["route"].(map[string]any); ok {
+		pravila, _ := r["rules"].([]any)
+		for _, p := range pravila {
+			pr, ok := p.(map[string]any)
+			if !ok {
+				continue
+			}
+			if act, _ := pr["action"].(string); act != "" && act != "route" {
+				continue
+			}
+			vyhod, _ := pr["outbound"].(string)
+			if vyhod == "" || vyhodPryamoy(d, vyhod) || len(spisokStrok(pr["rule_set"])) == 0 {
+				continue
+			}
+			return vyhod
+		}
+		if finalVTunnel(d) {
+			final, _ := r["final"].(string)
+			return final
+		}
+	}
+	return tunnelnyyVyhod(d)
+}
+
+// splitPort — порт из «host:port».
+func splitPort(adres string) (string, int, error) {
+	host, p, err := net.SplitHostPort(adres)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := strconv.Atoi(p)
+	return host, port, err
 }
 
 // vpisatSekretClash кладёт пароль устройства в experimental.clash_api, если

@@ -86,6 +86,9 @@ func TestYadroPrinimaetGotovyyKonfig(t *testing.T) {
 	for imya, v := range map[string]Vybor{
 		"туннель":            {},
 		"без сетевых правил": {BezSetevyhPravil: true},
+		// Вход службы (запасной путь через туннель, internal/zapasnoy).
+		"туннель + вход службы":            {VhodSluzhby: &VhodSluzhby{Port: 20125, Parol: "p"}},
+		"без сетевых правил + вход службы": {BezSetevyhPravil: true, VhodSluzhby: &VhodSluzhby{Port: 20125, Parol: "p"}},
 	} {
 		t.Run(imya, func(t *testing.T) {
 			gotovyy, _, err := Prigotovit(profil(t), v)
