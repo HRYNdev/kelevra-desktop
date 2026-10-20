@@ -42,6 +42,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+	"github.com/HRYNdev/kelevra-desktop/internal/zapasnoy"
 	"github.com/HRYNdev/kelevra-desktop/internal/zapisi"
 	"github.com/HRYNdev/kelevra-desktop/internal/zhurnaly"
 )
@@ -352,6 +353,12 @@ type Sluzhba struct {
 	// ставят наносекунду, чтобы не ждать по-настоящему: они судят ВЫБОР
 	// приложения, а не его терпение.
 	srokOsvobozhdeniyaDlyaStenda time.Duration
+
+	// zapas — транспорт походов наружу с запасным путём через туннель
+	// (zapasnoy_put.go). Заводится при первом обращении: службу собирают и
+	// мимо Novaya (проверки).
+	zapas        *zapasnoy.Put
+	zapasOdinRaz sync.Once
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -404,6 +411,8 @@ func Novaya() (*Sluzhba, error) {
 	// Паспорт назначаем ПОСЛЕ сборки: он читает саму службу (режим, права,
 	// возраст профиля), поэтому раньше её существования не собирается.
 	s.Podpiska.Pasport = s.SobratPasport
+	// Подписка ходит с запасным путём через туннель (zapasnoy_put.go).
+	s.Podpiska.HTTP = s.klientSeti(20 * time.Second)
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
@@ -419,6 +428,9 @@ func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(konfig.Vybor{})
 // правила с диска).
 func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	dop.ClashSekret = sekretClash()
+	if dop.VhodSluzhby == nil {
+		dop.VhodSluzhby = vhodSluzhbyDlyaSborki()
+	}
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
 		return err
@@ -440,9 +452,18 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	// слова «mtu» в нём не было ни разу за всю историю, про наборы правил он
 	// не писал ничего вовсе, и разбирать жалобы «сайты по 10 секунд» и
 	// «списки не обновляются» было буквально нечем.
-	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s",
-		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), zametka(k.Zametka))
+	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s%s",
+		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), pripiskaVhoda(k), zametka(k.Zametka))
 	return nil
+}
+
+// pripiskaVhoda — вход службы для строки журнала (запасной путь через
+// туннель): без него по журналу не понять, мог ли повтор вообще случиться.
+func pripiskaVhoda(k konfig.Kartina) string {
+	if k.VhodSluzhby == "" {
+		return ", запасного пути через туннель нет"
+	}
+	return ", вход службы " + k.VhodSluzhby
 }
 
 // pripiskaMtu — размер пакета туннеля для строки журнала. Нет числа в
@@ -587,7 +608,7 @@ func (s *Sluzhba) obnovlenieRuchka(w http.ResponseWriter, r *http.Request) {
 	ctx, otmena := context.WithTimeout(r.Context(), srokProverkiObnovleniya)
 	defer otmena()
 	o := otvetObnovleniya{Tekushchaya: podpiska.Versiya}
-	n, err := obnovlenie.Proverit(ctx, &http.Client{Timeout: srokProverkiObnovleniya}, adres, podpiska.Versiya)
+	n, err := obnovlenie.Proverit(ctx, s.klientSeti(srokProverkiObnovleniya), adres, podpiska.Versiya)
 	if err != nil {
 		log.Printf("проверка обновления по нажатию: %v", err)
 		o.Beda = prichinaBedyObnovleniya(err)
@@ -653,7 +674,7 @@ func (s *Sluzhba) proveritObnovlenieRaz(ctx context.Context) error {
 	}
 	ctx, otmena := context.WithTimeout(ctx, srokFonovoyProverkiObnovleniya)
 	defer otmena()
-	n, err := obnovlenie.Proverit(ctx, &http.Client{Timeout: srokFonovoyProverkiObnovleniya}, adres, podpiska.Versiya)
+	n, err := obnovlenie.Proverit(ctx, s.klientSeti(srokFonovoyProverkiObnovleniya), adres, podpiska.Versiya)
 	if err != nil {
 		// Нет сети — обычное дело для приложения, которое чинит сеть: тихо,
 		// без паники и без падения процесса. Сетевой отказ повторит тикер
@@ -962,7 +983,7 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		s.skachanoObnovleniya, s.vsegoObnovleniya = skachano, vsego
 		s.zamok.Unlock()
 	}
-	if err := obnovlenie.PostavitSHodom(ctx, &http.Client{Timeout: srokUstanovkiObnovleniya}, n, put, hod); err != nil {
+	if err := obnovlenie.PostavitSHodom(ctx, s.klientSeti(srokUstanovkiObnovleniya), n, put, hod); err != nil {
 		log.Printf("установка обновления по тычку: не вышло (%v), работаю старой версией", err)
 		return "", fmt.Errorf("обновление не установлено: %w", err)
 	}
@@ -1266,6 +1287,7 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 		),
 		PutMetok:  hranenie.PutOtmetokZhurnalov(),
 		Zagolovki: ustroystvo.Zagolovki,
+		HTTP:      s.klientSeti(zhurnaly.Srok),
 	}
 }
 
@@ -3212,7 +3234,7 @@ func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) error {
 	// Возраст прошлой сверки — в строке итога, а не отдельной строкой «сверяю…»
 	// до похода в сеть: при сетевом отказе та строка повторялась бы на каждом
 	// повторе рядом со строкой самого повтора.
-	itog, err := pravila.Obnovit(ctx, &http.Client{Timeout: 2 * time.Minute}, adresa, hranenie.PapkaYadra())
+	itog, err := pravila.Obnovit(ctx, s.klientSeti(2*time.Minute), adresa, hranenie.PapkaYadra())
 	if err != nil {
 		if setevoyOtkaz(err) && itog.Svereno == 0 {
 			return err // ни один набор не дошёл — сети нет; строку пишет повтор
