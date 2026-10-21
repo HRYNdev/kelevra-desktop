@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,7 +49,11 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 		log.Printf("файла ядра не было — вернул прежнее ядро, лежавшее рядом (хэш сошёлся с журналом)")
 		return nil
 	}
-	sborka, err := y.vybratSborku(ctx, &http.Client{Timeout: 20 * time.Second}, obnovlenie.TrebovatPodpis)
+	// Сборки, которые на этой машине не поднялись, не ставятся и заново.
+	y.zamokSmeny.Lock()
+	otvergnuty := y.chitatVersiyu().Otvergnuty
+	y.zamokSmeny.Unlock()
+	sborka, err := y.vybratSborku(ctx, &http.Client{Timeout: 20 * time.Second}, obnovlenie.TrebovatPodpis, otvergnuty...)
 	if err != nil {
 		return err
 	}
@@ -125,7 +130,8 @@ func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, string, error) {
 // любой подписанный core-* сразу уходил новым установкам). Стенд берёт
 // пробные явно — флагом BratProbnye или своим списком (Spisok).
 // nuzhnaPodpis — сборки без файла подписи пропускаются.
-func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPodpis bool) (Sborka, error) {
+// propustit — теги, которые не брать (отвергнутые на этой машине).
+func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPodpis bool, propustit ...string) (Sborka, error) {
 	relizy, err := spisokRelizov(ctx, klient, y.spisok())
 	if err != nil {
 		return Sborka{}, err
@@ -138,6 +144,9 @@ func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPod
 			continue
 		}
 		if r.Prerelease && !y.BratProbnye {
+			continue
+		}
+		if slices.Contains(propustit, r.Tag) {
 			continue
 		}
 		var ssylka, ssylkaPodpisi string

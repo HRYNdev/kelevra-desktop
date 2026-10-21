@@ -14,8 +14,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync/atomic"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpis"
@@ -236,37 +238,69 @@ func TestZamokDerzhitsyaDoPovtornogoPodyoma(t *testing.T) {
 	}
 }
 
-// Две одновременные «Подключить» во время пробы (перенесено из ревью):
-// проба только у первой; вторая не подтверждает чужую пробу, и когда новое
-// ядро падает, откатывать есть на что.
-func TestGonkaDvuhPodyomovVoVremyaProby(t *testing.T) {
+type kluchKto struct{}
+
+// Ревью, круг 3 (и круг 2 в обратном порядке): подъём A держит пробу, подъём
+// B приходит, пока исхода нет. B обязан ждать: новое ядро на пробе
+// запускает только держатель, и подтвердить пробу чужим запуском нельзя.
+// Новое ядро падает у A — откат на прежнее, B потом поднимается на нём.
+func TestRev3ChuzhoyZapuskPodtverzhdaetProbu(t *testing.T) {
 	s := stendZamenyYadra(t)
-	pervyyZapushchen := make(chan struct{})
-	vtorayaGotova := make(chan struct{})
-	var vyzov atomic.Int32
+	var mu sync.Mutex
+	var poryadok []string
+	aVnutri := make(chan struct{})
+	razreshitA := make(chan struct{})
 	s.zapustitYadro = func(ctx context.Context) error {
-		switch vyzov.Add(1) {
-		case 1:
-			close(pervyyZapushchen)
-			<-vtorayaGotova
+		kto, _ := ctx.Value(kluchKto{}).(string)
+		chto := chtoVYadre(t, s)
+		mu.Lock()
+		poryadok = append(poryadok, kto+":"+chto)
+		mu.Unlock()
+		if kto == "A" && chto == "novoe" {
+			close(aVnutri)
+			<-razreshitA
 			return errors.New("ядро упало при старте: FATAL bad core")
 		}
-		return nil // «ядро уже запущено» / прежнее ядро
+		if chto == "novoe" {
+			return errors.New("ядро упало при старте: FATAL bad core")
+		}
+		return nil
 	}
-	done := make(chan error)
-	go func() { done <- s.PodnyatZashchitu(context.Background()) }()
-	<-pervyyZapushchen
-	err2 := s.PodnyatZashchitu(context.Background())
-	close(vtorayaGotova)
-	err1 := <-done
-	if err1 != nil || err2 != nil {
-		t.Fatalf("err1=%v err2=%v", err1, err2)
+	ctxA := context.WithValue(context.Background(), kluchKto{}, "A")
+	ctxB := context.WithValue(context.Background(), kluchKto{}, "B")
+	doneA := make(chan error, 1)
+	go func() { doneA <- s.PodnyatZashchitu(ctxA) }()
+	<-aVnutri
+	doneB := make(chan error, 1)
+	go func() { doneB <- s.PodnyatZashchitu(ctxB) }()
+	select {
+	case err := <-doneB:
+		t.Fatalf("B закончил подъём (%v), не дождавшись исхода пробы A", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	mu.Lock()
+	for _, z := range poryadok {
+		if strings.HasPrefix(z, "B:") {
+			mu.Unlock()
+			t.Fatalf("B запускал ядро во время пробы A: %v", poryadok)
+		}
+	}
+	mu.Unlock()
+	close(razreshitA)
+	errA, errB := <-doneA, <-doneB
+	if errA != nil || errB != nil {
+		t.Fatalf("A=%v B=%v (%v)", errA, errB, poryadok)
 	}
 	if got := chtoVYadre(t, s); got != "staroe" {
-		t.Fatalf("после отказа нового ядра на месте %q — откатывать было не на что", got)
+		t.Fatalf("на месте %q, ждал откат на прежнее (%v)", got, poryadok)
 	}
 	if s.Yadro.Versiya() == "core-v2-1" {
-		t.Fatal("упавшая сборка подтверждена второй «Подключить»")
+		t.Fatal("упавшая сборка подтверждена")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(poryadok) != 3 || poryadok[0] != "A:novoe" || poryadok[1] != "A:staroe" || poryadok[2] != "B:staroe" {
+		t.Fatalf("порядок запусков %v, ждал A:novoe, A:staroe, B:staroe", poryadok)
 	}
 }
 

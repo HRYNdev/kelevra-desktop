@@ -173,13 +173,16 @@ func TestZamenaYadraPolnyyPut(t *testing.T) {
 	if got := soderzhimoe(t, y.Bin); got != "v2" {
 		t.Fatalf("после замены на месте %q", got)
 	}
-	if y.Versiya() != "core-v2-1" || smena.Prezhniy != "core-v1-1" {
-		t.Fatalf("версия %q, прежняя %q", y.Versiya(), smena.Prezhniy)
+	// До подтверждения новая сборка стоящим ядром не считается.
+	if y.Versiya() != "" || smena.Prezhniy != "core-v1-1" {
+		t.Fatalf("версия до подтверждения %q, прежняя %q", y.Versiya(), smena.Prezhniy)
 	}
 	if got := soderzhimoe(t, y.putPrezhnego()); got != "v1" {
 		t.Fatalf("прежнее ядро для отката не сохранено: %q", got)
 	}
-	smena.Zakrepit()
+	if err := smena.Zakrepit(); err != nil || y.Versiya() != "core-v2-1" {
+		t.Fatalf("подтверждение: %v, версия %q", err, y.Versiya())
+	}
 	for _, put := range []string{y.putPrezhnego(), y.putArhivaNovogo(), y.putOtlozhennogo()} {
 		if estFayl(put) {
 			t.Fatalf("после подтверждения остался %s", filepath.Base(put))
@@ -349,7 +352,7 @@ func TestProbaPerezhivaetPerezapusk(t *testing.T) {
 	}
 	// «Перезапуск»: новая копия, те же файлы.
 	y2 := &Yadro{Papka: y.Papka, Bin: y.Bin, Spisok: y.Spisok}
-	if itog, err := y2.Prigotovit(context.Background(), http.DefaultClient); err != nil || itog.Stoit != "core-v2-1" {
+	if itog, err := y2.Prigotovit(context.Background(), http.DefaultClient); err != nil || !itog.Otlozheno || estFayl(y.putArhivaNovogo()+".tmp") {
 		t.Fatalf("сверка посреди пробы: %+v, %v", itog, err)
 	}
 	smena, err := y2.Smenit()
