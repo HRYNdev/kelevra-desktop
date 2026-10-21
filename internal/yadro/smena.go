@@ -571,6 +571,12 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	if !ok {
 		return nil, nil
 	}
+	// Живое ядро прошлой копии работает из того же файла (его меняют рядом,
+	// smenitYadroPlavno): ни замены, ни восстановления — в следующий подъём,
+	// когда ядра нет.
+	if y.EstBinar() && len(NashiYadra(y.Bin)) > 0 {
+		return nil, nil
+	}
 	if o.Faza != "" {
 		smena, err, dalshe := y.vosstanovitSmenu(&o)
 		if !dalshe {
@@ -582,11 +588,6 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	}
 	if !y.EstBinar() {
 		return nil, nil // ядра нет вовсе — его поставит Zagruzit
-	}
-	// Живое ядро прошлой копии работает из того же файла (его меняют рядом,
-	// smenitYadroPlavno): замена — в следующий подъём, когда ядра нет.
-	if len(NashiYadra(y.Bin)) > 0 {
-		return nil, nil
 	}
 	// Отложенная сборка не новее стоящей — ставить её нельзя.
 	if tek := y.Versiya(); tek != "" && !NoveeTega(o.Teg, tek) {
@@ -654,9 +655,10 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	}
 	sbrositKeshHesha()
 	// 4. Проба: подъём на новом ядре начат.
+	// Версия ядра не пишется до подтверждения (Zakrepit): стоящим
+	// считается только ядро, которое поднялось.
 	o.Faza, o.PodyomIdet = fazaProba, true
 	_ = y.sohranitOtlozhennoe(o)
-	y.zapisatVersiyu(o.Teg)
 	y.probaVydana = true
 	return &Smena{y: y, Teg: o.Teg, Prezhniy: prezhniyTeg}, nil
 }
@@ -682,7 +684,6 @@ func (y *Yadro) vosstanovitSmenu(o *otlozhennoe) (*Smena, error, bool) {
 		}
 		o.Faza, o.PodyomIdet = fazaProba, true
 		_ = y.sohranitOtlozhennoe(*o)
-		y.zapisatVersiyu(o.Teg)
 		return &Smena{y: y, Teg: o.Teg, Prezhniy: o.Prezhniy}, nil, false
 	}
 	// Новое не встало (или уже откачено). Если файла ядра нет или на месте
@@ -723,6 +724,7 @@ func (s *Smena) Zakrepit() error {
 		y.otvergnut(s.Teg)
 		return fmt.Errorf("%w: сборка %s", ErrNovoeYadroPropalo, s.Teg)
 	}
+	y.zapisatVersiyu(s.Teg)
 	_ = y.ubratStaroePrezhnee()
 	y.ubratOtlozhennoe()
 	return nil
@@ -750,11 +752,25 @@ func (s *Smena) Otkatit() error {
 	defer y.zamokSmeny.Unlock()
 	y.probaVydana = false
 	o, _ := y.chitatOtlozhennoe()
+	var err error
 	if !estFaylMesto(y.putPrezhnego()) {
-		return fmt.Errorf("прежнего ядра рядом нет")
+		err = fmt.Errorf("прежнего ядра рядом нет")
+	} else if verr := y.vernutPrezhnee(o.ShaPrezhnego); verr != nil {
+		err = fmt.Errorf("прежнее ядро не вернуть: %w", verr)
 	}
-	if err := y.vernutPrezhnee(o.ShaPrezhnego); err != nil {
-		return fmt.Errorf("прежнее ядро не вернуть: %w", err)
+	if err != nil {
+		// Вернуть нечего, а новое не запускается: сборка отвергается, её
+		// файл отодвигается — следующий подъём поставит последнюю
+		// подписанную НЕ отвергнутую сборку (Zagruzit), а не оставит
+		// упавшую стоящим ядром.
+		y.otvergnut(s.Teg)
+		otodvinuto := y.Bin + ".otvergnutoe"
+		_ = os.Remove(otodvinuto)
+		if rerr := os.Rename(y.Bin, otodvinuto); rerr != nil {
+			return fmt.Errorf("%v; упавшую сборку не отодвинуть: %w", err, rerr)
+		}
+		sbrositKeshHesha()
+		return fmt.Errorf("%w; сборка %s отвергнута и отодвинута", err, s.Teg)
 	}
 	y.zapisatVersiyu(s.Prezhniy)
 	if o.Teg != "" {

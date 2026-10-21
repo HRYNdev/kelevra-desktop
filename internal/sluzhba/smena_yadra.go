@@ -98,12 +98,14 @@ func slovoVersii(teg string) string {
 
 // smenitYadroPeredPodyomom ставит отложенную сборку, если ядро этой копии не
 // запущено. nil — замены нет (нечего менять, нет прав, ядро работает).
+//
+// Вызывающий должен держать zamokSmenyYadra: пока идёт пробный подъём, все
+// прочие подъёмы ждут его исхода на этом замке, поэтому новое ядро на пробе
+// запускает только держатель пробы.
 func (s *Sluzhba) smenitYadroPeredPodyomom() *yadro.Smena {
 	if !s.estPrava() || s.Yadro.PID() != "" {
 		return nil
 	}
-	s.zamokSmenyYadra.Lock()
-	defer s.zamokSmenyYadra.Unlock()
 	smena, err := s.Yadro.Smenit()
 	if err != nil {
 		log.Printf("замена ядра: %v — остаюсь на прежнем", err)
@@ -162,11 +164,25 @@ func (s *Sluzhba) pokolenieAvtorezhima() uint64 {
 // ошибке, отмене или «Отключить».
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	pokolenie := s.pokolenieAvtorezhima()
+	// Замок замены: с пробой он держится до её исхода (все прочие подъёмы
+	// ждут — ядро на пробе запускает только держатель), без пробы
+	// отпускается сразу.
+	s.zamokSmenyYadra.Lock()
 	smena := s.smenitYadroPeredPodyomom()
-	err := s.podnyatZashchituRaz(ctx)
 	if smena == nil {
-		return err
+		s.zamokSmenyYadra.Unlock()
+		return s.podnyatZashchituRaz(ctx)
 	}
+	defer s.zamokSmenyYadra.Unlock()
+	reshena := false
+	defer func() {
+		// Паника или иной выход без решения — проба отпускается.
+		if !reshena {
+			smena.Otpustit()
+		}
+	}()
+	err := s.podnyatZashchituRaz(ctx)
+	reshena = true
 	if err == nil {
 		if zerr := smena.Zakrepit(); zerr != nil {
 			log.Printf("замена ядра: связь поднята, но на месте ядра не сборка %s (%v) — новое ядро убрано с диска, от сборки отказываюсь", smena.Teg, zerr)
@@ -182,11 +198,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		smena.Otpustit()
 		return err
 	}
-	// Замок держится от отката до конца повторного подъёма: второе
-	// подключение не должно ни менять файл ядра, ни поднимать его, пока
-	// решается судьба сборки.
-	s.zamokSmenyYadra.Lock()
-	defer s.zamokSmenyYadra.Unlock()
+	// Замок держится (взят выше) от отката до конца повторного подъёма.
 	if s.Yadro.PID() != "" {
 		// Ядро уже поднял кто-то другой (второе окно): файл не трогаем.
 		smena.Otpustit()
@@ -196,8 +208,11 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	oerr := smena.Otkatit()
 	s.sbrositOtpechatokYadra()
 	if oerr != nil {
-		log.Printf("замена ядра: сборка %s не поднялась (%v), и прежнее ядро не вернуть: %v", smena.Teg, err, oerr)
-		return err
+		log.Printf("замена ядра: сборка %s не поднялась (%v), и прежнее ядро не вернуть: %v — поднимаю на последней подписанной сборке, кроме отвергнутых", smena.Teg, err, oerr)
+		if s.pokolenieAvtorezhima() != pokolenie || ctx.Err() != nil {
+			return err
+		}
+		return s.podnyatZashchituRaz(ctx)
 	}
 	// Человек успел сказать своё («Отключить», новое решение автомата) —
 	// связь против его воли не поднимаем, и о сборке не судим.

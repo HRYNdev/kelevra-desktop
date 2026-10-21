@@ -172,8 +172,8 @@ func TestObrezannoePrezhneeNeVozvrashchaetsya(t *testing.T) {
 	if err := s.Otkatit(); err == nil {
 		t.Fatal("обрезанное прежнее ядро встало на место")
 	}
-	if got := soderzhimoe(t, y.Bin); got != "v2" {
-		t.Fatalf("на месте %q", got)
+	if estFayl(y.Bin) {
+		t.Fatalf("на месте ядра осталось %q", soderzhimoe(t, y.Bin))
 	}
 	if estFayl(y.putPrezhnego()) {
 		t.Fatal("испорченный .prezhnee остался")
@@ -255,5 +255,45 @@ func TestProbaOdnomuIOtpustit(t *testing.T) {
 	}
 	if err := s.Zakrepit(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Ревью, круг 3: откат не удался (прежнего рядом нет). Упавшая сборка не
+// становится стоящим ядром: она отвергнута, её файл отодвинут, следующая
+// установка ставит последнюю подписанную НЕ отвергнутую сборку.
+func TestRev3OtkatNeUdalsyaNovoeStanovitsyaPostoyannym(t *testing.T) {
+	y := stendSmeny(t, "v1",
+		sborkaStenda{teg: "core-v2-1", yadro: "v2", podpisano: "v2"},
+		sborkaStenda{teg: "core-v1-1", yadro: "v1", podpisano: "v1"},
+	)
+	y.zapisatVersiyu("core-v1-1")
+	if itog, err := y.Prigotovit(context.Background(), http.DefaultClient); err != nil || !itog.Otlozheno {
+		t.Fatalf("подготовка: %+v, %v", itog, err)
+	}
+	s, err := y.Smenit()
+	if err != nil || s == nil {
+		t.Fatalf("замена: %v", err)
+	}
+	os.Remove(y.putPrezhnego()) // .prezhnee пропал (антивирус/очистка)
+	if err := s.Otkatit(); err == nil {
+		t.Fatal("откат без прежнего прошёл")
+	}
+	if s2, _ := y.Smenit(); s2 != nil {
+		t.Fatal("упавшая сборка снова выдана на пробу")
+	}
+	if _, est := y.chitatOtlozhennoe(); est {
+		t.Fatal("журнал упавшей сборки остался")
+	}
+	if v := y.chitatVersiyu(); len(v.Otvergnuty) != 1 || v.Otvergnuty[0] != "core-v2-1" {
+		t.Fatalf("отметки об отказе нет: %v", v.Otvergnuty)
+	}
+	if estFayl(y.Bin) || y.Versiya() == "core-v2-1" {
+		t.Fatal("упавшая сборка осталась стоящим ядром")
+	}
+	if err := y.Zagruzit(context.Background()); err != nil {
+		t.Fatalf("установка после отказа: %v", err)
+	}
+	if got := soderzhimoe(t, y.Bin); got != "v1" || y.Versiya() != "core-v1-1" {
+		t.Fatalf("после отказа поставлено %q (%q), ждал последнюю не отвергнутую core-v1-1", got, y.Versiya())
 	}
 }
