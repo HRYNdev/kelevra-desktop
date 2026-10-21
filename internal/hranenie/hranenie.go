@@ -401,6 +401,11 @@ func PutPulta() string { return filepath.Join(Papka(), "pult.json") }
 // В ней имя человека и список его устройств — закрыта, как настройки.
 func PutSvodki() string { return filepath.Join(Papka(), "svodka.json") }
 
+// PutEtagaSvodki — ETag той сводки, что лежит в PutSvodki, дословно как его
+// прислал сервер. Без него первый лёгкий опрос /info после перезапуска
+// службы шёл без If-None-Match и тянул сводку целиком, хотя она не менялась.
+func PutEtagaSvodki() string { return filepath.Join(Papka(), "svodka.etag") }
+
 // lichnoeImya — относится ли имя файла к lichnyeFayly (для переноса данных
 // из старой папки, см. Perenesti).
 func lichnoeImya(imya string) bool {

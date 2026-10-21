@@ -154,10 +154,14 @@ func (s *Sluzhba) nachatPult() {
 	s.Podpiska.Pult = s.pult.Zagolovok
 	s.Podpiska.Sostoyanie = s.sostoyanieDlyaZagolovka
 	// Сводка /info с диска: карточка подписки после перезапуска без сети.
+	// ETag берётся только вместе с ней: «не менялось» на ETag без сводки
+	// оставило бы службу без карточки до первой смены на сервере.
 	if b, err := os.ReadFile(hranenie.PutSvodki()); err == nil {
 		if sv, err := podpiska.RazobratSvedeniya(b); err == nil {
+			etag, _ := os.ReadFile(hranenie.PutEtagaSvodki())
 			s.zamok.Lock()
 			s.svedeniya = sv
+			s.etagSvodki = string(etag)
 			s.zamok.Unlock()
 		}
 	}
@@ -168,9 +172,13 @@ func (s *Sluzhba) prinyatSvodku(sv *podpiska.Svedeniya) {
 	if s.pult == nil || sv == nil {
 		return
 	}
+	// ETag — следом за сводкой и только если она легла: на диске они пара,
+	// и после перезапуска лёгкий опрос спросит «не менялось ли» (nachatPult).
 	if len(sv.Syroe) > 0 {
 		if err := hranenie.ZapisatZakryto(hranenie.PutSvodki(), sv.Syroe); err != nil {
 			log.Printf("сводка /info не сохранилась на диск: %v", err)
+		} else if err := hranenie.ZapisatZakryto(hranenie.PutEtagaSvodki(), []byte(sv.ETag)); err != nil {
+			log.Printf("ETag сводки не сохранился на диск: %v", err)
 		}
 	}
 	s.zamok.Lock()
