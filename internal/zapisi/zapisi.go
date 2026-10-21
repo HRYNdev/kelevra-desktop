@@ -134,14 +134,22 @@ func (p *Pisatel) Otkaz(imya, adres string, port int, kod, vyhod string, ms int)
 
 // Svodka — итог окна. Переживает ротацию потока ядра и потому остаётся
 // единственным следом того, что творилось час назад.
-func (p *Pisatel) Svodka(oknoSek, soed, otkazy int, kody, imena map[string]int) {
-	p.zapisat("svodka", map[string]any{
+//
+// otkazy — все отказы окна, как и раньше; shumV6 — сколько из них пришлось на
+// шестую версию без пути (zapisi.Sobytie.ShumV6). Новое поле, а не вычитание
+// из otkazy: смысл старого поля для сервера не меняется.
+func (p *Pisatel) Svodka(oknoSek, soed, otkazy, shumV6 int, kody, imena map[string]int) {
+	polya := map[string]any{
 		"okno":   oknoSek,
 		"soed":   soed,
 		"otkazy": otkazy,
 		"kody":   kody,
 		"imena":  imena,
-	})
+	}
+	if shumV6 > 0 {
+		polya["shum_v6"] = shumV6
+	}
+	p.zapisat("svodka", polya)
 }
 
 // Perehod — смена состояния: туннель, сеть, права, профиль, обновление.

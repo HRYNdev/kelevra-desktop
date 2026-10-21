@@ -12,11 +12,15 @@ import (
 // Коды причин — закрытый список, тот же, что на телефоне и на сервере. Порядок
 // важен: первое совпадение и есть код.
 var prichiny = []struct {
-	kod    string
-	obraz  string
+	kod   string
+	obraz string
 }{
 	{"set_nedostupna", "network is unreachable"},
+	// Та же причина словами Windows: «A socket operation was attempted to an
+	// unreachable network» (и укороченное «connect: unreachable network»).
+	{"set_nedostupna", "unreachable network"},
 	{"marshruta_net", "no route to host"},
+	{"marshruta_net", "unreachable host"},
 	{"taymaut", "i/o timeout"},
 	{"taymaut", "context deadline exceeded"},
 	{"imya_ne_reshilos", "no such host"},
@@ -33,6 +37,11 @@ var prichiny = []struct {
 var rxOtkaz = regexp.MustCompile(
 	`open connection to \[?([^\]\s]+?)\]?:(\d+)(?: using outbound/([a-zA-Z0-9_.\-]+))?[^:]*: (.+)$`)
 
+// Адрес шестой версии в тексте причины: «dial tcp [2a00:1450::5]:443: …».
+// Ядро пишет в «open connection to» имя, если его знает, а адрес, куда на
+// самом деле шёл набор, остаётся только в причине.
+var rxAdresV6VPrichine = regexp.MustCompile(`\[[0-9a-fA-F]*:[0-9a-fA-F:.%a-zA-Z]*\]:\d+`)
+
 // Соединение заведено в туннель.
 var rxVhod = regexp.MustCompile(`inbound connection to `)
 
@@ -42,14 +51,26 @@ var rxIshod = regexp.MustCompile(
 
 // Sobytie — что нашлось в одной строке журнала ядра.
 type Sobytie struct {
-	Otkaz  bool
-	Vhod   bool
-	Ishod  bool
-	Imya   string // имя сайта, если ядро его назвало
-	Adres  string // адрес, если вместо имени стоял он
-	Port   int
-	Vyhod  string
-	Kod    string
+	Otkaz bool
+	Vhod  bool
+	Ishod bool
+	Imya  string // имя сайта, если ядро его назвало
+	Adres string // адрес, если вместо имени стоял он
+	Port  int
+	Vyhod string
+	Kod   string
+	// V6 — отказ по адресу шестой версии (адрес в «куда» или в причине).
+	V6 bool
+}
+
+// ShumV6 — отказ, который говорит не о беде, а о том, что у машины нет пути
+// по шестой версии: программа получила адрес AAAA, постучалась по нему, сеть
+// ответила «недоступна». Программа после этого сама идёт по четвёртой версии
+// (так устроен выбор адреса в системе), и человек ничего не замечает. На
+// ноутбуке 07.10 таких было 1023 из 1031 отказа за утро — и каждое окно
+// выходило «бедой», хотя по четвёртой версии ошибок не было ни одной.
+func (s Sobytie) ShumV6() bool {
+	return s.Otkaz && s.V6 && (s.Kod == "set_nedostupna" || s.Kod == "marshruta_net")
 }
 
 // Razobrat — одна строка журнала ядра. Ничего не нашлось — нулевое событие.
@@ -58,6 +79,7 @@ func Razobrat(stroka string) Sobytie {
 	if m := rxOtkaz.FindStringSubmatch(stroka); m != nil && strings.Contains(stroka, "ERROR") {
 		kuda, port, vyhod, prichina := m[1], m[2], m[3], m[4]
 		s := Sobytie{Otkaz: true, Vyhod: vyhod, Kod: kodPrichiny(prichina)}
+		s.V6 = strings.Contains(kuda, ":") || rxAdresV6VPrichine.MatchString(prichina)
 		s.Port, _ = strconv.Atoi(port)
 		if pohozheNaAdres(kuda) {
 			s.Adres = kuda
