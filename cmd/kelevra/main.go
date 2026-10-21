@@ -964,6 +964,9 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// бы дней приложение ни висело в трее. Только СПРАШИВАЕТ и запоминает
 	// находку для /api/sostoyanie — не ставит сама (см. комментарий метода).
 	go s.SleditZaObnovleniem(ctx, periodFonovoyProverki())
+	// Ядро тоже сверяется со свежей подписанной сборкой и меняется при
+	// следующем подключении (internal/sluzhba/smena_yadra.go).
+	go s.SveryatYadro(ctx, periodFonovoyProverki())
 	// Раз в сутки, в конце дня, копия отдаёт свои журналы разработчику
 	// (internal/zhurnaly). Тот же ctx, что у двух горутин выше — defer
 	// otmena() гасит всех троих разом. Тумблер человека проверяется внутри,

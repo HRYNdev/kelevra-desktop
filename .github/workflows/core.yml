@@ -26,9 +26,18 @@ on:
         type: boolean
         required: false
         default: false
+      probnoe:
+        description: "Пробная сборка (prerelease): клиенты её не берут, только стенд с KELEVRA_YADRO_PROBNYE=1"
+        type: boolean
+        required: false
+        default: false
 
 env:
   CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+  # Тег сборки ядра: номер прогона и номер повтора — повторный прогон не
+  # кладёт второй архив под тот же тег. Клиент сравнивает теги по версии
+  # (internal/yadro/versiya_sborki.go): core-v<semver>-<прогон>.<повтор>.
+  TEG_YADRA: core-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}-${{ github.run_number }}.${{ github.run_attempt }}
   PATCH_REF: ${{ github.event.inputs.patch_ref || '1af139394ca4bd633ff2395cd42899789466fcf7' }}
 
 jobs:
@@ -37,6 +46,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Тег sing-box — только semver (vX.Y.Z или vX.Y.Z-проба): из него
+      # собирается тег сборки, который клиенты разбирают и сравнивают.
+      - name: Проверить тег sing-box
+        run: |
+          if ! [[ "$CORE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "ОШИБКА: core_ref «$CORE_REF» не semver (ждём vX.Y.Z или vX.Y.Z-beta.N)"
+            exit 1
+          fi
+          echo "тег сборки: $TEG_YADRA"
+
       - uses: actions/checkout@v5
         with:
           repository: SagerNet/sing-box
@@ -94,24 +113,27 @@ jobs:
         with:
           path: sign-src
 
+      # Тег релиза входит в подпись (второй формат): замена ядра у стоящих
+      # установок принимает архив только под тем тегом, под которым он подписан.
       - name: Подписать архив ядра
         env:
           KELEVRA_SIGN_KEY: ${{ secrets.KELEVRA_SIGN_KEY }}
         run: |
-          (cd sign-src && go run ./cmd/podpisat ../sing-box-windows-amd64.zip sing-box-windows-amd64.zip)
+          (cd sign-src && go run ./cmd/podpisat ../sing-box-windows-amd64.zip sing-box-windows-amd64.zip "$TEG_YADRA")
           test -s sing-box-windows-amd64.zip.sig
 
       - uses: softprops/action-gh-release@v3
         if: ${{ github.event.inputs.vypustit == 'true' }}
         with:
-          tag_name: core-${{ env.CORE_REF }}-${{ github.run_number }}
-          name: Ядро ${{ env.CORE_REF }} (сборка ${{ github.run_number }})
+          tag_name: ${{ env.TEG_YADRA }}
+          name: Ядро ${{ env.CORE_REF }} (сборка ${{ github.run_number }}.${{ github.run_attempt }})
           body: |
             Ядро своей сети: апстрим sing-box плюс транспорт xhttp, которого нет в официальных сборках.
             Проверка наличия транспорта проходит в сборке автоматически.
           files: |
             sing-box-windows-amd64.zip
             sing-box-windows-amd64.zip.sig
-          prerelease: false
+          # Пробная сборка не уходит ни новым установкам, ни на замену у стоящих.
+          prerelease: ${{ github.event.inputs.probnoe == 'true' }}
           # Релиз ядра не должен становиться «последним»: latest/download/Kelevra.exe отдал бы 404.
           make_latest: false

@@ -183,7 +183,13 @@ type Sluzhba struct {
 	svedeniya  *podpiska.Svedeniya
 	klyuch     string
 	kachaemBin bool // идёт скачивание ядра
-	kartina    konfig.Kartina
+	// zamokSmenyYadra — замена файла ядра (smena_yadra.go) идёт одна за раз:
+	// два одновременных подключения не должны менять файл друг под другом.
+	zamokSmenyYadra sync.Mutex
+	// zhurnalStarayaPodpis — когда в журнал писали про сборку ядра с
+	// подписью прежнего формата (не чаще раза в сутки).
+	zhurnalStarayaPodpis time.Time
+	kartina              konfig.Kartina
 	// otkaz — почему последняя попытка не подняла связь, словами человека
 	// (Oshibka* из PodnyatZashchitu). Пусто — связь поднята или её не
 	// поднимали. Окно показывает строку в состоянии «Нет подключения».
@@ -428,7 +434,7 @@ func Novaya() (*Sluzhba, error) {
 	}
 	s := &Sluzhba{
 		Nastroyki:          n,
-		Yadro:              &yadro.Yadro{Bin: hranenie.PutYadra(), Papka: hranenie.PapkaYadra()},
+		Yadro:              novoeYadro(),
 		Podpiska:           &podpiska.Klient{DeviceID: n.DeviceID, Host: os.Getenv("KELEVRA_PODPISKA"), Shema: os.Getenv("KELEVRA_SHEMA"), Trafik: n.TrafikUstroystva},
 		klyuch:             sluchaynyy(),
 		avtorezhimDnsAdres: os.Getenv("KELEVRA_AVTOREZHIM_DNS"),
@@ -766,6 +772,12 @@ func (s *Sluzhba) SobratPasport() string {
 
 	if sum := s.otpechatokFayla(hranenie.PutYadra(), &s.summaYadra); sum != "" {
 		chasti = append(chasti, "yadro="+sum)
+	}
+	// Сборка ядра (тег core-*): по ней видно, дошла ли замена ядра.
+	if s.Yadro != nil {
+		if teg := s.Yadro.Versiya(); teg != "" {
+			chasti = append(chasti, "yadro_sborka="+teg)
+		}
 	}
 	if put, err := obnovlenie.PutSebya(); err == nil {
 		if sum := s.otpechatokFayla(put, &s.summaExe); sum != "" {
@@ -2412,10 +2424,11 @@ func tunnelPoOshibke(err error) bool {
 		strings.Contains(t, "wintun") || strings.Contains(t, "create adapter")
 }
 
-// PodnyatZashchitu поднимает туннель, а если ядра на машине ещё нет — сначала
-// приносит его сам. Общее тело для ручки «Подключить» (podklyuchit) и для
-// авторежима (вызывается из avtorezhimKolbek, когда обстановка стала «вне
-// дома»).
+// podnyatZashchituRaz — одна попытка подъёма (обёртка с заменой ядра —
+// PodnyatZashchitu в smena_yadra.go). Поднимает туннель, а если ядра на
+// машине ещё нет — сначала приносит его сам. Общее тело для ручки
+// «Подключить» (podklyuchit) и для авторежима (вызывается из
+// avtorezhimKolbek, когда обстановка стала «вне дома»).
 //
 // Режим один — туннель. Нет прав — OshibkaNetPrav, ядро не запускается вовсе.
 // Туннель не поднялся — связь не поднята, человеку причина (Oshibka*).
@@ -2423,7 +2436,7 @@ func tunnelPoOshibke(err error) bool {
 //
 // ctx — основа для собственных таймаутов метода (15 минут на скачивание
 // ядра, 70 секунд на его старт); HTTP-обработчик передаёт context.Background().
-func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
+func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 	// Пока идём вверх, авторежиму нельзя гасить ядро из-под нас (см. поле
 	// podyomIdet и OpustitZashchitu).
 	s.zamok.Lock()
@@ -2519,7 +2532,12 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("подъём связи прерван: %w", err)
 		}
-		return iskhodnyyZapusk(c)
+		// Отказ самого запуска ядра помечается: только за него замена ядра
+		// может винить новую сборку (smena_yadra.go, novoeYadroVinovato).
+		if err := iskhodnyyZapusk(c); err != nil {
+			return oshibkaZapuskaYadra{err}
+		}
+		return nil
 	}
 	zctx, otmena := context.WithTimeout(ctx, 70*time.Second)
 	defer otmena()

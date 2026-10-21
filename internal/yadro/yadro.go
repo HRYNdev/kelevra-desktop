@@ -7,6 +7,7 @@ package yadro
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -45,7 +46,15 @@ type Yadro struct {
 	Api    string // адрес Clash API, пусто = ApiAdres
 	Sekret string // пароль Clash API, если конфиг его задаёт
 	Spisok string // откуда брать сборки ядра, пусто = Relizy (подменяется на стенде)
-	Klient *http.Client
+	// BratProbnye — брать и пробные сборки ядра (prerelease). Только стенд:
+	// у человека пробное ядро не ставится ни новой установке, ни на замену.
+	// Подпись требуется и для пробных.
+	BratProbnye bool
+	// zamokSmeny — файлы ядра и замены (smena.go) меняет один за раз.
+	zamokSmeny sync.Mutex
+	// probaVydana — Smena уже у одного вызывающего (под zamokSmeny).
+	probaVydana bool
+	Klient      *http.Client
 
 	zamok   sync.Mutex
 	derzh   *derzhatel
@@ -159,6 +168,14 @@ func (y *Yadro) ZapisatKonfig(telo []byte) error {
 	return os.Rename(vremenny, y.PutKonfiga())
 }
 
+// ErrNeZapuskalos — запуск ядра не начат: нет файла ядра или конфига.
+// От сборки ядра это не зависит.
+var ErrNeZapuskalos = errors.New("запуск ядра не начат")
+
+// ErrOstanovleno — ядро остановили (Ostanovit, «Отключить») посреди его
+// старта. Это не отказ ядра.
+var ErrOstanovleno = errors.New("запуск ядра прерван остановкой")
+
 // EstBinar — стоит ли ядро на месте. Без него подключаться нечем.
 func (y *Yadro) EstBinar() bool {
 	st, err := os.Stat(y.Bin)
@@ -182,11 +199,11 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 	}
 	if !y.EstBinar() {
 		y.zamok.Unlock()
-		return fmt.Errorf("ядро не найдено: %s", y.Bin)
+		return fmt.Errorf("%w: ядро не найдено: %s", ErrNeZapuskalos, y.Bin)
 	}
 	if _, err := os.Stat(y.PutKonfiga()); err != nil {
 		y.zamok.Unlock()
-		return fmt.Errorf("нет конфига: сначала введите код доступа")
+		return fmt.Errorf("%w: нет конфига: сначала введите код доступа", ErrNeZapuskalos)
 	}
 
 	// Вход службы — из того самого конфига, с которым ядро стартует.
@@ -235,6 +252,13 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 	for {
 		select {
 		case <-umer:
+			y.zamok.Lock()
+			ostanovili := y.sost == Stoit
+			y.zamok.Unlock()
+			if ostanovili {
+				log.Printf("запуск ядра прерван: ядро остановили посреди старта")
+				return ErrOstanovleno
+			}
 			hvost := hvostLoga(filepath.Join(y.Papka, "yadro.log"))
 			log.Printf("ядро упало при старте: %s", hvost)
 			return fmt.Errorf("ядро упало при старте: %s", hvost)
