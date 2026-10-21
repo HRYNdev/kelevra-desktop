@@ -18,7 +18,9 @@ func TestPoryadokVersiySborok(t *testing.T) {
 		"core-v1.14.0-1",
 		"core-v1.14.1-1",
 		"core-v1.14.1-2",
-		"core-v1.14.1-10",
+		"core-v1.14.1-2.2",
+		"core-v1.14.1-2.3",
+		"core-v1.14.1-10.1",
 		"core-v2.0.0-1",
 	}
 	for i := 0; i < len(poryadok); i++ {
@@ -31,7 +33,7 @@ func TestPoryadokVersiySborok(t *testing.T) {
 }
 
 func TestNerazbiraemyeTegi(t *testing.T) {
-	for _, teg := range []string{"core-nightly", "core-v1.14.1", "core-vx.y.z-1", "core-v1.14.1-", "core-v1.14.0--1", "core-v1.2.3.4-1", "app-v0.6.84"} {
+	for _, teg := range []string{"core-nightly", "core-v1.14.1", "core-vx.y.z-1", "core-v1.14.1-", "core-v1.14.0--1", "core-v1.2.3.4-1", "core-v1.14.1-3.x", "core-v1.14.1-3.", "app-v0.6.84"} {
 		if _, err := razobratTeg(teg); err == nil {
 			t.Errorf("тег %q разобран, ждал отказ", teg)
 		}

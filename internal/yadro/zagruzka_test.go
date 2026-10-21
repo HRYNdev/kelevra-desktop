@@ -83,3 +83,16 @@ func TestRaspakovatBezYadra(t *testing.T) {
 		t.Fatal("на месте ядра остался мусор")
 	}
 }
+
+// Недописанное (ошибка посреди распаковки) не остаётся рядом с ядром.
+func TestRaspakovatUbiraetTmpPriOshibke(t *testing.T) {
+	arhiv := sobratArhiv(t, []string{imyaYadra()})
+	papka := t.TempDir()
+	kuda := filepath.Join(papka, "net-takoy-papki", imyaYadra())
+	if err := raspakovat(arhiv, kuda); err == nil {
+		t.Fatal("распаковка в несуществующую папку прошла")
+	}
+	if _, err := os.Stat(kuda + ".tmp"); err == nil {
+		t.Fatal("остался .tmp")
+	}
+}

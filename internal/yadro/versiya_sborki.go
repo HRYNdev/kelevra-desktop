@@ -17,9 +17,10 @@ import (
 // коммита тега, и сборка со старым ядром, выложенная позже, оказалась бы
 // «свежей».
 type versiyaSborki struct {
-	chisla [3]int
-	proba  []string // части после «-» в версии sing-box (beta.4 → beta, 4)
-	nomer  int      // номер сборки
+	chisla  [3]int
+	proba   []string // части после «-» в версии sing-box (beta.4 → beta, 4)
+	nomer   int      // номер сборки
+	popytka int      // номер повторного прогона той же сборки (N.M), 0 — нет
 }
 
 // razobratTeg разбирает тег core-*. Ошибка — тег не по образцу core.yml.
@@ -33,11 +34,20 @@ func razobratTeg(teg string) (versiyaSborki, error) {
 	if i <= 0 {
 		return v, fmt.Errorf("в теге %q нет номера сборки", teg)
 	}
-	nomer, err := strconv.Atoi(ostatok[i+1:])
+	// Номер сборки — «N» или «N.M» (M — повторный прогон, core.yml).
+	nomerS, popytkaS, estPopytka := strings.Cut(ostatok[i+1:], ".")
+	nomer, err := strconv.Atoi(nomerS)
 	if err != nil || nomer < 0 {
 		return v, fmt.Errorf("номер сборки в теге %q не число", teg)
 	}
 	v.nomer = nomer
+	if estPopytka {
+		p, err := strconv.Atoi(popytkaS)
+		if err != nil || p < 0 {
+			return v, fmt.Errorf("номер сборки в теге %q не число", teg)
+		}
+		v.popytka = p
+	}
 	semver := ostatok[:i]
 	osnova, proba, estProba := strings.Cut(semver, "-")
 	chasti := strings.Split(osnova, ".")
@@ -75,7 +85,10 @@ func sravnitSborki(a, b versiyaSborki) int {
 	if r := sravnitProby(a.proba, b.proba); r != 0 {
 		return r
 	}
-	return sravnitChisla(a.nomer, b.nomer)
+	if r := sravnitChisla(a.nomer, b.nomer); r != 0 {
+		return r
+	}
+	return sravnitChisla(a.popytka, b.popytka)
 }
 
 func sravnitChisla(a, b int) int {

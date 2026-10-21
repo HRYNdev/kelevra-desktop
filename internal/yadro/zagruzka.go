@@ -299,12 +299,17 @@ func raspakovat(arhiv, kuda string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(vyhod, io.LimitReader(vhod, 200<<20)); err != nil {
-			vyhod.Close()
-			return err
+		_, err = io.Copy(vyhod, io.LimitReader(vhod, 200<<20))
+		if cerr := vyhod.Close(); err == nil {
+			err = cerr
 		}
-		vyhod.Close()
-		return os.Rename(vremenny, kuda)
+		if err == nil {
+			err = os.Rename(vremenny, kuda)
+		}
+		if err != nil {
+			_ = os.Remove(vremenny) // недописанный файл не оставляем
+		}
+		return err
 	}
 	return fmt.Errorf("в архиве нет %s", iskomoe)
 }
