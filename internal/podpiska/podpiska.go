@@ -2,11 +2,13 @@
 //
 // Тот же протокол, что у мобильного клиента (kelevra-box):
 //
-//	GET https://<хост>/k/<код>       -> готовый config.json для sing-box
-//	GET https://<хост>/k/<код>/info  -> сведения о подписке (срок, трафик)
+//	POST https://<дверь>/k/<код>/ustroystvo -> {"profil": "https://<дверь>/u/<ключ>"} (Voyti)
+//	GET  https://<дверь>/u/<ключ>           -> готовый config.json для sing-box
+//	GET  https://<дверь>/u/<ключ>/info      -> сведения о подписке (срок, трафик)
 //
-// Мобильный ходит на /k/, десктопный форк ходил на /s/ — поэтому пробуем оба
-// пути по очереди, пока сервер не ответит.
+// Старый путь по общему коду — GET /k/<код> и /k/<код>/info: им ходят двери без
+// входа устройства и установки, вошедшие до него. Мобильный ходит на /k/,
+// десктопный форк ходил на /s/ — поэтому старым путём пробуем оба префикса.
 package podpiska
 
 import (
@@ -221,54 +223,80 @@ type otvetVhoda struct {
 	Tekst  string `json:"tekst"`
 }
 
-// Voyti — вход по коду, как у телефона (Priglashenie.vybratDver): двери по порядку,
-// у каждой сперва вход устройства (POST /k/<код>/ustroystvo — дверь своей сети выдаёт
-// ключ этой машины и адрес /u/<ключ>), а если дверь такого входа не знает (404/405) —
-// старый путь /k/<код>. Возвращает адрес подписки, который сохранять.
+// kodDopustim — код доступа или ключ в том виде, в каком он стоит в пути адреса (сервер
+// принимает ровно этот набор знаков и длину, см. KelevraServer server/app.py).
+var kodDopustim = regexp.MustCompile(`^[A-Za-z0-9_-]{4,64}$`)
+
+// ChistyyKod — код из ввода человека: без пробелов где угодно (код показывают группами
+// «K7QM 2XRT 9PLA», так его и перепечатывают). Регистр и дефисы не трогаются: старые коды
+// к регистру чувствительны, а новые сервер сам сводит к одному виду.
+func ChistyyKod(vvod string) string {
+	return strings.Join(strings.Fields(vvod), "")
+}
+
+// Voyti — вход по коду (KelevraServer docs/PRIGLASHENIE.md, образец — телефон,
+// Priglashenie.vybratDver). Возвращает адрес подписки, который сохранять.
+//
+// Два прохода. Первый — вход устройства у всех дверей по порядку: POST /k/<код>/ustroystvo,
+// дверь своей сети заводит эту машину и выдаёт ей свой ключ, адрес /u/<ключ>. Только если
+// ни одна дверь машину так не завела, второй проход — старый путь /k/<код> у дверей,
+// ответивших 404/405 (нет такого входа или код незнаком), в том же порядке.
+//
+// Почему не по одной двери, как телефон. Старый сервер семьи пересылает старый путь
+// переехавшего человека в свою сеть: при обходе «дверь за дверью» первая же дверь отдала
+// бы ему общий /k/<код>, и машина жила бы мимо ключа устройства — без лимита устройств и
+// без отключения по одному. Человек старой системы второй дверью не узнан (404) и
+// остаётся там же, где был.
 func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string, error) {
-	kod = strings.TrimSpace(kod)
+	kod = ChistyyKod(kod)
 	if kod == "" {
 		return "", fmt.Errorf("пустой код доступа")
 	}
+	if !kodDopustim.MatchString(kod) {
+		return "", fmt.Errorf("Код доступа содержит недопустимые символы")
+	}
 	var posledn error
 	neTolko404 := false
+	var stariePuti []string
 	for _, dver := range dveri {
 		dver = strings.TrimSpace(dver)
 		if dver == "" {
 			continue
 		}
-		req, err := k.zaprosMetodom(ctx, http.MethodPost, fmt.Sprintf("%s://%s/k/%s/ustroystvo", k.shema(), dver, kod))
+		status, o, err := k.vhodUstroystva(ctx, k.shema(), dver, kod)
 		if err != nil {
-			return "", err
-		}
-		otvet, err := k.http().Do(req)
-		if err != nil {
-			posledn, neTolko404 = SkrytKodVOshibke(err), true
+			if status < 0 {
+				return "", err
+			}
+			posledn, neTolko404 = err, true
 			continue
 		}
-		telo, _ := io.ReadAll(io.LimitReader(otvet.Body, 64<<10))
-		otvet.Body.Close()
-		var o otvetVhoda
-		_ = json.Unmarshal(telo, &o)
 		switch {
-		case otvet.StatusCode == http.StatusOK && o.Profil != "":
-			return o.Profil, nil
-		case otvet.StatusCode == http.StatusNotFound || otvet.StatusCode == http.StatusMethodNotAllowed:
-			// Входа устройства тут нет или код ему незнаком — спросим старым путём.
-			_, adres, err := k.konfigNaDveri(ctx, dver, kod)
-			if err == nil {
-				return adres, nil
+		case status == http.StatusOK:
+			if k.adresKlyuchaGoden(o.Profil) {
+				return strings.TrimSuffix(o.Profil, "/"), nil
 			}
-			var nezn *OshibkaKoda
-			if !errors.As(err, &nezn) {
-				neTolko404 = true
-			}
-			posledn = err
+			// 200 без адреса /u/<ключ> — сбой двери, а не вход: такой адрес не сохраняем.
+			posledn, neTolko404 = fmt.Errorf("дверь %s не выдала адрес устройства", dver), true
+		case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
+			stariePuti = append(stariePuti, dver)
 		case o.Tekst != "":
 			return "", &OshibkaVhoda{Tekst: o.Tekst}
 		default:
-			posledn, neTolko404 = fmt.Errorf("дверь %s ответила %d", dver, otvet.StatusCode), true
+			posledn, neTolko404 = fmt.Errorf("дверь %s ответила %d", dver, status), true
 		}
+	}
+	for _, dver := range stariePuti {
+		// Входа устройства тут нет или код ему незнаком — спросим старым путём.
+		_, adres, err := k.konfigNaDveri(ctx, dver, kod)
+		if err == nil {
+			return adres, nil
+		}
+		var nezn *OshibkaKoda
+		if !errors.As(err, &nezn) {
+			neTolko404 = true
+		}
+		posledn = err
 	}
 	if posledn == nil {
 		return "", fmt.Errorf("нет ни одной двери")
@@ -277,6 +305,44 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 		return "", &OshibkaKoda{Kod: http.StatusNotFound}
 	}
 	return "", posledn
+}
+
+// vhodUstroystva — POST /k/<код>/ustroystvo на одной двери (вход устройства
+// своей сети). status < 0 с ошибкой — запрос не собрать; 0 с ошибкой — сеть.
+func (k *Klient) vhodUstroystva(ctx context.Context, shema, dver, kod string) (int, otvetVhoda, error) {
+	var o otvetVhoda
+	req, err := k.zaprosMetodom(ctx, http.MethodPost, fmt.Sprintf("%s://%s/k/%s/ustroystvo", shema, dver, kod))
+	if err != nil {
+		return -1, o, SkrytKodVOshibke(err)
+	}
+	otvet, err := k.http().Do(req)
+	if err != nil {
+		return 0, o, SkrytKodVOshibke(err)
+	}
+	telo, _ := io.ReadAll(io.LimitReader(otvet.Body, 64<<10))
+	otvet.Body.Close()
+	_ = json.Unmarshal(telo, &o)
+	return otvet.StatusCode, o, nil
+}
+
+// adresKlyuchaGoden — ответ входа устройства несёт адрес вида https://<дверь>/u/<ключ>
+// (http — только когда и сам клиент ходит по http: свой стенд).
+func (k *Klient) adresKlyuchaGoden(profil string) bool {
+	m := ssylka.FindStringSubmatch(strings.TrimSuffix(strings.TrimSpace(profil), "/"))
+	if m == nil || m[2] != "u" {
+		return false
+	}
+	return strings.HasPrefix(profil, "https://") || (k.shema() == "http" && strings.HasPrefix(profil, "http://"))
+}
+
+// KlyuchUstroystva — ключ устройства из адреса подписки /u/<ключ>; "" — подписка по
+// общему коду (/k/, /s/) или адреса нет.
+func KlyuchUstroystva(adres string) string {
+	m := ssylka.FindStringSubmatch(strings.TrimSuffix(strings.TrimSpace(adres), "/"))
+	if m == nil || m[2] != "u" {
+		return ""
+	}
+	return m[3]
 }
 
 // Svedeniya — что сервер рассказывает о подписке.
@@ -435,19 +501,38 @@ func Maska(kod string) string {
 	return "***" + string(znaki[len(znaki)-2:])
 }
 
-// kodVAdrese — путь вида /k/<код>, /s/<код>, /u/<ключ> внутри строки (адрес целиком или
-// текст ошибки). Захватывает префикс, код и то, что за ним.
-var kodVAdrese = regexp.MustCompile(`(/(?:k|s|u)/)([A-Za-z0-9_-]{4,64})([/?"\s:]|$)`)
+// kodVAdrese — путь вида /k/<код>, /s/<код>, /u/<ключ>, /i/<приглашение>,
+// /panel/vhod/<пропуск> внутри строки (адрес целиком или текст ошибки). Захватывает
+// префикс, код и то, что за ним.
+var kodVAdrese = regexp.MustCompile(`(/(?:k|s|u|i|panel/vhod)/)([A-Za-z0-9_-]{4,64})([/?"\s:]|$)`)
 
-// SkrytKod прячет код доступа (и ключ устройства) в произвольной строке — адресе
-// или тексте ошибки — тем же видом, что Maska. Нужна везде, где адрес с кодом может
-// попасть в журнал: журнал уезжает на сервер, а в нём без этого лежал бы рабочий код
-// целиком («вход по коду не удался: Post https://…/k/<КОД>/ustroystvo»).
+// SkrytKod прячет код доступа (и ключ устройства, пропуск в панель) в произвольной
+// строке — адресе или тексте ошибки. Нужна везде, где адрес с кодом может попасть в
+// журнал: журнал уезжает на сервер, а в нём без этого лежал бы рабочий код целиком
+// («вход по коду не удался: Post https://…/k/<КОД>/ustroystvo»).
+//
+// Вид — как у сервера (KelevraServer server/app.py, maska_koda и maska_klyucha): первые
+// 4 знака и «…». Один вид на обеих сторонах нужен по двум причинам: строку клиента
+// можно сопоставить со строкой сервера, а журналы обеих сторон лежат в одном архиве —
+// при разных масках (сервер — начало, клиент — конец) архив хранил бы уже полкода.
+// Код короче 8 знаков (настоящие — 12 и длиннее) прячется целиком. В окне человеку код
+// показывает Maska — там вид общий с телефоном.
 func SkrytKod(tekst string) string {
 	return kodVAdrese.ReplaceAllStringFunc(tekst, func(m string) string {
 		g := kodVAdrese.FindStringSubmatch(m)
-		return g[1] + Maska(g[2]) + g[3]
+		if g[1] == "/k/" && g[2] == "health" {
+			return m // проверка живости сервера, не код
+		}
+		return g[1] + maskaZhurnala(g[2]) + g[3]
 	})
+}
+
+// maskaZhurnala — код в журнале: первые 4 знака и «…» (короче 8 — только «…»).
+func maskaZhurnala(kod string) string {
+	if len(kod) < 8 {
+		return "…"
+	}
+	return kod[:4] + "…"
 }
 
 // SkrytKodVOshibke — ошибка сети (*url.Error) носит адрес с кодом в тексте; отдаёт
