@@ -40,16 +40,13 @@ func ImyaArhiva() string {
 func (y *Yadro) Zagruzit(ctx context.Context) error {
 	// Файла ядра нет, а прежнее подтверждённое лежит рядом (обрыв замены) —
 	// вернуть его, а не качать заново.
+	// Только при совпадении хэша с журналом замены.
 	y.zamokSmeny.Lock()
-	if !y.EstBinar() && estFaylMesto(y.putPrezhnego()) {
-		err := y.vernutPrezhnee()
-		y.zamokSmeny.Unlock()
-		if err == nil {
-			log.Printf("файла ядра не было — вернул прежнее ядро, лежавшее рядом")
-			return nil
-		}
-	} else {
-		y.zamokSmeny.Unlock()
+	vernul := y.prezhneeIzZhurnala()
+	y.zamokSmeny.Unlock()
+	if vernul {
+		log.Printf("файла ядра не было — вернул прежнее ядро, лежавшее рядом (хэш сошёлся с журналом)")
+		return nil
 	}
 	sborka, err := y.vybratSborku(ctx, &http.Client{Timeout: 20 * time.Second}, obnovlenie.TrebovatPodpis)
 	if err != nil {

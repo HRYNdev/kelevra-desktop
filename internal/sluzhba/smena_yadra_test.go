@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
@@ -232,5 +233,104 @@ func TestZamokDerzhitsyaDoPovtornogoPodyoma(t *testing.T) {
 	}
 	if zamokSvoboden {
 		t.Fatal("во время повторного подъёма на прежнем ядре замок замены был свободен")
+	}
+}
+
+// Две одновременные «Подключить» во время пробы (перенесено из ревью):
+// проба только у первой; вторая не подтверждает чужую пробу, и когда новое
+// ядро падает, откатывать есть на что.
+func TestGonkaDvuhPodyomovVoVremyaProby(t *testing.T) {
+	s := stendZamenyYadra(t)
+	pervyyZapushchen := make(chan struct{})
+	vtorayaGotova := make(chan struct{})
+	var vyzov atomic.Int32
+	s.zapustitYadro = func(ctx context.Context) error {
+		switch vyzov.Add(1) {
+		case 1:
+			close(pervyyZapushchen)
+			<-vtorayaGotova
+			return errors.New("ядро упало при старте: FATAL bad core")
+		}
+		return nil // «ядро уже запущено» / прежнее ядро
+	}
+	done := make(chan error)
+	go func() { done <- s.PodnyatZashchitu(context.Background()) }()
+	<-pervyyZapushchen
+	err2 := s.PodnyatZashchitu(context.Background())
+	close(vtorayaGotova)
+	err1 := <-done
+	if err1 != nil || err2 != nil {
+		t.Fatalf("err1=%v err2=%v", err1, err2)
+	}
+	if got := chtoVYadre(t, s); got != "staroe" {
+		t.Fatalf("после отказа нового ядра на месте %q — откатывать было не на что", got)
+	}
+	if s.Yadro.Versiya() == "core-v2-1" {
+		t.Fatal("упавшая сборка подтверждена второй «Подключить»")
+	}
+}
+
+// Чужая ошибка на пробе (нет профиля) попыток не тратит (перенесено из ревью).
+func TestChuzhayaOshibkaNeTratitPopytki(t *testing.T) {
+	s := stendZamenyYadra(t)
+	s.zapustitYadro = func(ctx context.Context) error { return nil }
+	profil, _ := os.ReadFile(hranenie.PutProfilya())
+	os.Remove(hranenie.PutProfilya())
+	for i := 0; i < 5; i++ {
+		if err := s.PodnyatZashchitu(context.Background()); err == nil {
+			t.Fatal("без профиля связь поднялась")
+		}
+	}
+	os.WriteFile(hranenie.PutProfilya(), profil, 0o600)
+	if err := s.PodnyatZashchitu(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := chtoVYadre(t, s); got != "novoe" || s.Yadro.Versiya() != "core-v2-1" {
+		t.Fatalf("сборка сгорела на чужих ошибках: в ядре %q, версия %q", got, s.Yadro.Versiya())
+	}
+}
+
+// «Отключить» посреди старта нового ядра (перенесено из ревью): не отказ
+// ядра — ни отката, ни повторного подъёма, сборка не отвергается.
+func TestOtklyuchitVoVremyaProby(t *testing.T) {
+	s := stendZamenyYadra(t)
+	var zapuskalos []string
+	s.zapustitYadro = func(ctx context.Context) error {
+		zapuskalos = append(zapuskalos, chtoVYadre(t, s))
+		return fmt.Errorf("ядро: %w", yadro.ErrOstanovleno)
+	}
+	_ = s.PodnyatZashchitu(context.Background())
+	if len(zapuskalos) != 1 || zapuskalos[0] != "novoe" {
+		t.Fatalf("запускалось %v, ждал одно новое без повтора", zapuskalos)
+	}
+	if got := chtoVYadre(t, s); got != "novoe" {
+		t.Fatalf("откат за «Отключить»: на месте %q", got)
+	}
+}
+
+// Новое ядро упало, а человек тем временем нажал «Отключить»: откат есть,
+// повторного подъёма против его воли — нет, сборка не отвергается.
+func TestOtkatBezPodyomaPosleOtklyuchit(t *testing.T) {
+	s := stendZamenyYadra(t)
+	var zapuskalos []string
+	s.zapustitYadro = func(ctx context.Context) error {
+		zapuskalos = append(zapuskalos, chtoVYadre(t, s))
+		s.avtorezhimZamok.Lock()
+		s.avtorezhimPokolenie++
+		s.avtorezhimZamok.Unlock()
+		return errors.New("ядро упало при старте: FATAL bad core")
+	}
+	_ = s.PodnyatZashchitu(context.Background())
+	if len(zapuskalos) != 1 {
+		t.Fatalf("запускалось %v, ждал только новое", zapuskalos)
+	}
+	if got := chtoVYadre(t, s); got != "staroe" {
+		t.Fatalf("на месте %q, ждал откат", got)
+	}
+	if err := s.prigotovitYadroRaz(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Yadro.Papka, "novoe.zip")); err != nil {
+		t.Fatal("сборка отвергнута, хотя на прежнем ядре связь не проверялась")
 	}
 }

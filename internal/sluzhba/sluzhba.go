@@ -180,7 +180,10 @@ type Sluzhba struct {
 	// zamokSmenyYadra — замена файла ядра (smena_yadra.go) идёт одна за раз:
 	// два одновременных подключения не должны менять файл друг под другом.
 	zamokSmenyYadra sync.Mutex
-	kartina         konfig.Kartina
+	// zhurnalStarayaPodpis — когда в журнал писали про сборку ядра с
+	// подписью прежнего формата (не чаще раза в сутки).
+	zhurnalStarayaPodpis time.Time
+	kartina              konfig.Kartina
 	// otkaz — почему последняя попытка не подняла связь, словами человека
 	// (Oshibka* из PodnyatZashchitu). Пусто — связь поднята или её не
 	// поднимали. Окно показывает строку в состоянии «Нет подключения».

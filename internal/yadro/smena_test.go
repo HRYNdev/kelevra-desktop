@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
@@ -85,6 +86,7 @@ func stendSmeny(t *testing.T, stoit string, sborki ...sborkaStenda) *Yadro {
 			}
 			json.NewEncoder(w).Encode(relizy)
 		case strings.HasPrefix(r.URL.Path, "/a/"):
+			skachivaniyArhiva.Add(1)
 			w.Write(arhivy[strings.TrimPrefix(r.URL.Path, "/a/")])
 		case strings.HasPrefix(r.URL.Path, "/s/"):
 			fmt.Fprint(w, podpisi[strings.TrimPrefix(r.URL.Path, "/s/")])
@@ -369,14 +371,24 @@ func TestPrigotovitBezYadra(t *testing.T) {
 
 // Подпись прежнего формата (без тега) на замену не годится: такой подписью
 // нельзя доказать, под каким тегом выпускалась сборка.
+//
+// Архив такой сборки качается один раз: дальше, пока .sig тот же, —
+// пропуск без скачивания (живая core-v1.14.0-beta.4-1 подписана так).
 func TestZamenaPoPodpisiBezTegaNeBeretsya(t *testing.T) {
 	y := stendSmeny(t, "v1", sborkaStenda{teg: "core-v2-1", yadro: "v2", podpisano: "v2", bezTega: true})
 	y.zapisatVersiyu("core-v1-1")
-	if _, err := y.Prigotovit(context.Background(), http.DefaultClient); !errors.Is(err, obnovlenie.ErrPodpis) {
-		t.Fatalf("подпись без тега: ошибка %v, ждал ErrPodpis", err)
+	skachivaniyArhiva.Store(0)
+	for i := 0; i < 3; i++ {
+		itog, err := y.Prigotovit(context.Background(), http.DefaultClient)
+		if err != nil || !itog.StarayaPodpis || itog.Otlozheno {
+			t.Fatalf("подпись без тега, сверка %d: %+v, %v", i+1, itog, err)
+		}
 	}
 	if estFayl(y.putArhivaNovogo()) {
 		t.Fatal("архив с подписью без тега отложен")
+	}
+	if n := skachivaniyArhiva.Load(); n != 1 {
+		t.Fatalf("архив скачан %d раз, ждал 1", n)
 	}
 }
 
@@ -422,3 +434,5 @@ func TestPervayaUstanovkaPrinimaetPrezhniyFormat(t *testing.T) {
 		t.Fatal("архив под чужим тегом поставлен")
 	}
 }
+
+var skachivaniyArhiva atomic.Int64

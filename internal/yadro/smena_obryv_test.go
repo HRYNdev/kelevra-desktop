@@ -2,6 +2,7 @@ package yadro
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"testing"
@@ -153,5 +154,106 @@ func TestPodgotovkaNeLomaetProbu(t *testing.T) {
 	}
 	if posle := y.faza(t); posle != do || !estFayl(y.putPrezhnego()) {
 		t.Fatalf("сверка во время пробы тронула журнал: было %+v, стало %+v", do, posle)
+	}
+}
+
+// Обрезанный .prezhnee (обрыв посреди копии) не встаёт поверх ядра: откат
+// отказывает, испорченный файл убирается.
+func TestObrezannoePrezhneeNeVozvrashchaetsya(t *testing.T) {
+	y := gotovoKSmene(t)
+	s, err := y.Smenit()
+	if err != nil || s == nil {
+		t.Fatal(err)
+	}
+	os.Remove(y.putPrezhnego()) // жёсткую ссылку рвём, пишем «обрезок»
+	if err := os.WriteFile(y.putPrezhnego(), []byte("v"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Otkatit(); err == nil {
+		t.Fatal("обрезанное прежнее ядро встало на место")
+	}
+	if got := soderzhimoe(t, y.Bin); got != "v2" {
+		t.Fatalf("на месте %q", got)
+	}
+	if estFayl(y.putPrezhnego()) {
+		t.Fatal("испорченный .prezhnee остался")
+	}
+}
+
+// Файла ядра нет, а .prezhnee не сходится с журналом — Zagruzit его не
+// ставит (качает заново).
+func TestZagruzitNeStavitChuzhoePrezhnee(t *testing.T) {
+	y := gotovoKSmene(t)
+	if s, err := y.Smenit(); err != nil || s == nil {
+		t.Fatal(err)
+	}
+	os.Remove(y.putPrezhnego())
+	os.WriteFile(y.putPrezhnego(), []byte("chuzhoe"), 0o755)
+	os.Remove(y.Bin)
+	if err := y.Zagruzit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := soderzhimoe(t, y.Bin); got == "chuzhoe" {
+		t.Fatal("несверенный .prezhnee встал на место ядра")
+	}
+}
+
+// Висящий .prezhnee без пробы (Zakrepit не смог удалить) не мешает
+// следующей замене.
+func TestVisyashcheePrezhneeNeMeshaet(t *testing.T) {
+	y := gotovoKSmene(t)
+	os.WriteFile(y.putPrezhnego(), []byte("musor"), 0o755)
+	s, err := y.Smenit()
+	if err != nil || s == nil {
+		t.Fatalf("замена при висящем .prezhnee: %v", err)
+	}
+	if got := soderzhimoe(t, y.putPrezhnego()); got != "v1" {
+		t.Fatalf(".prezhnee = %q, ждал прежнее ядро", got)
+	}
+}
+
+// Новое ядро убрали с диска (антивирус), на месте прежнее: подъём удался,
+// но подтверждения нет — сборка отвергается с записью, без цикла.
+func TestNovoeYadroPropaloNeZakreplyaetsya(t *testing.T) {
+	y := gotovoKSmene(t)
+	s, err := y.Smenit()
+	if err != nil || s == nil {
+		t.Fatal(err)
+	}
+	os.Remove(y.Bin)
+	if !y.prezhneeIzZhurnala() {
+		t.Fatal("прежнее не вернулось")
+	}
+	if err := s.Zakrepit(); !errors.Is(err, ErrNovoeYadroPropalo) {
+		t.Fatalf("закреплено при чужом файле ядра: %v", err)
+	}
+	if itog, _ := y.Prigotovit(context.Background(), http.DefaultClient); !itog.Otvergnuto {
+		t.Fatalf("сборка не отвергнута: %+v", itog)
+	}
+}
+
+// Проба выдаётся одному вызывающему; отпущенная (чужая ошибка) попытку не
+// тратит и продолжается следующим подъёмом.
+func TestProbaOdnomuIOtpustit(t *testing.T) {
+	y := gotovoKSmene(t)
+	s, err := y.Smenit()
+	if err != nil || s == nil {
+		t.Fatal(err)
+	}
+	if s2, _ := y.Smenit(); s2 != nil {
+		t.Fatal("проба выдана второму вызывающему")
+	}
+	for i := 0; i < popytokSmeny+2; i++ {
+		s.Otpustit()
+		s, err = y.Smenit()
+		if err != nil || s == nil {
+			t.Fatalf("отпущенная проба %d не продолжилась: %v", i+1, err)
+		}
+	}
+	if o := y.faza(t); o.Popytok != 0 {
+		t.Fatalf("чужие ошибки потратили %d попыток", o.Popytok)
+	}
+	if err := s.Zakrepit(); err != nil {
+		t.Fatal(err)
 	}
 }

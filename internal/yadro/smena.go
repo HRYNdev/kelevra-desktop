@@ -55,6 +55,14 @@ type versiyaYadra struct {
 	// Otvergnuty — сборки, которые на этой машине не поднялись. Их служба
 	// больше не качает; следующая новая сборка пробуется как обычно.
 	Otvergnuty []string `json:"otvergnuty,omitempty"`
+	// StarayaPodpis — сборка, подписанная прежним форматом (без тега):
+	// тег и sha256 её файла .sig. Пока .sig тот же, архив заново не качается.
+	StarayaPodpis *starayaPodpis `json:"staraya_podpis,omitempty"`
+}
+
+type starayaPodpis struct {
+	Teg        string `json:"teg"`
+	ShaPodpisi string `json:"sha_podpisi"`
 }
 
 // otlozhennoe — записка об отложенном архиве (novoe.json).
@@ -76,6 +84,12 @@ type otlozhennoe struct {
 	// ShaNovogo — sha256 нового файла ядра: по нему после обрыва видно,
 	// успело ли новое ядро встать на место.
 	ShaNovogo string `json:"sha_novogo,omitempty"`
+	// ShaPrezhnego — sha256 прежнего ядра: .prezhnee возвращается на место
+	// только при совпадении (обрезанная копия не встанет поверх целого ядра).
+	ShaPrezhnego string `json:"sha_prezhnego,omitempty"`
+	// PodyomIdet — подъём на новом ядре начат и ещё не дал исхода. Застали
+	// это при восстановлении — служба оборвалась посреди подъёма: попытка.
+	PodyomIdet bool `json:"podyom_idet,omitempty"`
 }
 
 const (
@@ -148,6 +162,11 @@ func heshFaylaYadra(put string) (string, error) {
 	heshYadra.put, heshYadra.razmer, heshYadra.vremya, heshYadra.hesh = put, st.Size(), st.ModTime().UnixNano(), itog
 	heshYadra.zamok.Unlock()
 	return itog, nil
+}
+
+func heshBayt(b []byte) string {
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 func chitatJSON(put string, v any) bool {
@@ -235,6 +254,9 @@ type ItogPodgotovki struct {
 	Priznano bool
 	// Otvergnuto — эта сборка на машине уже не поднималась, не берём.
 	Otvergnuto bool
+	// StarayaPodpis — сборка подписана прежним форматом (без тега): на
+	// замену не годится, архив не качается, пока её .sig не сменится.
+	StarayaPodpis bool
 }
 
 // ErrNetYadra — ядра на машине нет: менять нечего, его поставит Zagruzit.
@@ -258,6 +280,19 @@ func (y *Yadro) Prigotovit(ctx context.Context, klient *http.Client) (ItogPodgot
 		return itog, nil
 	}
 
+	// Сперва маленький .sig: сборка, уже опознанная как подписанная прежним
+	// форматом, с тем же .sig заново не качается (архив — десятки мегабайт,
+	// и так на каждой машине раз в несколько часов).
+	sig, err := skachatPodpis(ctx, klient, sborka.SsylkaPodpisi)
+	if err != nil {
+		return itog, err
+	}
+	shaPodpisi := heshBayt(sig)
+	if sp := y.chitatVersiyu().StarayaPodpis; sp != nil && sp.Teg == sborka.Teg && sp.ShaPodpisi == shaPodpisi {
+		itog.StarayaPodpis = true
+		return itog, nil
+	}
+
 	// Скачиваем во временный файл с закрытыми правами и проверяем подпись.
 	vremenny := y.putArhivaNovogo() + ".tmp"
 	_ = os.Remove(vremenny)
@@ -276,11 +311,19 @@ func (y *Yadro) Prigotovit(ctx context.Context, klient *http.Client) (ItogPodgot
 	if err := skachat(ctx, klient, sborka.Ssylka, vremenny); err != nil {
 		return itog, err
 	}
-	sig, err := skachatPodpis(ctx, klient, sborka.SsylkaPodpisi)
-	if err != nil {
-		return itog, err
-	}
 	if err := podpis.ProveritSTegom(vremenny, ImyaArhiva(), sborka.Teg, sig); err != nil {
+		// Подпись прежнего формата сходится — сборка настоящая, просто
+		// подписана без тега: запомнить и больше не качать. Не сходится
+		// никакая — архив подменён: не запоминать, сверить в следующий раз.
+		if podpis.Proverit(vremenny, ImyaArhiva(), sig) == nil {
+			y.zamokSmeny.Lock()
+			v := y.chitatVersiyu()
+			v.StarayaPodpis = &starayaPodpis{Teg: sborka.Teg, ShaPodpisi: shaPodpisi}
+			_ = y.sohranitVersiyu(v)
+			y.zamokSmeny.Unlock()
+			itog.StarayaPodpis = true
+			return itog, nil
+		}
 		return itog, fmt.Errorf("%w: сборка ядра %s не отложена — нет подписи с этим тегом (%v)", obnovlenie.ErrPodpis, sborka.Teg, err)
 	}
 
@@ -400,9 +443,20 @@ func (y *Yadro) ubratOtlozhennoe() {
 	_ = os.Remove(y.putOtlozhennogo())
 }
 
-// vernutPrezhnee ставит .prezhnee (последнее подтверждённое ядро) на место
-// файла ядра. Переименование с заменой: файла ядра нет ни мгновения.
-func (y *Yadro) vernutPrezhnee() error {
+// vernutPrezhnee ставит .prezhnee на место файла ядра — только если его
+// хэш совпал с записанным в журнале (sha). Не совпал — .prezhnee испорчен
+// (обрыв посреди копии) и убирается. Переименование с заменой: файла ядра
+// нет ни мгновения.
+func (y *Yadro) vernutPrezhnee(sha string) error {
+	sbrositKeshHesha()
+	hesh, err := heshFaylaYadra(y.putPrezhnego())
+	if err != nil {
+		return err
+	}
+	if sha == "" || hesh != sha {
+		_ = os.Remove(y.putPrezhnego())
+		return fmt.Errorf("прежнее ядро рядом не сходится с журналом — убрано")
+	}
 	if err := os.Rename(y.putPrezhnego(), y.Bin); err != nil {
 		return err
 	}
@@ -410,31 +464,63 @@ func (y *Yadro) vernutPrezhnee() error {
 	return nil
 }
 
+// ubratStaroePrezhnee убирает .prezhnee, оставшийся без пробы (Zakrepit не
+// смог его удалить). Не удаляется — отодвигается под другим именем.
+func (y *Yadro) ubratStaroePrezhnee() error {
+	if !estFaylMesto(y.putPrezhnego()) {
+		return nil
+	}
+	if err := os.Remove(y.putPrezhnego()); err == nil {
+		return nil
+	}
+	for i := 1; i <= 9; i++ {
+		kuda := fmt.Sprintf("%s.%d", y.putPrezhnego(), i)
+		if estFaylMesto(kuda) {
+			_ = os.Remove(kuda)
+			if estFaylMesto(kuda) {
+				continue
+			}
+		}
+		if err := os.Rename(y.putPrezhnego(), kuda); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("старый %s не убрать", filepath.Base(y.putPrezhnego()))
+}
+
 // otlozhitPrezhnee оставляет копию стоящего ядра рядом (.prezhnee), не
-// трогая сам файл: жёсткая ссылка, а если не вышло — копия.
+// трогая сам файл: жёсткая ссылка, а если не вышло — копия через
+// временный файл с fsync и переименованием (обрезанной копии под именем
+// .prezhnee не бывает).
 func (y *Yadro) otlozhitPrezhnee() error {
 	if err := os.Link(y.Bin, y.putPrezhnego()); err == nil {
 		return nil
 	}
+	vremenny := y.putPrezhnego() + ".tmp"
+	_ = os.Remove(vremenny)
 	vhod, err := os.Open(y.Bin)
 	if err != nil {
 		return err
 	}
 	defer vhod.Close()
-	vyhod, err := os.OpenFile(y.putPrezhnego(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+	vyhod, err := os.OpenFile(vremenny, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(vyhod, vhod); err != nil {
-		vyhod.Close()
-		_ = os.Remove(y.putPrezhnego())
-		return err
+	_, err = io.Copy(vyhod, vhod)
+	if err == nil {
+		err = vyhod.Sync()
 	}
-	if err := vyhod.Close(); err != nil {
-		_ = os.Remove(y.putPrezhnego())
-		return err
+	if cerr := vyhod.Close(); err == nil {
+		err = cerr
 	}
-	return nil
+	if err == nil {
+		err = os.Rename(vremenny, y.putPrezhnego())
+	}
+	if err != nil {
+		_ = os.Remove(vremenny)
+	}
+	return err
 }
 
 func estFaylMesto(put string) bool {
@@ -443,6 +529,8 @@ func estFaylMesto(put string) bool {
 }
 
 // Smena — поставленная, но ещё не подтверждённая новая сборка ядра.
+// Выдаётся одному вызывающему за раз; он обязан закончить её одним из
+// Zakrepit, Otkatit (+Otvergnut) или Otpustit.
 type Smena struct {
 	y        *Yadro
 	Teg      string
@@ -451,15 +539,20 @@ type Smena struct {
 
 // Smenit ставит отложенную сборку ядра на место (шаг 2, см. шапку файла).
 // Звать только когда ядро этой копии не запущено. nil без ошибки — менять
-// нечего. Прежнее ядро лежит рядом (.prezhnee) до Zakrepit или Otkatit.
+// нечего или проба уже у другого вызывающего. Прежнее ядро лежит рядом
+// (.prezhnee) до Zakrepit или Otkatit.
 //
 // Замена журналируется в novoe.json (поле Faza): сперва записывается
 // намерение, потом идут переименования. Оборвалась служба посреди — при
-// следующем вызове состояние восстанавливается по журналу и хэшу файла:
-// новое успело встать — проба продолжается (и считается попыткой), не
-// успело — замена начинается заново. .prezhnee не удаляется, пока новое
-// ядро не подтверждено рабочим (Zakrepit); возвращается оно переименованием
-// с заменой, без мгновения, когда файла ядра нет.
+// следующем вызове состояние восстанавливается по журналу и хэшам файлов:
+// новое успело встать — проба продолжается (обрыв посреди подъёма — это
+// попытка), не успело — замена начинается заново. .prezhnee не удаляется,
+// пока новое ядро не подтверждено рабочим, и возвращается только при
+// совпадении хэша.
+//
+// Попыткой считается только настоящий отказ запуска нового ядра (Otkatit)
+// и обрыв службы посреди подъёма на нём. Сбои файлов до старта нового ядра
+// и чужие ошибки подъёма (Otpustit) попыток не тратят.
 func (y *Yadro) Smenit() (*Smena, error) {
 	y.zamok.Lock()
 	zanyato := y.derzh != nil
@@ -469,6 +562,9 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	}
 	y.zamokSmeny.Lock()
 	defer y.zamokSmeny.Unlock()
+	if y.probaVydana {
+		return nil, nil
+	}
 	sbrositKeshHesha()
 
 	o, ok := y.chitatOtlozhennoe()
@@ -478,6 +574,9 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	if o.Faza != "" {
 		smena, err, dalshe := y.vosstanovitSmenu(&o)
 		if !dalshe {
+			if smena != nil {
+				y.probaVydana = true
+			}
 			return smena, err
 		}
 	}
@@ -504,10 +603,16 @@ func (y *Yadro) Smenit() (*Smena, error) {
 		y.ubratOtlozhennoe()
 		return nil, fmt.Errorf("%w: отложенная сборка ядра %s (%v), убрана", obnovlenie.ErrPodpis, o.Teg, err)
 	}
+	// Без пробы (Faza "") .prezhnee — мусор (Zakrepit не смог удалить):
+	// иначе ссылка и копия падали бы на каждой замене.
+	if err := y.ubratStaroePrezhnee(); err != nil {
+		return nil, err
+	}
 	novyy := y.Bin + ".novoe"
 	_ = os.Remove(novyy)
 	if err := raspakovat(arhiv, novyy); err != nil {
-		y.ubratOtlozhennoe()
+		// Архив подписан и цел: ошибка — диск или права. Отложенное
+		// остаётся, замена повторится при следующем подъёме.
 		return nil, fmt.Errorf("отложенная сборка ядра %s не распаковалась: %w", o.Teg, err)
 	}
 	sbrositKeshHesha()
@@ -516,99 +621,145 @@ func (y *Yadro) Smenit() (*Smena, error) {
 		_ = os.Remove(novyy)
 		return nil, err
 	}
+	sbrositKeshHesha()
+	shaPrezhnego, err := heshFaylaYadra(y.Bin)
+	if err != nil {
+		_ = os.Remove(novyy)
+		return nil, err
+	}
 	prezhniyTeg := y.Versiya()
 
 	// 1. Намерение — в журнал, до любых переименований.
-	o.Faza, o.ShaNovogo, o.Prezhniy = fazaMenyayu, shaNovogo, prezhniyTeg
-	o.Popytok++
+	o.Faza, o.ShaNovogo, o.ShaPrezhnego, o.Prezhniy = fazaMenyayu, shaNovogo, shaPrezhnego, prezhniyTeg
 	if err := y.sohranitOtlozhennoe(o); err != nil {
 		_ = os.Remove(novyy)
 		return nil, fmt.Errorf("журнал замены ядра не записан: %w", err)
 	}
+	otmenit := func() {
+		_ = os.Remove(novyy)
+		o.Faza, o.ShaNovogo, o.ShaPrezhnego = "", "", ""
+		_ = y.sohranitOtlozhennoe(o)
+	}
 	// 2. Прежнее ядро — рядом, сам файл ядра на месте.
 	if err := y.otlozhitPrezhnee(); err != nil {
-		_ = os.Remove(novyy)
-		o.Faza = ""
-		_ = y.sohranitOtlozhennoe(o)
+		otmenit()
 		return nil, fmt.Errorf("прежнее ядро не отложить: %w", err)
 	}
 	// 3. Новое — на место файла ядра одним переименованием с заменой.
 	if err := os.Rename(novyy, y.Bin); err != nil {
-		_ = os.Remove(novyy)
 		// Файл ядра не тронут, .prezhnee — его копия: убрать её можно.
 		_ = os.Remove(y.putPrezhnego())
-		o.Faza = ""
-		_ = y.sohranitOtlozhennoe(o)
+		otmenit()
 		return nil, fmt.Errorf("новое ядро не встало на место: %w", err)
 	}
 	sbrositKeshHesha()
-	// 4. Проба.
-	o.Faza = fazaProba
+	// 4. Проба: подъём на новом ядре начат.
+	o.Faza, o.PodyomIdet = fazaProba, true
 	_ = y.sohranitOtlozhennoe(o)
 	y.zapisatVersiyu(o.Teg)
+	y.probaVydana = true
 	return &Smena{y: y, Teg: o.Teg, Prezhniy: prezhniyTeg}, nil
 }
 
-// vosstanovitSmenu разбирает журнал замены, оставшийся от оборванной службы.
-// dalshe — начать замену заново (новое не успело встать).
+// vosstanovitSmenu разбирает журнал замены, оставшийся от прошлого подъёма.
+// dalshe — начать замену заново (новое не успело встать). Под zamokSmeny.
 func (y *Yadro) vosstanovitSmenu(o *otlozhennoe) (*Smena, error, bool) {
 	hesh, _ := heshFaylaYadra(y.Bin)
 	if o.ShaNovogo != "" && hesh == o.ShaNovogo && estFaylMesto(y.putPrezhnego()) {
-		// Новое ядро на месте, прежнее рядом: проба продолжается — и это
-		// ещё одна попытка, иначе ядро, которое роняет службу, крутилось бы
-		// бесконечно.
+		// Новое ядро на месте, прежнее рядом: проба продолжается. Если
+		// прошлый подъём на нём оборвался вместе со службой — это попытка,
+		// иначе ядро, которое роняет службу, крутилось бы бесконечно.
+		if o.PodyomIdet {
+			o.Popytok++
+		}
 		if o.Popytok >= popytokSmeny {
-			if err := y.vernutPrezhnee(); err != nil {
+			if err := y.vernutPrezhnee(o.ShaPrezhnego); err != nil {
 				return nil, fmt.Errorf("сборка ядра %s не подтвердилась %d раза, и прежнее ядро не вернуть: %w", o.Teg, o.Popytok, err), false
 			}
 			y.zapisatVersiyu(o.Prezhniy)
 			y.otvergnut(o.Teg)
 			return nil, fmt.Errorf("сборка ядра %s не подтвердилась %d раза — вернул прежнее, больше не ставлю", o.Teg, o.Popytok), false
 		}
-		o.Faza = fazaProba
-		o.Popytok++
+		o.Faza, o.PodyomIdet = fazaProba, true
 		_ = y.sohranitOtlozhennoe(*o)
 		y.zapisatVersiyu(o.Teg)
 		return &Smena{y: y, Teg: o.Teg, Prezhniy: o.Prezhniy}, nil, false
 	}
-	// Новое не встало (или уже откачено): на месте прежнее ядро, а
-	// .prezhnee, если есть, — его же копия или последнее подтверждённое.
+	// Новое не встало (или уже откачено). Если файла ядра нет или на месте
+	// не прежнее — вернуть .prezhnee (только при совпадении хэша).
 	if estFaylMesto(y.putPrezhnego()) {
-		if err := y.vernutPrezhnee(); err != nil {
+		if hesh == o.ShaPrezhnego {
+			// На месте и так прежнее, .prezhnee — его копия.
+			_ = os.Remove(y.putPrezhnego())
+		} else if err := y.vernutPrezhnee(o.ShaPrezhnego); err != nil && !y.EstBinar() {
 			return nil, fmt.Errorf("прежнее ядро не вернуть после обрыва замены: %w", err), false
 		}
 	}
 	_ = os.Remove(y.Bin + ".novoe")
-	o.Faza, o.ShaNovogo = "", ""
+	o.Faza, o.ShaNovogo, o.ShaPrezhnego, o.PodyomIdet = "", "", "", false
 	_ = y.sohranitOtlozhennoe(*o)
 	return nil, nil, true
 }
 
-// Zakrepit — новое ядро поднялось: прежний файл и отложенный архив больше
-// не нужны.
-func (s *Smena) Zakrepit() {
-	s.y.zamokSmeny.Lock()
-	defer s.y.zamokSmeny.Unlock()
-	_ = os.Remove(s.y.putPrezhnego())
-	s.y.ubratOtlozhennoe()
+// ErrNovoeYadroPropalo — на месте файла ядра не та сборка, что ставили
+// (новое ядро убрали с диска, например антивирус).
+var ErrNovoeYadroPropalo = errors.New("на месте ядра не новая сборка")
+
+// Zakrepit — подъём удался. Подтверждается, только если на месте ядра
+// именно новая сборка; иначе (новое убрали с диска, Zagruzit вернул
+// прежнее) сборка отвергается с записью, а не объявляется рабочей.
+func (s *Smena) Zakrepit() error {
+	y := s.y
+	y.zamokSmeny.Lock()
+	defer y.zamokSmeny.Unlock()
+	defer func() { y.probaVydana = false }()
+	o, _ := y.chitatOtlozhennoe()
+	sbrositKeshHesha()
+	hesh, _ := heshFaylaYadra(y.Bin)
+	if o.ShaNovogo == "" || hesh != o.ShaNovogo {
+		if estFaylMesto(y.putPrezhnego()) && o.ShaPrezhnego != "" {
+			_ = y.ubratStaroePrezhnee()
+		}
+		y.otvergnut(s.Teg)
+		return fmt.Errorf("%w: сборка %s", ErrNovoeYadroPropalo, s.Teg)
+	}
+	_ = y.ubratStaroePrezhnee()
+	y.ubratOtlozhennoe()
+	return nil
 }
 
-// Otkatit возвращает прежнее ядро на место. Отложенный архив остаётся: будет
-// ли сборка отвергнута, решает вызывающий (Otvergnut), когда прежнее ядро
-// поднимется.
+// Otpustit — подъём кончился чужой ошибкой (не отказом запуска нового
+// ядра): проба остаётся, попытка не тратится, следующий подъём её продолжит.
+func (s *Smena) Otpustit() {
+	y := s.y
+	y.zamokSmeny.Lock()
+	defer y.zamokSmeny.Unlock()
+	y.probaVydana = false
+	if o, ok := y.chitatOtlozhennoe(); ok && o.PodyomIdet {
+		o.PodyomIdet = false
+		_ = y.sohranitOtlozhennoe(o)
+	}
+}
+
+// Otkatit — новое ядро не запустилось: прежнее возвращается на место, это
+// попытка. Отложенный архив остаётся: будет ли сборка отвергнута, решает
+// вызывающий (Otvergnut), когда прежнее ядро поднимется.
 func (s *Smena) Otkatit() error {
 	y := s.y
 	y.zamokSmeny.Lock()
 	defer y.zamokSmeny.Unlock()
+	y.probaVydana = false
+	o, _ := y.chitatOtlozhennoe()
 	if !estFaylMesto(y.putPrezhnego()) {
 		return fmt.Errorf("прежнего ядра рядом нет")
 	}
-	if err := y.vernutPrezhnee(); err != nil {
+	if err := y.vernutPrezhnee(o.ShaPrezhnego); err != nil {
 		return fmt.Errorf("прежнее ядро не вернуть: %w", err)
 	}
 	y.zapisatVersiyu(s.Prezhniy)
-	if o, ok := y.chitatOtlozhennoe(); ok {
-		o.Faza, o.ShaNovogo = "", ""
+	if o.Teg != "" {
+		o.Popytok++
+		o.Faza, o.ShaNovogo, o.ShaPrezhnego, o.PodyomIdet = "", "", "", false
 		_ = y.sohranitOtlozhennoe(o)
 	}
 	return nil
@@ -635,4 +786,23 @@ func (y *Yadro) otvergnut(teg string) {
 	}
 	_ = y.sohranitVersiyu(v)
 	y.ubratOtlozhennoe()
+}
+
+// prezhneeIzZhurnala — вернуть .prezhnee, если файла ядра нет (Zagruzit).
+// Только по хэшу из журнала; без журнала — не возвращается.
+func (y *Yadro) prezhneeIzZhurnala() bool {
+	if y.EstBinar() || !estFaylMesto(y.putPrezhnego()) {
+		return false
+	}
+	o, ok := y.chitatOtlozhennoe()
+	if !ok || o.ShaPrezhnego == "" {
+		return false
+	}
+	if err := y.vernutPrezhnee(o.ShaPrezhnego); err != nil {
+		return false
+	}
+	if o.Prezhniy != "" {
+		y.zapisatVersiyu(o.Prezhniy)
+	}
+	return true
 }

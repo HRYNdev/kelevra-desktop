@@ -64,6 +64,17 @@ func (s *Sluzhba) prigotovitYadroRaz(ctx context.Context) error {
 		return err
 	}
 	switch {
+	case itog.StarayaPodpis:
+		// Не чаще раза в сутки: сверка идёт каждые несколько часов.
+		s.zamok.Lock()
+		pisat := time.Since(s.zhurnalStarayaPodpis) >= 24*time.Hour
+		if pisat {
+			s.zhurnalStarayaPodpis = time.Now()
+		}
+		s.zamok.Unlock()
+		if pisat {
+			log.Printf("сверка ядра: сборка %s подписана прежним форматом (без тега) — на замену не годится, стоит %s", itog.Svezhaya, slovoVersii(itog.Stoit))
+		}
 	case itog.Otvergnuto:
 		log.Printf("сверка ядра: свежая сборка %s на этой машине не поднималась — остаётся прежнее (%s)", itog.Svezhaya, slovoVersii(itog.Stoit))
 	case itog.Priznano:
@@ -116,8 +127,9 @@ func (o oshibkaZapuskaYadra) Error() string { return o.err.Error() }
 func (o oshibkaZapuskaYadra) Unwrap() error { return o.err }
 
 // novoeYadroVinovato — мог ли отказ подъёма быть из-за нового ядра. Винится
-// только отказ самого запуска ядра; нет прав, нет конфига, подбор имени
-// адаптера, отмена и занятый адаптер от сборки ядра не зависят.
+// только отказ самого запуска ядра; нет прав, нет конфига или файла ядра,
+// подбор имени адаптера, отмена, остановка человеком посреди старта и
+// занятый адаптер от сборки ядра не зависят.
 func novoeYadroVinovato(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
@@ -126,26 +138,48 @@ func novoeYadroVinovato(ctx context.Context, err error) bool {
 	if !errors.As(err, &zapusk) {
 		return false
 	}
+	if errors.Is(err, yadro.ErrOstanovleno) || errors.Is(err, yadro.ErrNeZapuskalos) {
+		return false
+	}
 	return !errors.Is(err, OshibkaAdapterZanyat) && !adapterZanyatPoOshibke(zapusk.err)
+}
+
+// pokolenieAvtorezhima — номер последнего решения человека про связь
+// (растёт на «Отключить» и на каждом решении автомата).
+func (s *Sluzhba) pokolenieAvtorezhima() uint64 {
+	s.avtorezhimZamok.Lock()
+	defer s.avtorezhimZamok.Unlock()
+	return s.avtorezhimPokolenie
 }
 
 // PodnyatZashchitu поднимает связь (podnyatZashchituRaz), перед этим ставит
 // отложенную сборку ядра, если она есть. Общее тело для ручки «Подключить» и
 // для авторежима.
+//
+// Пробу новой сборки получает только один подъём (yadro.Smenit); исход
+// у неё один из трёх: подтвердить (Zakrepit), откатить за отказ запуска
+// нового ядра (Otkatit) или отпустить без решения (Otpustit) — при чужой
+// ошибке, отмене или «Отключить».
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
+	pokolenie := s.pokolenieAvtorezhima()
 	smena := s.smenitYadroPeredPodyomom()
 	err := s.podnyatZashchituRaz(ctx)
 	if smena == nil {
 		return err
 	}
 	if err == nil {
-		smena.Zakrepit()
-		log.Printf("замена ядра: сборка %s работает", smena.Teg)
+		if zerr := smena.Zakrepit(); zerr != nil {
+			log.Printf("замена ядра: связь поднята, но на месте ядра не сборка %s (%v) — новое ядро убрано с диска, от сборки отказываюсь", smena.Teg, zerr)
+		} else {
+			log.Printf("замена ядра: сборка %s работает", smena.Teg)
+		}
+		s.sbrositOtpechatokYadra()
 		return nil
 	}
 	if !novoeYadroVinovato(ctx, err) {
-		// Отложенная сборка остаётся на месте: проба продолжится при
-		// следующем подъёме.
+		// Проба остаётся, попытка не тратится: продолжится при следующем
+		// подъёме.
+		smena.Otpustit()
 		return err
 	}
 	// Замок держится от отката до конца повторного подъёма: второе
@@ -155,15 +189,20 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	defer s.zamokSmenyYadra.Unlock()
 	if s.Yadro.PID() != "" {
 		// Ядро уже поднял кто-то другой (второе окно): файл не трогаем.
+		smena.Otpustit()
 		return err
 	}
 	_ = s.Yadro.Ostanovit()
 	oerr := smena.Otkatit()
-	s.zamok.Lock()
-	s.summaYadra = ""
-	s.zamok.Unlock()
+	s.sbrositOtpechatokYadra()
 	if oerr != nil {
 		log.Printf("замена ядра: сборка %s не поднялась (%v), и прежнее ядро не вернуть: %v", smena.Teg, err, oerr)
+		return err
+	}
+	// Человек успел сказать своё («Отключить», новое решение автомата) —
+	// связь против его воли не поднимаем, и о сборке не судим.
+	if s.pokolenieAvtorezhima() != pokolenie || ctx.Err() != nil {
+		log.Printf("замена ядра: сборка %s не поднялась (%v) — вернул %s; связь не поднимаю: решение о связи сменилось", smena.Teg, err, slovoVersii(smena.Prezhniy))
 		return err
 	}
 	log.Printf("замена ядра: сборка %s не поднялась (%v) — вернул %s, поднимаю на нём", smena.Teg, err, slovoVersii(smena.Prezhniy))
@@ -175,4 +214,11 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	}
 	log.Printf("замена ядра: прежнее ядро тоже не поднялось (%v) — дело не в сборке %s, попробую её снова при следующем подключении", err, smena.Teg)
 	return err
+}
+
+// sbrositOtpechatokYadra — отпечаток ядра для паспорта считается заново.
+func (s *Sluzhba) sbrositOtpechatokYadra() {
+	s.zamok.Lock()
+	s.summaYadra = ""
+	s.zamok.Unlock()
 }
