@@ -288,6 +288,10 @@ type Sluzhba struct {
 	// Слово человека всегда бьёт решение автомата, начатое раньше, и никакой
 	// синхронизации по времени для этого не нужно — только сравнение чисел.
 	avtorezhimPokolenie uint64
+	// otklyucheniy — сколько раз человек нажал «Отключить» (под
+	// avtorezhimZamok): по нему отменённый подъём отличает «Отключить» от
+	// смены режима автомата.
+	otklyucheniy uint64
 
 	// avtorezhimKnopkaObstanovka — обстановка, увиденная последним заходом
 	// domaSeychas (кнопка «Подключиться»). Отдельно от avtorezhimEkz: тот
@@ -2367,7 +2371,7 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		s.kachaemBin = true
 		s.zamok.Unlock()
 		if uzhe {
-			return fmt.Errorf("ядро уже качается")
+			return OshibkaYadroKachaetsya
 		}
 		log.Printf("ядра на машине нет, качаю")
 		zctx, otmena := context.WithTimeout(ctx, 15*time.Minute)
@@ -2876,6 +2880,7 @@ func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 	// до него (заход авторежима, длинный заход обстановки внутри
 	// «Подключиться»), обязано после него замолчать.
 	s.avtorezhimPokolenie++
+	s.otklyucheniy++
 	nastroyki := s.Nastroyki
 	s.avtorezhimZamok.Unlock()
 
