@@ -120,3 +120,71 @@ func sluzhbaEst() bool {
 	k.Close()
 	return true
 }
+
+// PochinitNaProgramFiles сверяет запись автозапуска этого пользователя с
+// копией в Program Files (putPF) и переписывает её, если она смотрит не туда
+// (решение — Pochinka). Зовут окно и значок при каждом старте: это процессы
+// в сеансе человека, их HKCU — его ветка. izmeneno=false и пустые bylo/stalo
+// — запись верная, её нет или переписать не на что.
+func PochinitNaProgramFiles(putPF string) (bylo, stalo string, izmeneno bool, err error) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, vetka, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return "", "", false, fmt.Errorf("не открыть ветку автозагрузки: %w", err)
+	}
+	defer k.Close()
+	est := true
+	bylo, _, err = k.GetStringValue(Imya)
+	if err == registry.ErrNotExist {
+		est, err = false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("не прочитать запись автозагрузки: %w", err)
+	}
+	stalo, nado := Pochinka(bylo, est, putPF, Nuzhnyy(sluzhbaEst()))
+	if !nado {
+		return bylo, "", false, nil
+	}
+	if err := k.SetStringValue(Imya, stalo); err != nil {
+		return bylo, stalo, false, fmt.Errorf("не переписать автозагрузку: %w", err)
+	}
+	return bylo, stalo, true, nil
+}
+
+// VseZapisi — записи автозапуска Kelevra у всех вошедших пользователей
+// машины (для diagnostika пульта). Диагностику собирает служба от системы, а
+// её HKCU — ветка самой системы, не человека; поэтому смотрим в HKEY_USERS:
+// там загружены ветки всех, кто сейчас вошёл. S-1-5-21-… — обычные учётки,
+// «…_Classes» — их ассоциации файлов, не автозапуск. Ветку, которую открыть
+// не дали (служба в сеансе человека смотрит чужую), пропускаем молча.
+func VseZapisi() ([]Zapis, error) {
+	koren, err := registry.OpenKey(registry.USERS, "", registry.ENUMERATE_SUB_KEYS)
+	if err != nil {
+		return nil, fmt.Errorf("не открыть HKEY_USERS: %w", err)
+	}
+	imena, err := koren.ReadSubKeyNames(-1)
+	koren.Close()
+	if err != nil {
+		return nil, fmt.Errorf("не прочитать HKEY_USERS: %w", err)
+	}
+	var zapisi []Zapis
+	for _, sid := range imena {
+		if !strings.HasPrefix(sid, "S-1-5-21-") || strings.HasSuffix(sid, "_Classes") {
+			continue
+		}
+		k, err := registry.OpenKey(registry.USERS, sid+`\`+vetka, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		stroka, _, err := k.GetStringValue(Imya)
+		k.Close()
+		if err != nil || strings.TrimSpace(stroka) == "" {
+			continue
+		}
+		z := Zapis{Stroka: stroka, Put: PutIzZapisi(stroka)}
+		if st, err := os.Stat(z.Put); err == nil && !st.IsDir() {
+			z.FaylEst = true
+		}
+		zapisi = append(zapisi, z)
+	}
+	return zapisi, nil
+}

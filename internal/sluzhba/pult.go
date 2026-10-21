@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
+	"github.com/HRYNdev/kelevra-desktop/internal/avtozapusk"
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/ochered"
@@ -480,6 +481,13 @@ func (s *Sluzhba) Diagnostika() string {
 	if s.SluzhbaWindowsEst != nil {
 		dob("sluzhba_windows", fmt.Sprint(s.SluzhbaWindowsEst()))
 	}
+	// Куда смотрит автозапуск у вошедших пользователей и есть ли там файл:
+	// запись на удалённый exe молча лишала значка при входе (ПК Вовы 18–21.10).
+	if zapisi, err := avtozapusk.VseZapisi(); err != nil {
+		dob("avtozapusk", "?")
+	} else {
+		dob("avtozapusk", avtozapusk.OpisanieDlyaDiagnostiki(zapisi))
+	}
 	if s.Yadro != nil {
 		dob("yadro", string(s.Yadro.Sost()))
 		dob("konfig", yadro.OtpechatokKonfiga(s.Yadro.PutKonfiga()))
@@ -595,6 +603,10 @@ func (s *Sluzhba) obnovitPuls(set, tunnel bool, uzel string) {
 		}
 	case s.Nastroyki.RuchnoyVybor:
 		avto = "ruchnoy"
+	case s.Nastroyki.Avtorezhim:
+		// Автомат включён, а служитель ещё не встал (первые секунды после
+		// старта, см. PervyyPuls): обстановка не известна, но это не пауза.
+		avto = "neizv"
 	}
 	s.avtorezhimZamok.Unlock()
 	b2i := map[bool]string{true: "1", false: "0"}
@@ -610,6 +622,24 @@ func (s *Sluzhba) obnovitPuls(set, tunnel bool, uzel string) {
 	if uzel != "" {
 		s.puls += ";uzel=" + url.QueryEscape(uzel)
 	}
+}
+
+// PervyyPuls собирает пульс до первого запроса к серверу. Зовёт cmd/kelevra
+// при старте службы — после приёма живого ядра и ДО подключения и обновления
+// профиля.
+//
+// Беда 21.10 (ПК Вовы, 0.6.84-proba): первый /info ушёл через 2 с после
+// старта, а первый пульс собирает SleditZaPultom в своей горутине — она
+// стартует позже, и заголовок X-Sostoyanie уехал пустым (то есть не уехал
+// вовсе). Следующий запрос к выдаче у Desktop без opros.info_min и долгого
+// опроса — обновление профиля через час, и всё это время в pulsy.json
+// устройства не было. Узел здесь не известен (ядро ещё не спрашивали) —
+// его допишет первый же взгляд SleditZaPultom.
+func (s *Sluzhba) PervyyPuls() {
+	if s.pult == nil {
+		return
+	}
+	s.obnovitPuls(s.estSet(), s.zashchitaPodnyata(), "")
 }
 
 // sostoyanieDlyaZagolovka — последний собранный пульс (X-Sostoyanie).

@@ -211,6 +211,10 @@ func main() {
 			zapustitZnachok()
 		}
 	}
+	// Запись автозапуска — на копию в Program Files, если она там есть
+	// (pochinka_avtozapuska.go). После установки службы выше копия там уже
+	// лежит; окно из «Загрузок» тоже пишет путь Program Files, не свой.
+	pochinitAvtozapusk()
 
 	// Окно — ВНЕ замка (см. adresKopii): pokazatOkno не возвращается, пока
 	// человек не закроет окно.
@@ -701,6 +705,9 @@ func zhitZnachkom(papka, putZhurnala string) {
 	} else {
 		go ubratHvostProshlogoObnovleniya()
 	}
+	// Запись автозапуска — на копию в Program Files (pochinka_avtozapuska.go):
+	// значок и есть то, что автозапуск поднимает при входе.
+	pochinitAvtozapusk()
 	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
 		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
 			if err := vinsluzhba.Zapustit(); err != nil {
@@ -932,6 +939,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// состояние, и запусти мы приём параллельно, он успел бы увидеть
 	// «ничего не поднято» и поднять второе ядро рядом с живым.
 	s.PrinyatZhivoeYadro(ctx, sledTunnelyaPriStarte)
+	// Пульс X-Sostoyanie — до первого запроса к выдаче (подключение и
+	// профиль ниже уходят сразу): иначе первый /info едет без пульса, а
+	// следующий запрос бывает через час (internal/sluzhba PervyyPuls).
+	s.PervyyPuls()
 	if !sTreem {
 		// Служба Windows только что поставлена по просьбе человека — связь
 		// поднимается сама (флаг кладёт установщик, см. hranenie).

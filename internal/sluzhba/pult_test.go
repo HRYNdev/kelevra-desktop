@@ -455,6 +455,48 @@ func TestPulsXSostoyanie(t *testing.T) {
 	}
 }
 
+// Первый запрос после старта службы несёт пульс (беда 21.10: первый /info ПК
+// Вовы ушёл без X-Sostoyanie, следующий запрос — через час).
+func TestPervyyPulsDoPervogoZaprosa(t *testing.T) {
+	st := novyyStendPulta(t)
+	s := &Sluzhba{Nastroyki: &hranenie.Nastroyki{Avtorezhim: true}, Podpiska: &podpiska.Klient{}, pult: st.p,
+		estSetDlyaStenda:            func() bool { return true },
+		zashchitaPodnyataDlyaStenda: func() bool { return false }}
+	s.Podpiska.Sostoyanie = s.sostoyanieDlyaZagolovka
+	var zamok sync.Mutex
+	var puls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zamok.Lock()
+		puls = append(puls, r.Header.Get("X-Sostoyanie"))
+		zamok.Unlock()
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, _ = s.Podpiska.SvedeniyaPoAdresu(context.Background(), srv.URL+"/k/kod")
+	s.PervyyPuls()
+	_, _ = s.Podpiska.SvedeniyaPoAdresu(context.Background(), srv.URL+"/k/kod")
+
+	zamok.Lock()
+	defer zamok.Unlock()
+	if len(puls) != 2 {
+		t.Fatalf("запросов %d", len(puls))
+	}
+	if puls[0] != "" {
+		t.Fatalf("до первого пульса заголовок уже есть: %q", puls[0])
+	}
+	// Автомат включён, служитель ещё не встал — «neizv», а не «pauza».
+	if !strings.HasPrefix(puls[1], "avto=neizv;tunnel=0;set=1;perehod=") {
+		t.Fatalf("первый пульс %q", puls[1])
+	}
+	// Без пульта PervyyPuls молчит, заголовка нет.
+	s2 := &Sluzhba{Nastroyki: &hranenie.Nastroyki{}}
+	s2.PervyyPuls()
+	if s2.sostoyanieDlyaZagolovka() != "" {
+		t.Fatal("без пульта появился пульс")
+	}
+}
+
 func TestKomandaNeumeyuIProba(t *testing.T) {
 	s := &Sluzhba{Nastroyki: &hranenie.Nastroyki{}}
 	if itog := s.vypolnitKomandu(context.Background(), pult.Komanda{Chto: "chto_to"}); itog != "ne_umeyu" {
