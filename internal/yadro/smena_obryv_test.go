@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -295,5 +297,42 @@ func TestRev3OtkatNeUdalsyaNovoeStanovitsyaPostoyannym(t *testing.T) {
 	}
 	if got := soderzhimoe(t, y.Bin); got != "v1" || y.Versiya() != "core-v1-1" {
 		t.Fatalf("после отказа поставлено %q (%q), ждал последнюю не отвергнутую core-v1-1", got, y.Versiya())
+	}
+}
+
+// Откат не удался, и файл упавшей сборки не отодвинуть (занят): журнал
+// остаётся, сборка отмечена отвергнутой, следующая попытка отодвигает.
+func TestOtodvinutOtvergnutoePovtor(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("занятый файл не переименовать только на Windows")
+	}
+	y := gotovoKSmene(t)
+	s, err := y.Smenit()
+	if err != nil || s == nil {
+		t.Fatal(err)
+	}
+	os.Remove(y.putPrezhnego())
+	f, err := os.Open(y.Bin) // держим файл ядра — переименование не пройдёт
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Otkatit(); err == nil {
+		t.Fatal("откат без прежнего прошёл")
+	}
+	f.Close()
+	if o, est := y.chitatOtlozhennoe(); !est || o.Faza != fazaOtkaz {
+		t.Skipf("файл переименовался и открытым (фаза %q) — сценарий на этой ФС не воспроизвести", o.Faza)
+	}
+	if v := y.chitatVersiyu(); !slices.Contains(v.Otvergnuty, "core-v2-1") {
+		t.Fatal("отказ не записан")
+	}
+	if s2, err := y.Smenit(); s2 != nil || err != nil {
+		t.Fatalf("повтор: %v, %v", s2, err)
+	}
+	if estFayl(y.Bin) || !estFayl(y.Bin+".otvergnutoe") {
+		t.Fatal("упавшая сборка не отодвинута при повторе")
+	}
+	if _, est := y.chitatOtlozhennoe(); est {
+		t.Fatal("журнал не убран после повтора")
 	}
 }

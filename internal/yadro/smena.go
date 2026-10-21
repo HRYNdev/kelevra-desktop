@@ -95,6 +95,9 @@ type otlozhennoe struct {
 const (
 	fazaMenyayu = "menyayu"
 	fazaProba   = "proba"
+	// fazaOtkaz — сборка отвергнута, вернуть прежнее не вышло, а отодвинуть
+	// её файл с места ядра тоже не вышло: повторить при следующем подъёме.
+	fazaOtkaz = "otkaz"
 )
 
 func (y *Yadro) chitatOtlozhennoe() (otlozhennoe, bool) {
@@ -577,6 +580,18 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	if y.EstBinar() && len(NashiYadra(y.Bin)) > 0 {
 		return nil, nil
 	}
+	// Прошлый раз упавшую сборку не удалось отодвинуть — ещё раз.
+	if o.Faza == fazaOtkaz {
+		sbrositKeshHesha()
+		hesh, _ := heshFaylaYadra(y.Bin)
+		if y.EstBinar() && hesh == o.ShaNovogo {
+			if err := y.otodvinutOtvergnutoe(); err != nil {
+				return nil, fmt.Errorf("упавшую сборку ядра %s не отодвинуть: %w", o.Teg, err)
+			}
+		}
+		y.otvergnut(o.Teg)
+		return nil, nil
+	}
 	if o.Faza != "" {
 		smena, err, dalshe := y.vosstanovitSmenu(&o)
 		if !dalshe {
@@ -762,14 +777,15 @@ func (s *Smena) Otkatit() error {
 		// Вернуть нечего, а новое не запускается: сборка отвергается, её
 		// файл отодвигается — следующий подъём поставит последнюю
 		// подписанную НЕ отвергнутую сборку (Zagruzit), а не оставит
-		// упавшую стоящим ядром.
-		y.otvergnut(s.Teg)
-		otodvinuto := y.Bin + ".otvergnutoe"
-		_ = os.Remove(otodvinuto)
-		if rerr := os.Rename(y.Bin, otodvinuto); rerr != nil {
+		// упавшую стоящим ядром. Не отодвинулся — журнал остаётся (фаза
+		// otkaz), повтор при следующем подъёме.
+		if rerr := y.otodvinutOtvergnutoe(); rerr != nil {
+			y.otmetitOtvergnutoy(s.Teg)
+			o.Faza, o.PodyomIdet = fazaOtkaz, false
+			_ = y.sohranitOtlozhennoe(o)
 			return fmt.Errorf("%v; упавшую сборку не отодвинуть: %w", err, rerr)
 		}
-		sbrositKeshHesha()
+		y.otvergnut(s.Teg)
 		return fmt.Errorf("%w; сборка %s отвергнута и отодвинута", err, s.Teg)
 	}
 	y.zapisatVersiyu(s.Prezhniy)
@@ -787,6 +803,26 @@ func (s *Smena) Otvergnut() {
 	s.y.zamokSmeny.Lock()
 	defer s.y.zamokSmeny.Unlock()
 	s.y.otvergnut(s.Teg)
+}
+
+// otodvinutOtvergnutoe убирает файл упавшей сборки с места ядра.
+func (y *Yadro) otodvinutOtvergnutoe() error {
+	otodvinuto := y.Bin + ".otvergnutoe"
+	_ = os.Remove(otodvinuto)
+	if err := os.Rename(y.Bin, otodvinuto); err != nil {
+		return err
+	}
+	sbrositKeshHesha()
+	return nil
+}
+
+// otmetitOtvergnutoy — запись об отказе без уборки журнала. Под zamokSmeny.
+func (y *Yadro) otmetitOtvergnutoy(teg string) {
+	v := y.chitatVersiyu()
+	if !slices.Contains(v.Otvergnuty, teg) {
+		v.Otvergnuty = append(v.Otvergnuty, teg)
+		_ = y.sohranitVersiyu(v)
+	}
 }
 
 // otvergnut — под zamokSmeny.
