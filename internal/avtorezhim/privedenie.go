@@ -54,11 +54,11 @@ const (
 func (d Deystvie) String() string {
 	switch d {
 	case Opustit:
-		return "опустить защиту"
+		return "опустить туннель"
 	case Podnyat:
-		return "поднять защиту"
+		return "поднять туннель"
 	default:
-		return "не трогать защиту"
+		return "не трогать туннель"
 	}
 }
 

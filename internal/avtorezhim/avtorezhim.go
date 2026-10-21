@@ -468,7 +468,7 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 			// подряд идущих слепых заходов растёт, и после PodryadDoPrichiny
 			// причина становится видна человеку — до тех пор автоматический
 			// режим только выглядит работающим, а на деле ничего не решает.
-			log.Printf("авторежим: туннель поднят, а резолвер физического адаптера не узнать (%s) — заход слепой, защиту не трогаю", prichina)
+			log.Printf("авторежим: туннель поднят, а резолвер физического адаптера не узнать (%s) — заход слепой, туннель не трогаю", prichina)
 			a.otmetitSlepotu(prichina)
 			return Nablyudeniye{EstSet: true, ZondSlep: true}, false, a.Zadvizhka.Tekushcheye()
 		}
