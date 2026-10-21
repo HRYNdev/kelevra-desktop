@@ -119,6 +119,47 @@ func TestPereytiNaKlyuchOtkazy(t *testing.T) {
 	}
 }
 
+// 200 без адреса /u/<ключ> — не переход (как в Voyti, adresKlyuchaGoden): старый
+// адрес остаётся, конфиг по чужому адресу не запрашивается.
+func TestPereytiNaKlyuchTolkoAdresKlyucha(t *testing.T) {
+	sluchai := []struct {
+		imya   string
+		telo   func(d *dverPerehoda) string
+		shema  string
+		kratko string
+		novyy  func(d *dverPerehoda) string
+	}{
+		{"общий код /k/ вместо ключа", func(d *dverPerehoda) string { return `{"profil":"` + d.srv.URL + `/k/OBSHCHIY_KOD"}` }, "http", "ne_klyuch", nil},
+		{"пустой адрес", func(d *dverPerehoda) string { return `{"profil":""}` }, "http", "ne_klyuch", nil},
+		{"не ссылка подписки", func(d *dverPerehoda) string { return `{"profil":"` + d.srv.URL + `/u/KLYUCH_USTROYSTVA/info"}` }, "http", "ne_klyuch", nil},
+		{"http у клиента на https", func(d *dverPerehoda) string { return `{"profil":"` + d.srv.URL + `/u/KLYUCH_USTROYSTVA"}` }, "https", "ne_klyuch", nil},
+		{"хвостовой слэш срезается", func(d *dverPerehoda) string { return `{"profil":"` + d.srv.URL + `/u/KLYUCH_USTROYSTVA/"}` }, "http", "",
+			func(d *dverPerehoda) string { return d.srv.URL + "/u/KLYUCH_USTROYSTVA" }},
+	}
+	for _, sl := range sluchai {
+		d := novayaDver(t)
+		d.teloVh = sl.telo(d)
+		k := d.klient()
+		k.Shema = sl.shema
+		novyy, uzhe, err := k.PereytiNaKlyuch(context.Background(), d.srv.URL+"/k/OBSHCHIY_KOD", "")
+		if sl.kratko == "" {
+			if err != nil || uzhe || novyy != sl.novyy(d) {
+				t.Errorf("%s: %q %v %v", sl.imya, novyy, uzhe, err)
+			}
+			continue
+		}
+		var o *OshibkaPerehoda
+		if !errors.As(err, &o) || o.Kratko != sl.kratko || novyy != "" {
+			t.Errorf("%s: %q %v, ждали oshibka-%s", sl.imya, novyy, err, sl.kratko)
+		}
+		for _, z := range d.zaprosy {
+			if strings.HasPrefix(z, "GET ") {
+				t.Errorf("%s: после негодного адреса запрошен %s", sl.imya, z)
+			}
+		}
+	}
+}
+
 func TestPereytiNaKlyuchUzheNaKlyuche(t *testing.T) {
 	d := novayaDver(t)
 	adres := d.srv.URL + "/u/KLYUCH_USTROYSTVA"

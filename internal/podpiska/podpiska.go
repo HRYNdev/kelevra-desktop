@@ -453,16 +453,22 @@ func (k *Klient) PereytiNaKlyuch(ctx context.Context, adres, kod string) (novyy 
 	switch {
 	case err != nil:
 		return "", false, &OshibkaPerehoda{Kratko: "set", Prichina: err}
-	case status == http.StatusOK && o.Profil != "":
+	case status == http.StatusOK:
+		// Как в Voyti: 200 без адреса /u/<ключ> — сбой двери, а не переход;
+		// такой адрес на место старого не ставим.
+		if !k.adresKlyuchaGoden(o.Profil) {
+			return "", false, &OshibkaPerehoda{Kratko: "ne_klyuch"}
+		}
 	case o.Tekst != "":
 		return "", false, &OshibkaPerehoda{Kratko: "otkaz", Prichina: errors.New(o.Tekst)}
 	default:
 		return "", false, &OshibkaPerehoda{Kratko: strconv.Itoa(status)}
 	}
-	if _, err := k.KonfigPoAdresu(ctx, o.Profil); err != nil {
+	novyy = strings.TrimSuffix(o.Profil, "/")
+	if _, err := k.KonfigPoAdresu(ctx, novyy); err != nil {
 		return "", false, &OshibkaPerehoda{Kratko: "konfig", Prichina: SkrytKodVOshibke(err)}
 	}
-	return o.Profil, false, nil
+	return novyy, false, nil
 }
 
 // adresKlyuchaGoden — ответ входа устройства несёт адрес вида https://<дверь>/u/<ключ>
