@@ -1318,6 +1318,18 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 			host = podpiska.Host
 		}
 	}
+	// Машина на своём ключе (/u/<ключ>) называет его и журналам: выдача кладёт журнал в
+	// папку слота этого устройства (KelevraServer docs/PRIGLASHENIE.md, п. 4). Ключ — только
+	// той двери, что его выдала: стенд с подменённым хостом его не получает.
+	zagolovki := ustroystvo.Zagolovki
+	if klyuch := podpiska.KlyuchUstroystva(s.Nastroyki.Podpiska); klyuch != "" {
+		if u, err := url.Parse(s.Nastroyki.Podpiska); err == nil && u.Host == host {
+			zagolovki = func(h http.Header, deviceID, versiya string) {
+				ustroystvo.Zagolovki(h, deviceID, versiya)
+				h.Set("X-Device-Key", klyuch)
+			}
+		}
+	}
 	return &zhurnaly.Otpravshchik{
 		Adres:    fmt.Sprintf("%s://%s/logs", shema, host),
 		DeviceID: s.Nastroyki.DeviceID,
@@ -1329,9 +1341,10 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 			filepath.Join(hranenie.Papka(), zapisi.ImyaFayla),
 		),
 		PutMetok: hranenie.PutOtmetokZhurnalov(),
-		// Заголовки устройства плюс пульт и пульс — как у подписки.
+		// Заголовки устройства (с ключом устройства, если он есть) плюс пульт и
+		// пульс — как у подписки.
 		Zagolovki: func(h http.Header, deviceID, versiya string) {
-			ustroystvo.Zagolovki(h, deviceID, versiya)
+			zagolovki(h, deviceID, versiya)
 			if s.pult != nil {
 				ustroystvo.ZagolovokPulta(h, s.pult.Zagolovok())
 				ustroystvo.ZagolovokSostoyaniya(h, s.sostoyanieDlyaZagolovka())
@@ -2235,6 +2248,7 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 	if ssylka {
 		kod = hvost
 	} else {
+		kod = podpiska.ChistyyKod(kod)
 		var err error
 		adres, err = s.Podpiska.Voyti(ctx, kod, s.dveri())
 		if err != nil {
