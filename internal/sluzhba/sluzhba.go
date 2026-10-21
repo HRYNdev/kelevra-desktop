@@ -178,6 +178,12 @@ type Sluzhba struct {
 	// SluzhbaWindowsEst — установлена ли служба. Тоже хук: пакету незачем
 	// знать, как устроен диспетчер служб, ему нужен ответ да или нет.
 	SluzhbaWindowsEst func() bool
+	// AvtozapuskVOkne — служба работает от системы (служба Windows): её HKCU
+	// — ветка системы, не человека, и тумблер автозапуска через неё писал бы
+	// запись туда, где её никто не читает. Тогда состояние автозапуска и его
+	// переключение — дело окна (cmd/kelevra: avtozapusk_okna.go), а ручка
+	// /api/avtozapusk честно отказывает.
+	AvtozapuskVOkne bool
 
 	zamok      sync.Mutex
 	svedeniya  *podpiska.Svedeniya
@@ -1909,7 +1915,11 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	// runtime.GOOS, а не сам факт ошибки: на не-Windows avtozapusk всегда
 	// отвечает своей заглушкой avtozapusk.Ne, и эту ошибку незачем нести в
 	// окно текстом — там и так спрятан весь блок.
-	o.AvtozapuskPodderzhivaetsya = runtime.GOOS == "windows"
+	//
+	// У службы Windows (AvtozapuskVOkne) своей записи автозапуска нет: тумблер
+	// окно рисует по своей привязке, а без неё (стенд облика в браузере)
+	// прячет строку, а не показывает чужую ветку реестра.
+	o.AvtozapuskPodderzhivaetsya = runtime.GOOS == "windows" && !s.AvtozapuskVOkne
 	if o.AvtozapuskPodderzhivaetsya {
 		vkl, err := avtozapusk.Vklyuchen()
 		if err != nil {
@@ -1957,6 +1967,10 @@ func (s *Sluzhba) avtozapuskRuchka(w http.ResponseWriter, r *http.Request) {
 		otdat(w, nil, fmt.Errorf("запрос не разобран"))
 		return
 	}
+	if s.AvtozapuskVOkne {
+		otdat(w, nil, errAvtozapuskVOkne)
+		return
+	}
 	var err error
 	if vhod.Vklyuchit {
 		err = avtozapusk.Vklyuchit()
@@ -1965,6 +1979,9 @@ func (s *Sluzhba) avtozapuskRuchka(w http.ResponseWriter, r *http.Request) {
 	}
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
+
+// errAvtozapuskVOkne — ответ ручки автозапуска у службы Windows.
+var errAvtozapuskVOkne = errors.New("автозапуск переключается в окне Kelevra: служба работает от системы и вашу запись автозапуска не видит")
 
 // avtorezhimRuchka включает или выключает автоматическое переключение
 // защиты по смене сети (дома/не дома) — по образцу avtozapuskRuchka выше.

@@ -80,3 +80,35 @@ func TestAvtozapuskRuchkaChestnoOtkazyvaetNaLinukse(t *testing.T) {
 		t.Fatalf("ответ без текста причины: %s", w.Body.String())
 	}
 }
+
+// Служба Windows работает от системы: её HKCU — не ветка человека. Ручка
+// автозапуска при ней обязана отказать словами (писать запись системе —
+// тумблер врёт), а состояние — не показывать чужую ветку.
+func TestAvtozapuskSluzhbyWindowsOtdanOknu(t *testing.T) {
+	s := stend(t)
+	s.AvtozapuskVOkne = true
+	m := s.Obsluzhit()
+
+	telo, _ := json.Marshal(map[string]any{"vklyuchit": true})
+	r := httptest.NewRequest("POST", "/"+s.klyuch+"/api/avtozapusk", bytes.NewReader(telo))
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	if w.Code == 200 {
+		t.Fatalf("служба Windows переключила автозапуск в своей ветке: %s", w.Body.String())
+	}
+	var otkaz map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &otkaz); err != nil || otkaz["beda"] == "" {
+		t.Fatalf("отказ без текста: %s", w.Body.String())
+	}
+
+	r = httptest.NewRequest("GET", "/"+s.klyuch+"/api/sostoyanie", nil)
+	w = httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	var o otvetSostoyaniya
+	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+		t.Fatalf("не разобрал ответ: %v", err)
+	}
+	if o.AvtozapuskPodderzhivaetsya || o.AvtozapuskVklyuchen || o.AvtozapuskUstarela || o.AvtozapuskBeda != "" {
+		t.Fatalf("служба Windows показала автозапуск своей ветки: %+v", o)
+	}
+}

@@ -890,6 +890,8 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 		est, _ := vinsluzhba.Ustanovlena()
 		return est
 	}
+	// Служба Windows работает от системы: автозапуск человека — дело окна.
+	s.AvtozapuskVOkne = !sTreem
 	if sTreem {
 		s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
 	} else {

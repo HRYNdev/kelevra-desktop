@@ -2127,6 +2127,12 @@ async function obnovit() {
   // молчание дольше нескольких секунд служба справедливо считает закрытым
   // окном.
   try { s = await api("sostoyanie?okno=1"); } catch (e) { return; }
+  // Автозапуск — запись в реестре ЧЕЛОВЕКА; служба Windows работает от
+  // системы и видит свою ветку. Окно отвечает за него своей привязкой
+  // (cmd/kelevra avtozapusk_okna.go) — её ответ поверх ответа службы.
+  if (typeof window.kelevraAvtozapuskSostoyanie === "function") {
+    try { Object.assign(s, await window.kelevraAvtozapuskSostoyanie()); } catch (e) {}
+  }
   poslednee = s;
   const nuzhenKod = !s.kod_est || smenaKoda;
   $("karta-koda").hidden = !nuzhenKod;
@@ -2685,9 +2691,13 @@ $("perekl-avtozapusk").onclick = async () => {
   const perekl = $("perekl-avtozapusk");
   const vklyuchit = !poslednee || !poslednee.avtozapusk_vklyuchen || poslednee.avtozapusk_ustarela;
   perekl.disabled = true;
-  try { await api("avtozapusk", {vklyuchit}); }
+  try {
+    if (typeof window.kelevraAvtozapusk === "function") await window.kelevraAvtozapusk(vklyuchit);
+    else await api("avtozapusk", {vklyuchit});
+  }
   catch (e) {
-    $("beda-avtozapusk").textContent = "Автозапуск с Windows: " + e.message;
+    // Привязка окна отказывает строкой, ручка службы — Error.
+    $("beda-avtozapusk").textContent = "Автозапуск с Windows: " + ((e && e.message) || String(e));
     $("beda-avtozapusk").className = "beda vidno";
   }
   perekl.disabled = false; obnovit();

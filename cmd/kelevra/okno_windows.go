@@ -222,6 +222,17 @@ func pokazatOkno(url string) {
 	}); err != nil {
 		log.Printf("кнопка «Дать права» не привязана: %v", err)
 	}
+	// Тумблер «Автозапуск»: запись живёт в HKCU человека, а служба Windows
+	// работает от системы и видит свою ветку — читает и пишет её окно
+	// (avtozapusk_okna.go).
+	if err := w.Bind("kelevraAvtozapuskSostoyanie", func() sostoyanieAvtozapuska {
+		return avtozapuskOknaNastoyashchiy.sostoyanie()
+	}); err != nil {
+		log.Printf("состояние автозапуска не привязано: %v", err)
+	}
+	if err := w.Bind("kelevraAvtozapusk", avtozapuskOknaNastoyashchiy.pereklyuchit); err != nil {
+		log.Printf("тумблер автозапуска не привязан: %v", err)
+	}
 	// Служба вернулась после обновления НОВЕЕ окна — окно закрывается и
 	// запускается заново тем же .exe (на диске он уже новый): у старого
 	// процесса старые привязки (17.10: без kelevraPanel панель ушла в браузер).

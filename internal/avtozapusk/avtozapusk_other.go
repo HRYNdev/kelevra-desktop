@@ -15,5 +15,8 @@ func Ustarela() (bool, error)  { return false, Ne }
 func Vklyuchit() error         { return Ne }
 func Vyklyuchit() error        { return Ne }
 
+func VklyuchitNa(string) error            { return Ne }
+func UstarelaDlya(string) (bool, error)   { return false, Ne }
+
 func PochinitNaProgramFiles(string) (string, string, bool, error) { return "", "", false, Ne }
 func VseZapisi() ([]Zapis, error)                                 { return nil, Ne }
