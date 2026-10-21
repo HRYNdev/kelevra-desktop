@@ -105,6 +105,10 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 	return nil
 }
 
+// ErrNetNeOtvergnutoy — все подходящие сборки ядра на этом компьютере уже
+// не запускались. Текст — для человека.
+var ErrNetNeOtvergnutoy = errors.New("Новая сборка ядра Kelevra не запустилась на этом компьютере. Ожидается исправленная сборка.")
+
 // Sborka — один выпуск ядра в релизах: тег и ссылки на архив и его подпись.
 type Sborka struct {
 	Teg           string
@@ -138,6 +142,7 @@ func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPod
 	nuzhen := ImyaArhiva()
 	var luchshaya Sborka
 	var luchshayaV versiyaSborki
+	propushcheno := false
 	for _, r := range relizy {
 		if !strings.HasPrefix(r.Tag, "core-") || r.Draft {
 			continue
@@ -146,6 +151,7 @@ func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPod
 			continue
 		}
 		if slices.Contains(propustit, r.Tag) {
+			propushcheno = true
 			continue
 		}
 		var ssylka, ssylkaPodpisi string
@@ -177,6 +183,9 @@ func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPod
 	}
 	if luchshaya.Teg != "" {
 		return luchshaya, nil
+	}
+	if propushcheno {
+		return Sborka{}, ErrNetNeOtvergnutoy
 	}
 	if nuzhnaPodpis {
 		return Sborka{}, fmt.Errorf("в сборках ядра нет подписанного файла %s", nuzhen)
