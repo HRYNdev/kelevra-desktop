@@ -26,6 +26,11 @@ on:
         type: boolean
         required: false
         default: false
+      probnoe:
+        description: "Пробная сборка (prerelease): клиенты её не берут, только стенд с KELEVRA_YADRO_PROBNYE=1"
+        type: boolean
+        required: false
+        default: false
 
 env:
   CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
@@ -112,6 +117,7 @@ jobs:
           files: |
             sing-box-windows-amd64.zip
             sing-box-windows-amd64.zip.sig
-          prerelease: false
+          # Пробная сборка не уходит ни новым установкам, ни на замену у стоящих.
+          prerelease: ${{ github.event.inputs.probnoe == 'true' }}
           # Релиз ядра не должен становиться «последним»: latest/download/Kelevra.exe отдал бы 404.
           make_latest: false

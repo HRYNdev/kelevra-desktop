@@ -37,7 +37,7 @@ func ImyaArhiva() string {
 // Zagruzit скачивает ядро и кладёт его на место. Пользователю не нужно
 // ничего ставить руками: приложение приносит ядро себе само.
 func (y *Yadro) Zagruzit(ctx context.Context) error {
-	ssylka, ssylkaPodpisi, err := y.ssylkaNaYadro(ctx)
+	sborka, err := y.vybratSborku(ctx, &http.Client{Timeout: 20 * time.Second}, obnovlenie.TrebovatPodpis)
 	if err != nil {
 		return err
 	}
@@ -45,46 +45,80 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 		return err
 	}
 	arhiv := filepath.Join(y.Papka, "yadro.zip")
-	if err := skachat(ctx, ssylka, arhiv); err != nil {
+	if err := skachat(ctx, &http.Client{Timeout: 10 * time.Minute}, sborka.Ssylka, arhiv); err != nil {
 		return err
 	}
 	defer os.Remove(arhiv)
 	// Ядро запускает служба от системы, поэтому архив ставится только с верной
 	// подписью нашего ключа (internal/podpis), до распаковки.
 	if obnovlenie.TrebovatPodpis {
-		if err := obnovlenie.ProveritPodpisFayla(ctx, &http.Client{Timeout: 30 * time.Second}, ssylkaPodpisi, arhiv, ImyaArhiva()); err != nil {
+		if err := obnovlenie.ProveritPodpisFayla(ctx, &http.Client{Timeout: 30 * time.Second}, sborka.SsylkaPodpisi, arhiv, ImyaArhiva()); err != nil {
 			log.Printf("подпись ядра %s НЕ подтверждена (ed25519): %v — ядро не поставлено", ImyaArhiva(), err)
 			return fmt.Errorf("%w: ядро не поставлено (%v)", obnovlenie.ErrPodpis, err)
 		}
 		log.Printf("подпись ядра %s верна (ed25519), распаковываю", ImyaArhiva())
 	}
-	return raspakovat(arhiv, y.Bin)
+	if err := raspakovat(arhiv, y.Bin); err != nil {
+		return err
+	}
+	// Версию поставленного ядра запоминаем сразу: по ней служба потом решает,
+	// нужна ли замена (smena.go).
+	y.zapisatVersiyu(sborka.Teg)
+	return nil
 }
 
+// Sborka — один выпуск ядра в релизах: тег и ссылки на архив и его подпись.
+type Sborka struct {
+	Teg           string
+	Ssylka        string
+	SsylkaPodpisi string
+}
+
+// ssylkaNaYadro — ссылки на архив и подпись самой свежей годной сборки.
 func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, string, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, y.spisok(), nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	otvet, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	s, err := y.vybratSborku(ctx, &http.Client{Timeout: 20 * time.Second}, obnovlenie.TrebovatPodpis)
+	return s.Ssylka, s.SsylkaPodpisi, err
+}
+
+// vybratSborku — самая свежая годная сборка ядра из списка релизов.
+//
+// Пробные выпуски (prerelease) и черновики пропускаются: пробное ядро не
+// должно уходить ни новым установкам, ни на замену у стоящих (до 21.10.2026
+// любой подписанный core-* сразу уходил новым установкам). Стенд берёт
+// пробные явно — флагом BratProbnye или своим списком (Spisok).
+// nuzhnaPodpis — сборки без файла подписи пропускаются.
+func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPodpis bool) (Sborka, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, y.spisok(), nil)
 	if err != nil {
-		return "", "", fmt.Errorf("не дотянулся до списка сборок ядра: %w", err)
+		return Sborka{}, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	otvet, err := klient.Do(req)
+	if err != nil {
+		return Sborka{}, fmt.Errorf("не дотянулся до списка сборок ядра: %w", err)
 	}
 	defer otvet.Body.Close()
 	if otvet.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("список сборок ядра недоступен (ответ %d)", otvet.StatusCode)
+		return Sborka{}, fmt.Errorf("список сборок ядра недоступен: %w", &obnovlenie.OshibkaStatusa{Kod: otvet.StatusCode})
 	}
 	var relizy []struct {
-		Tag    string `json:"tag_name"`
-		Assets []struct {
+		Tag        string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Assets     []struct {
 			Name string `json:"name"`
 			URL  string `json:"browser_download_url"`
 		} `json:"assets"`
 	}
-	if err := json.NewDecoder(otvet.Body).Decode(&relizy); err != nil {
-		return "", "", err
+	if err := json.NewDecoder(io.LimitReader(otvet.Body, 8<<20)).Decode(&relizy); err != nil {
+		return Sborka{}, err
 	}
 	nuzhen := ImyaArhiva()
 	for _, r := range relizy { // релизы приходят от свежих к старым
-		if !strings.HasPrefix(r.Tag, "core-") {
+		if !strings.HasPrefix(r.Tag, "core-") || r.Draft {
+			continue
+		}
+		if r.Prerelease && !y.BratProbnye {
 			continue
 		}
 		var ssylka, ssylkaPodpisi string
@@ -102,20 +136,23 @@ func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, string, error) {
 		// Сборка ядра без подписи (выложена до подписей) пропускается: берём
 		// самую свежую ПОДПИСАННУЮ; новых сборок без подписи не бывает, их
 		// подписывает та же сборка (core.yml).
-		if obnovlenie.TrebovatPodpis && ssylkaPodpisi == "" {
+		if nuzhnaPodpis && ssylkaPodpisi == "" {
 			continue
 		}
-		return ssylka, ssylkaPodpisi, nil
+		return Sborka{Teg: r.Tag, Ssylka: ssylka, SsylkaPodpisi: ssylkaPodpisi}, nil
 	}
-	if obnovlenie.TrebovatPodpis {
-		return "", "", fmt.Errorf("в сборках ядра нет подписанного файла %s", nuzhen)
+	if nuzhnaPodpis {
+		return Sborka{}, fmt.Errorf("в сборках ядра нет подписанного файла %s", nuzhen)
 	}
-	return "", "", fmt.Errorf("в сборках ядра нет файла %s", nuzhen)
+	return Sborka{}, fmt.Errorf("в сборках ядра нет файла %s", nuzhen)
 }
 
-func skachat(ctx context.Context, ssylka, kuda string) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ssylka, nil)
-	otvet, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+func skachat(ctx context.Context, klient *http.Client, ssylka, kuda string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ssylka, nil)
+	if err != nil {
+		return err
+	}
+	otvet, err := klient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ядро не скачалось: %w", err)
 	}

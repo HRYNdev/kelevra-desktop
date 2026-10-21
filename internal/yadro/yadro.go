@@ -45,7 +45,11 @@ type Yadro struct {
 	Api    string // адрес Clash API, пусто = ApiAdres
 	Sekret string // пароль Clash API, если конфиг его задаёт
 	Spisok string // откуда брать сборки ядра, пусто = Relizy (подменяется на стенде)
-	Klient *http.Client
+	// BratProbnye — брать и пробные сборки ядра (prerelease). Только стенд:
+	// у человека пробное ядро не ставится ни новой установке, ни на замену.
+	// Подпись требуется и для пробных.
+	BratProbnye bool
+	Klient      *http.Client
 
 	zamok   sync.Mutex
 	derzh   *derzhatel
