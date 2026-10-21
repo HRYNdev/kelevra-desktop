@@ -301,6 +301,12 @@ func (s *Sluzhba) podnyatSvyazPosleSmenyVersii(ctx context.Context, adapter stri
 // единственным способом проверить жалобу «списки никогда не обновляются»), а
 // сверке при приёме нечего сказать человеку: она ничего не меняет.
 func (s *Sluzhba) dobavitPravilaIzKesha(vybor *konfig.Vybor, vsluh bool) {
+	if s.vykl(vyklPravilaIzKesha) {
+		if vsluh {
+			log.Printf("правила из кеша выключены пультом — ядро возьмёт их само по профилю")
+		}
+		return
+	}
 	kesh := pravila.IzKesha(hranenie.PapkaYadra(), s.tegiPravil())
 	if kesh == nil {
 		return

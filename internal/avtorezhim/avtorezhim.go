@@ -258,6 +258,12 @@ type Avtorezhim struct {
 	// на резолвер физического адаптера тесту не нужен.
 	DnsPryamoy func(adresResolvera, lokalnyAdres string) DnsProver
 
+	// PodryadDoPrichinyN — сколько слепых заходов подряд до признания; 0 —
+	// [PodryadDoPrichiny]. PamyatPriznakaD — память DNS-признака дома; 0 —
+	// [PamyatPriznaka]. Оба подстраиваются пультом (internal/sluzhba).
+	PodryadDoPrichinyN int
+	PamyatPriznakaD    time.Duration
+
 	// mu защищает slepyhPodryad и poslednyayaPrichinaSlepoty ниже: Zahod
 	// пишет их из горутины Sluzhitel.Krutit (см. sluzhitel.go), а
 	// PrichinaSlepoty читает их же по вызову HTTP-ручки /api/sostoyanie
@@ -302,7 +308,11 @@ func (a *Avtorezhim) otmetitSlepotu(prichina string) {
 func (a *Avtorezhim) PrichinaSlepoty() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.slepyhPodryad < PodryadDoPrichiny {
+	porog := PodryadDoPrichiny
+	if a.PodryadDoPrichinyN > 0 {
+		porog = a.PodryadDoPrichinyN
+	}
+	if a.slepyhPodryad < porog {
 		return ""
 	}
 	return a.poslednyayaPrichinaSlepoty
@@ -564,9 +574,13 @@ func (a *Avtorezhim) Zahod(ctx context.Context, estSet bool, dovereno bool) (nab
 	if !dnsMolchit {
 		if dnsDoma {
 			a.Priznak.Zapomnit(seychas)
-		} else if a.Priznak.Stoit(seychas, 0) {
+		} else if a.Priznak.Stoit(seychas, a.PamyatPriznakaD) {
 			priznakDoma = true
-			log.Printf("авторежим: DNS сейчас подмены не нашёл, но признак дома видели меньше %s назад — держим его до проверки трафиком", PamyatPriznaka)
+			pamyat := PamyatPriznaka
+			if a.PamyatPriznakaD > 0 {
+				pamyat = a.PamyatPriznakaD
+			}
+			log.Printf("авторежим: DNS сейчас подмены не нашёл, но признак дома видели меньше %s назад — держим его до проверки трафиком", pamyat)
 		}
 	}
 

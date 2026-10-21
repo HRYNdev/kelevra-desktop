@@ -389,8 +389,17 @@ func Zagruzit() (*Nastroyki, error) {
 // не работают: всё, что им нужно, они берут у службы по её адресу
 // (/api/sostoyanie и соседи).
 func lichnyeFayly() []string {
-	return []string{putNastroek(), PutProfilya(), PutSekretaClash()}
+	return []string{putNastroek(), PutProfilya(), PutSekretaClash(), PutPulta(), PutSvodki()}
 }
+
+// PutPulta — принятый пульт с сервера (internal/pult): настройки, испытание,
+// выполненные команды. Слой 2 договора: переживает перезапуск и старт без сети.
+func PutPulta() string { return filepath.Join(Papka(), "pult.json") }
+
+// PutSvodki — последняя сводка /info целиком, как её прислал сервер: после
+// перезапуска без сети окно показывает карточку подписки, а не «неизвестно».
+// В ней имя человека и список его устройств — закрыта, как настройки.
+func PutSvodki() string { return filepath.Join(Papka(), "svodka.json") }
 
 // lichnoeImya — относится ли имя файла к lichnyeFayly (для переноса данных
 // из старой папки, см. Perenesti).

@@ -8,6 +8,8 @@ package obnovlenie
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -61,7 +63,15 @@ type Novaya struct {
 	// SsylkaPodpisi — файл подписи Kelevra.exe.sig из того же релиза. Без неё
 	// (и без верной подписи) PostavitSHodom ничего не ставит.
 	SsylkaPodpisi string
+	// Sha256 — ожидаемая сумма файла (hex), когда сборку назвал подписанный
+	// пульт (блок obnovlenie). Пусто — сверки нет (релиз GitHub): там держит
+	// подпись. Сверяется ДО подписи и до того, как тронут рабочий файл.
+	Sha256 string
 }
+
+// ErrSha256 — скачанный файл не сошёлся с суммой из пульта. Файл удалён,
+// старая версия остаётся.
+var ErrSha256 = errors.New("сумма скачанного файла не сходится с пультом")
 
 // TrebovatPodpis — ставить обновление только с верной подписью (podpis). У
 // человека всегда true; выключают только тесты пакетов, которые гоняют
@@ -396,6 +406,17 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	// ровно та беда, из-за которой 28.08 у человека (цитата убрана)
 	// : скачался не .exe, а страница-заглушка прокси или обрезок,
 	// который запуститься не может.
+	if ozhidaem := strings.ToLower(strings.TrimSpace(n.Sha256)); ozhidaem != "" {
+		est, err := sha256Fayla(vremennyy)
+		if err != nil {
+			return fmt.Errorf("не могу посчитать сумму скачанного: %w", err)
+		}
+		if est != ozhidaem {
+			log.Printf("сумма сборки %s не сходится с пультом (%s вместо %s) — файл удалён, остаюсь на прежней версии", n.Versiya, est, ozhidaem)
+			return fmt.Errorf("%w — прежнее приложение не тронуто", ErrSha256)
+		}
+		log.Printf("сумма сборки %s сходится с пультом (sha256)", n.Versiya)
+	}
 	// Подпись — ДО любых проверок формата и ДО того, как тронут рабочий файл.
 	if TrebovatPodpis {
 		if err := proveritPodpisFayla(ctx, klient, n.SsylkaPodpisi, vremennyy, ImyaFayla); err != nil {
@@ -469,6 +490,20 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	}
 	uspeshno = true
 	return nil
+}
+
+// sha256Fayla — сумма файла в hex, потоком.
+func sha256Fayla(put string) (string, error) {
+	f, err := os.Open(put)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // ProveritPodpisFayla скачивает файл подписи по ссылке и сверяет с ним уже
