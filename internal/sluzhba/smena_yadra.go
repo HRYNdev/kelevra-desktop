@@ -70,8 +70,10 @@ func (s *Sluzhba) prigotovitYadroRaz(ctx context.Context) error {
 		log.Printf("сверка ядра: стоящее ядро — сборка %s (версия записана)", itog.Stoit)
 	case itog.Otlozheno:
 		log.Printf("сверка ядра: стоит %s, свежая %s — подпись верна (ed25519), заменю при следующем подключении", slovoVersii(itog.Stoit), itog.Svezhaya)
-	default:
+	case itog.Stoit == itog.Svezhaya:
 		log.Printf("сверка ядра: стоит свежая сборка %s", itog.Stoit)
+	default:
+		log.Printf("сверка ядра: стоит %s, в релизах не новее (%s) — замена не нужна", itog.Stoit, itog.Svezhaya)
 	}
 	return nil
 }

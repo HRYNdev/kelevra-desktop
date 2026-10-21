@@ -82,6 +82,10 @@ func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, string, error) {
 
 // vybratSborku — самая свежая годная сборка ядра из списка релизов.
 //
+// Свежесть — по версии из тега (versiya_sborki.go), а не по месту в списке:
+// GitHub упорядочивает релизы по дате коммита тега. Тег, который не
+// разбирается, пропускается с записью в журнал.
+//
 // Пробные выпуски (prerelease) и черновики пропускаются: пробное ядро не
 // должно уходить ни новым установкам, ни на замену у стоящих (до 21.10.2026
 // любой подписанный core-* сразу уходил новым установкам). Стенд берёт
@@ -114,7 +118,9 @@ func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPod
 		return Sborka{}, err
 	}
 	nuzhen := ImyaArhiva()
-	for _, r := range relizy { // релизы приходят от свежих к старым
+	var luchshaya Sborka
+	var luchshayaV versiyaSborki
+	for _, r := range relizy {
 		if !strings.HasPrefix(r.Tag, "core-") || r.Draft {
 			continue
 		}
@@ -139,7 +145,17 @@ func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPod
 		if nuzhnaPodpis && ssylkaPodpisi == "" {
 			continue
 		}
-		return Sborka{Teg: r.Tag, Ssylka: ssylka, SsylkaPodpisi: ssylkaPodpisi}, nil
+		v, err := razobratTeg(r.Tag)
+		if err != nil {
+			log.Printf("сборка ядра пропущена: %v", err)
+			continue
+		}
+		if luchshaya.Teg == "" || sravnitSborki(v, luchshayaV) > 0 {
+			luchshaya, luchshayaV = Sborka{Teg: r.Tag, Ssylka: ssylka, SsylkaPodpisi: ssylkaPodpisi}, v
+		}
+	}
+	if luchshaya.Teg != "" {
+		return luchshaya, nil
 	}
 	if nuzhnaPodpis {
 		return Sborka{}, fmt.Errorf("в сборках ядра нет подписанного файла %s", nuzhen)

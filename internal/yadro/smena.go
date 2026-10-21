@@ -232,6 +232,10 @@ func (y *Yadro) Prigotovit(ctx context.Context, klient *http.Client) (ItogPodgot
 		y.ubratOtlozhennoeEsliStoit(sborka.Teg)
 		return itog, nil
 	}
+	// Сборка с версией не выше стоящей на замену не идёт никогда.
+	if itog.Stoit != "" && !NoveeTega(sborka.Teg, itog.Stoit) {
+		return itog, nil
+	}
 	var uzhe otlozhennoe
 	if chitatJSON(y.putOtlozhennogo(), &uzhe) && uzhe.Teg == sborka.Teg {
 		if _, err := os.Stat(y.putArhivaNovogo()); err == nil {
@@ -391,6 +395,12 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	// новое ядро стоит, прежнее лежит рядом — продолжаем ту же пробу.
 	if _, err := os.Stat(y.putPrezhnego()); err == nil && y.Versiya() == o.Teg {
 		return &Smena{y: y, Teg: o.Teg, Prezhniy: o.Prezhniy}, nil
+	}
+	// Отложенная сборка не новее стоящей (стоящее ядро успело обновиться
+	// иначе) — ставить её нельзя.
+	if tek := y.Versiya(); tek != "" && !NoveeTega(o.Teg, tek) {
+		y.ubratOtlozhennoe()
+		return nil, nil
 	}
 	if o.Popytok >= popytokSmeny {
 		y.otvergnut(o.Teg)
