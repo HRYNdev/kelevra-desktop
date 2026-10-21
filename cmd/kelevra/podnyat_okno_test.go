@@ -11,8 +11,12 @@ type poddelnoeOkno struct {
 	ostalosNaEkrane int  // сколько ещё опросов nayti найдёт окно (<0 — всегда)
 	otvechaet       bool // крутит ли поток окна очередь
 	ozhivaetCherez  int  // через сколько опросов otvechaet станет true (0 — никогда)
-	opros           int
-	podnyato        bool
+	// umiraetCherez — через сколько проверок est поднятое окно исчезнет
+	// (0 — живёт всегда).
+	umiraetCherez int
+	opros         int
+	proverokEst   int
+	podnyato      bool
 }
 
 func (p *poddelnoeOkno) sistema() oknoSistemy {
@@ -34,6 +38,10 @@ func (p *poddelnoeOkno) sistema() oknoSistemy {
 			return p.otvechaet
 		},
 		podnyat: func(uintptr) { p.podnyato = true },
+		est: func(uintptr) bool {
+			p.proverokEst++
+			return p.umiraetCherez == 0 || p.proverokEst < p.umiraetCherez
+		},
 	}
 }
 
@@ -44,7 +52,7 @@ func (p *poddelnoeOkno) sistema() oknoSistemy {
 // дождаться ухода и открыть своё.
 func TestUhodyashcheeOknoNePodnimaetsya(t *testing.T) {
 	p := &poddelnoeOkno{ostalosNaEkrane: 3}
-	if podnyatOknoEsliZhivo(p.sistema(), time.Second, time.Millisecond) {
+	if podnyatOknoEsliZhivo(p.sistema(), time.Second, 20*time.Millisecond, time.Millisecond) {
 		t.Fatal("подняли уходящее окно и не открыли своё — после обновления окно пропадёт")
 	}
 	if p.podnyato {
@@ -56,14 +64,14 @@ func TestUhodyashcheeOknoNePodnimaetsya(t *testing.T) {
 // открываем (беда 23.08 — два окна).
 func TestZhivoeOknoPodnimaetsya(t *testing.T) {
 	p := &poddelnoeOkno{ostalosNaEkrane: -1, otvechaet: true}
-	if !podnyatOknoEsliZhivo(p.sistema(), time.Second, time.Millisecond) || !p.podnyato {
+	if !podnyatOknoEsliZhivo(p.sistema(), time.Second, 20*time.Millisecond, time.Millisecond) || !p.podnyato {
 		t.Fatal("живое окно не поднято — откроется второе")
 	}
 }
 
 func TestNetOknaOtkryvaemSvoe(t *testing.T) {
 	p := &poddelnoeOkno{}
-	if podnyatOknoEsliZhivo(p.sistema(), time.Second, time.Millisecond) || p.podnyato {
+	if podnyatOknoEsliZhivo(p.sistema(), time.Second, 20*time.Millisecond, time.Millisecond) || p.podnyato {
 		t.Fatal("окна нет, а своё не открываем")
 	}
 }
@@ -72,7 +80,7 @@ func TestNetOknaOtkryvaemSvoe(t *testing.T) {
 // его, второе не нужно.
 func TestZaminkaZhivogoOkna(t *testing.T) {
 	p := &poddelnoeOkno{ostalosNaEkrane: -1, ozhivaetCherez: 3}
-	if !podnyatOknoEsliZhivo(p.sistema(), time.Second, time.Millisecond) || !p.podnyato {
+	if !podnyatOknoEsliZhivo(p.sistema(), time.Second, 20*time.Millisecond, time.Millisecond) || !p.podnyato {
 		t.Fatal("ожившее окно не поднято")
 	}
 }
@@ -81,10 +89,32 @@ func TestZaminkaZhivogoOkna(t *testing.T) {
 func TestNemoeOknoNeUhoditOtkryvaemSvoe(t *testing.T) {
 	p := &poddelnoeOkno{ostalosNaEkrane: -1}
 	nachalo := time.Now()
-	if podnyatOknoEsliZhivo(p.sistema(), 30*time.Millisecond, time.Millisecond) || p.podnyato {
+	if podnyatOknoEsliZhivo(p.sistema(), 30*time.Millisecond, 20*time.Millisecond, time.Millisecond) || p.podnyato {
 		t.Fatal("немое окно поднято вместо своего")
 	}
 	if time.Since(nachalo) < 30*time.Millisecond {
 		t.Fatal("не дождались срока ухода")
+	}
+}
+
+// Стенд 22.10 (0.6.85 → сборная): старое окно уже после w.Run ещё отвечает
+// на WM_NULL, новая копия поднимает его — и через мгновение оно умирает
+// вместе со своим процессом. Новая копия обязана это заметить и открыть
+// своё, а не уйти, оставив пустой стол.
+func TestPodnyatoeOknoIschezloOtkryvaemSvoe(t *testing.T) {
+	p := &poddelnoeOkno{ostalosNaEkrane: -1, otvechaet: true, umiraetCherez: 3}
+	if podnyatOknoEsliZhivo(p.sistema(), time.Second, time.Second, time.Millisecond) {
+		t.Fatal("поднятое окно исчезло, а своё не открываем — после обновления окна не будет")
+	}
+	if !p.podnyato {
+		t.Fatal("отвечающее окно сперва поднимается")
+	}
+}
+
+// Ожившее после заминки окно тоже караулится.
+func TestOzhivsheeOknoTozheKarauliotsya(t *testing.T) {
+	p := &poddelnoeOkno{ostalosNaEkrane: -1, ozhivaetCherez: 2, umiraetCherez: 2}
+	if podnyatOknoEsliZhivo(p.sistema(), time.Second, time.Second, time.Millisecond) {
+		t.Fatal("ожившее и исчезнувшее окно засчитано поднятым")
 	}
 }

@@ -300,9 +300,10 @@ var (
 // появиться) — возвращает false, и вызывающий код обязан откатиться на
 // pokazatOkno, как было раньше.
 //
-// Найденное окно поднимается, только если оно живо (podnyat_okno.go): окно
-// прошлой копии, которая как раз перезапускается после обновления службы,
-// ещё на экране, но уже уходит — поднять его и выйти значило остаться без окна.
+// Найденное окно поднимается, только если оно живо, и после подъёма
+// караулится (podnyat_okno.go): окно прошлой копии, которая как раз
+// перезапускается после обновления службы, ещё на экране, но уже уходит —
+// поднять его и выйти значило остаться без окна.
 func podnyatChuzheeOkno() bool {
 	return podnyatOknoEsliZhivo(oknoSistemy{
 		nayti: func() (uintptr, bool) {
@@ -314,8 +315,14 @@ func podnyatChuzheeOkno() bool {
 			procShowWindow.Call(hwnd, swRestore)
 			procSetForegroundWindow.Call(hwnd)
 		},
-	}, srokUhodaUmirayushchegoOkna, shagUhodaUmirayushchegoOkna)
+		est: func(hwnd uintptr) bool {
+			r, _, _ := procIsWindow.Call(hwnd)
+			return r != 0
+		},
+	}, srokUhodaUmirayushchegoOkna, srokSlezhkiZaPodnyatym, shagUhodaUmirayushchegoOkna)
 }
+
+var procIsWindow = user32TreyDLL.NewProc("IsWindow")
 
 // procSendMessageTimeoutW/procDestroyWindow — свои проки этого файла.
 var (
