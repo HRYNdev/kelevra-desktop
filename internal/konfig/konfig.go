@@ -348,6 +348,7 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// fakeip надо по тому, что от dns осталось, а не по тому, что было.
 	soglasovatFakeip(d)
 	okrepitPryamoyResolverVTunnele(d)
+	bezAdresovV6(d)
 	vpisatSekretClash(d, v.ClashSekret)
 	k.ClashAdres, k.ClashSekret = clash(d)
 	zapomnitVybor(d)
