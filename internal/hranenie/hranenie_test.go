@@ -36,6 +36,10 @@ func TestKelevraDirSilneeLocalAppData(t *testing.T) {
 
 // Без KELEVRA_DIR на Windows остаётся %LOCALAPPDATA%\Kelevra — это боевой путь,
 // и переставленное условие не должно было его сломать.
+//
+// PROGRAMDATA уводится в пустую папку: на машине, где стоит служба, есть
+// настоящая общая папка C:\ProgramData\Kelevra, и Papka() честно выбирала её —
+// проверка краснела не от кода, а от машины.
 func TestBezPeremennoyWindowsBeretLocalAppData(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("проверяет ветку Windows")
@@ -43,6 +47,7 @@ func TestBezPeremennoyWindowsBeretLocalAppData(t *testing.T) {
 	chuzhaya := t.TempDir()
 	t.Setenv("KELEVRA_DIR", "")
 	t.Setenv("LOCALAPPDATA", chuzhaya)
+	t.Setenv("PROGRAMDATA", t.TempDir())
 
 	if got, want := Papka(), filepath.Join(chuzhaya, "Kelevra"); got != want {
 		t.Fatalf("папка %q вместо %q", got, want)

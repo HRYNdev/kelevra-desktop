@@ -1,0 +1,321 @@
+package sluzhba
+
+// Замена ядра у стоящих установок (устройство — internal/yadro/smena.go).
+//
+// Фоном служба сверяет стоящее ядро с самой свежей подписанной сборкой core-*
+// и откладывает новую (SveryatYadro). Ставится отложенная сборка при
+// следующем подъёме связи, когда ядро не запущено (PodnyatZashchitu): связь
+// ради замены ядра не рвётся. Не поднялось новое ядро — служба возвращает
+// прежнее, поднимает связь на нём и больше эту сборку не берёт.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+)
+
+// srokPodgotovkiYadra — сколько даём на скачивание сборки ядра фоном.
+const srokPodgotovkiYadra = 15 * time.Minute
+
+// novoeYadro — ядро на настоящих путях приложения.
+//
+// KELEVRA_RELIZY_YADRA подменяет список сборок ядра, KELEVRA_YADRO_PROBNYE=1
+// разрешает пробные (prerelease) сборки — только для стенда, у человека они
+// не заданы. Подпись ed25519 требуется в любом случае.
+func novoeYadro() *yadro.Yadro {
+	return &yadro.Yadro{
+		Bin:         hranenie.PutYadra(),
+		Papka:       hranenie.PapkaYadra(),
+		Spisok:      os.Getenv("KELEVRA_RELIZY_YADRA"),
+		BratProbnye: os.Getenv("KELEVRA_YADRO_PROBNYE") == "1",
+	}
+}
+
+// SveryatYadro — фоновая сверка стоящего ядра со свежей сборкой. Первая
+// попытка сразу при запуске (кроме стендов с KELEVRA_BEZ_OBNOVLENIYA=1),
+// дальше раз в period; сетевой отказ повторяется сам (fonovoeDelo).
+func (s *Sluzhba) SveryatYadro(ctx context.Context, period time.Duration) {
+	d := s.delo("сверка ядра", period, s.prigotovitYadroRaz)
+	d.srazu = os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") != "1"
+	d.krutit(ctx)
+}
+
+// prigotovitYadroRaz — одна сверка. Без прав администратора не делается:
+// папку ядра пишет только служба.
+func (s *Sluzhba) prigotovitYadroRaz(ctx context.Context) error {
+	if !s.estPrava() || !s.Yadro.EstBinar() {
+		return nil
+	}
+	ctx, otmena := context.WithTimeout(ctx, srokPodgotovkiYadra)
+	defer otmena()
+	itog, err := s.Yadro.Prigotovit(ctx, s.klientSeti(srokPodgotovkiYadra))
+	if err != nil {
+		if errors.Is(err, yadro.ErrNetYadra) {
+			return nil
+		}
+		if !setevoyOtkaz(err) {
+			log.Printf("сверка ядра: не вышло (%v), ядро прежнее", err)
+		}
+		return err
+	}
+	switch {
+	case itog.StarayaPodpis:
+		// Не чаще раза в сутки: сверка идёт каждые несколько часов.
+		s.zamok.Lock()
+		pisat := time.Since(s.zhurnalStarayaPodpis) >= 24*time.Hour
+		if pisat {
+			s.zhurnalStarayaPodpis = time.Now()
+		}
+		s.zamok.Unlock()
+		if pisat {
+			log.Printf("сверка ядра: сборка %s подписана прежним форматом (без тега) — на замену не годится, стоит %s", itog.Svezhaya, slovoVersii(itog.Stoit))
+		}
+	case itog.Otvergnuto:
+		log.Printf("сверка ядра: свежая сборка %s на этой машине не поднималась — остаётся прежнее (%s)", itog.Svezhaya, slovoVersii(itog.Stoit))
+	case itog.Priznano:
+		log.Printf("сверка ядра: стоящее ядро — сборка %s (версия записана)", itog.Stoit)
+	case itog.OtvergnutoeNaMeste:
+		log.Printf("сверка ядра: отвергнутая сборка %s всё ещё на месте ядра — уберу при следующем подключении", itog.Svezhaya)
+	case itog.Otlozheno:
+		log.Printf("сверка ядра: стоит %s, свежая %s — подпись верна (ed25519), заменю при следующем подключении", slovoVersii(itog.Stoit), itog.Svezhaya)
+	case itog.Stoit == itog.Svezhaya:
+		log.Printf("сверка ядра: стоит свежая сборка %s", itog.Stoit)
+	default:
+		log.Printf("сверка ядра: стоит %s, в релизах не новее (%s) — замена не нужна", itog.Stoit, itog.Svezhaya)
+	}
+	return nil
+}
+
+func slovoVersii(teg string) string {
+	if teg == "" {
+		return "ядро неизвестной сборки"
+	}
+	return teg
+}
+
+// smenitYadroPeredPodyomom ставит отложенную сборку, если ядро этой копии не
+// запущено. nil — замены нет (нечего менять, нет прав, ядро работает).
+//
+// Вызывающий должен держать zamokSmenyYadra: пока идёт пробный подъём, все
+// прочие подъёмы ждут его исхода на этом замке, поэтому новое ядро на пробе
+// запускает только держатель пробы.
+func (s *Sluzhba) smenitYadroPeredPodyomom() *yadro.Smena {
+	if !s.estPrava() || s.Yadro.PID() != "" {
+		return nil
+	}
+	smena, err := s.Yadro.Smenit()
+	if err != nil {
+		log.Printf("замена ядра: %v — остаюсь на прежнем", err)
+		return nil
+	}
+	if smena == nil {
+		return nil
+	}
+	s.zamok.Lock()
+	s.summaYadra = "" // отпечаток для паспорта считается заново
+	s.zamok.Unlock()
+	log.Printf("замена ядра: %s → %s, подпись верна (ed25519), поднимаю на новом", slovoVersii(smena.Prezhniy), smena.Teg)
+	return smena
+}
+
+// oshibkaZapuskaYadra — отказ самого запуска ядра (процесс упал на старте
+// или не ответил). Текст и причина — как у исходной ошибки.
+type oshibkaZapuskaYadra struct{ err error }
+
+func (o oshibkaZapuskaYadra) Error() string { return o.err.Error() }
+func (o oshibkaZapuskaYadra) Unwrap() error { return o.err }
+
+// novoeYadroVinovato — мог ли отказ подъёма быть из-за нового ядра. Винится
+// только отказ самого запуска ядра; нет прав, нет конфига или файла ядра,
+// подбор имени адаптера, отмена, остановка человеком посреди старта и
+// занятый адаптер от сборки ядра не зависят.
+func novoeYadroVinovato(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var zapusk oshibkaZapuskaYadra
+	if !errors.As(err, &zapusk) {
+		return false
+	}
+	if errors.Is(err, yadro.ErrOstanovleno) || errors.Is(err, yadro.ErrNeZapuskalos) {
+		return false
+	}
+	return !errors.Is(err, OshibkaAdapterZanyat) && !adapterZanyatPoOshibke(zapusk.err)
+}
+
+// pokolenieAvtorezhima — номер последнего решения человека про связь
+// (растёт на «Отключить» и на каждом решении автомата).
+func (s *Sluzhba) pokolenieAvtorezhima() uint64 {
+	s.avtorezhimZamok.Lock()
+	defer s.avtorezhimZamok.Unlock()
+	return s.avtorezhimPokolenie
+}
+
+func (s *Sluzhba) chisloOtklyucheniy() uint64 {
+	s.avtorezhimZamok.Lock()
+	defer s.avtorezhimZamok.Unlock()
+	return s.otklyucheniy
+}
+
+// PodnyatZashchitu поднимает связь (podnyatZashchituRaz), перед этим ставит
+// отложенную сборку ядра, если она есть. Общее тело для ручки «Подключить» и
+// для авторежима.
+//
+// Пробу новой сборки получает только один подъём (yadro.Smenit); исход
+// у неё один из трёх: подтвердить (Zakrepit), откатить за отказ запуска
+// нового ядра (Otkatit) или отпустить без решения (Otpustit) — при чужой
+// ошибке, отмене или «Отключить».
+func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
+	pokolenie := s.pokolenieAvtorezhima()
+	otklyucheniy := s.chisloOtklyucheniy()
+	// Замок замены: с пробой он держится до её исхода (все прочие подъёмы
+	// ждут — ядро на пробе запускает только держатель), без пробы
+	// отпускается сразу. Ждать его дольше srokOzhidaniyaSmeny не стоит:
+	// человеку — понятная причина, а не повисшая кнопка.
+	if err := s.vzyatZamokSmeny(ctx); err != nil {
+		return err
+	}
+	// Пока ждали, человек мог сказать своё («Отключить», новое решение
+	// автомата): тогда связь не поднимаем.
+	if s.pokolenieAvtorezhima() != pokolenie {
+		s.zamokSmenyYadra.Unlock()
+		if s.chisloOtklyucheniy() != otklyucheniy {
+			log.Printf("подъём связи не начат: пока шла проба нового ядра, нажато «Отключить»")
+			return OshibkaReshenieSmenilos
+		}
+		log.Printf("подъём связи не начат: пока шла проба нового ядра, сменился режим автомата")
+		return OshibkaRezhimSmenilsya
+	}
+	smena := s.smenitYadroPeredPodyomom()
+	if smena == nil {
+		s.zamokSmenyYadra.Unlock()
+		return s.podnyatZashchituRaz(ctx)
+	}
+	zamokVzyat := true
+	otpustitZamok := func() {
+		if zamokVzyat {
+			zamokVzyat = false
+			s.zamokSmenyYadra.Unlock()
+		}
+	}
+	defer otpustitZamok()
+	reshena := false
+	defer func() {
+		// Паника или иной выход без решения — проба отпускается.
+		if !reshena {
+			smena.Otpustit()
+		}
+	}()
+	err := s.podnyatZashchituRaz(ctx)
+	reshena = true
+	if err == nil {
+		if zerr := smena.Zakrepit(); zerr != nil {
+			log.Printf("замена ядра: связь поднята, но на месте ядра не сборка %s (%v) — новое ядро убрано с диска, от сборки отказываюсь", smena.Teg, zerr)
+		} else {
+			log.Printf("замена ядра: сборка %s работает", smena.Teg)
+		}
+		s.sbrositOtpechatokYadra()
+		return nil
+	}
+	if !novoeYadroVinovato(ctx, err) {
+		// Проба остаётся, попытка не тратится: продолжится при следующем
+		// подъёме.
+		smena.Otpustit()
+		return err
+	}
+	// Замок держится (взят выше) от отката до конца повторного подъёма.
+	if s.Yadro.PID() != "" {
+		// Ядро уже поднял кто-то другой (второе окно): файл не трогаем.
+		smena.Otpustit()
+		return err
+	}
+	_ = s.Yadro.Ostanovit()
+	oerr := smena.Otkatit()
+	s.sbrositOtpechatokYadra()
+	if oerr != nil {
+		if s.Yadro.EstBinar() {
+			// Упавшую сборку не удалось убрать с места ядра (фаза otkaz):
+			// подъём на ней бессмыслен, уборка повторится при следующем.
+			log.Printf("замена ядра: сборка %s не поднялась (%v), прежнее ядро не вернуть, и её файл не убрать с места ядра: %v — связь не поднимаю, повторю уборку при следующем подключении", smena.Teg, err, oerr)
+			return err
+		}
+		log.Printf("замена ядра: сборка %s не поднялась (%v), прежнее ядро не вернуть: %v — сборка отвергнута, поднимаю на последней подписанной сборке, кроме отвергнутых", smena.Teg, err, oerr)
+		if s.pokolenieAvtorezhima() != pokolenie || ctx.Err() != nil {
+			return err
+		}
+		// Проба кончилась (сборка отвергнута): скачивание другой сборки —
+		// без замка, остальные подъёмы не ждут его.
+		otpustitZamok()
+		return s.podnyatZashchituRaz(ctx)
+	}
+	// Человек успел сказать своё («Отключить», новое решение автомата) —
+	// связь против его воли не поднимаем, и о сборке не судим.
+	if s.pokolenieAvtorezhima() != pokolenie || ctx.Err() != nil {
+		log.Printf("замена ядра: сборка %s не поднялась (%v) — вернул %s; связь не поднимаю: решение о связи сменилось", smena.Teg, err, slovoVersii(smena.Prezhniy))
+		return err
+	}
+	log.Printf("замена ядра: сборка %s не поднялась (%v) — вернул %s, поднимаю на нём", smena.Teg, err, slovoVersii(smena.Prezhniy))
+	err = s.podnyatZashchituRaz(ctx)
+	if err == nil {
+		smena.Otvergnut()
+		log.Printf("замена ядра: на прежнем ядре связь поднялась — сборку %s больше не ставлю", smena.Teg)
+		return nil
+	}
+	log.Printf("замена ядра: прежнее ядро тоже не поднялось (%v) — дело не в сборке %s, попробую её снова при следующем подключении", err, smena.Teg)
+	return err
+}
+
+// srokOzhidaniyaSmeny — сколько подъём ждёт исхода чужой пробы нового ядра.
+var srokOzhidaniyaSmeny = 90 * time.Second
+
+// OshibkaIdetObnovlenieYadra — подъём не дождался исхода пробы нового ядра.
+var OshibkaIdetObnovlenieYadra = errors.New("Идёт обновление ядра Kelevra. Повторите подключение через минуту.")
+
+// OshibkaReshenieSmenilos — пока подъём ждал, нажато «Отключить».
+var OshibkaReshenieSmenilos = errors.New("Подключение отменено: связь была отключена.")
+
+// OshibkaRezhimSmenilsya — пока подъём ждал, сменился режим автомата
+// (тумблер или решение автомата); подключением распоряжается он.
+var OshibkaRezhimSmenilsya = errors.New("Подключение отменено: изменён режим работы Kelevra.")
+
+// OshibkaYadroKachaetsya — ядро уже загружается другим подъёмом.
+var OshibkaYadroKachaetsya = errors.New("Идёт загрузка ядра Kelevra. Повторите подключение через минуту.")
+
+// vzyatZamokSmeny ждёт замок замены не дольше srokOzhidaniyaSmeny и не
+// дольше ctx.
+func (s *Sluzhba) vzyatZamokSmeny(ctx context.Context) error {
+	if s.zamokSmenyYadra.TryLock() {
+		return nil
+	}
+	log.Printf("подъём связи ждёт: идёт проба новой сборки ядра")
+	srok := time.NewTimer(srokOzhidaniyaSmeny)
+	defer srok.Stop()
+	shag := time.NewTicker(50 * time.Millisecond)
+	defer shag.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("подъём связи прерван: %w", ctx.Err())
+		case <-srok.C:
+			log.Printf("подъём связи не начат: проба новой сборки ядра не закончилась за %s", srokOzhidaniyaSmeny)
+			return OshibkaIdetObnovlenieYadra
+		case <-shag.C:
+			if s.zamokSmenyYadra.TryLock() {
+				return nil
+			}
+		}
+	}
+}
+
+// sbrositOtpechatokYadra — отпечаток ядра для паспорта считается заново.
+func (s *Sluzhba) sbrositOtpechatokYadra() {
+	s.zamok.Lock()
+	s.summaYadra = ""
+	s.zamok.Unlock()
+}

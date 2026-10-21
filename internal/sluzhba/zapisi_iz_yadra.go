@@ -6,7 +6,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
@@ -40,8 +42,14 @@ var OknoSvodkiYadra = 10 * time.Minute
 
 // nablyudatelYadra — состояние чтения между заходами.
 type nablyudatelYadra struct {
-	pisatel   *zapisi.Pisatel
-	put       string
+	// zamok — заход слежки и запись места при остановке службы идут из
+	// разных горутин (ZapomnitMestoChteniyaYadra зовёт main).
+	zamok   sync.Mutex
+	pisatel *zapisi.Pisatel
+	put     string
+	// mesto — файл, где смещение переживает перезапуск службы
+	// (chtenie_yadra.go). Пусто — смещение живёт только в памяти.
+	mesto     string
 	smeshenie int64
 	razmer    int64
 	// fayl — какой именно файл читаем. Ядро на каждом своём старте
@@ -52,10 +60,21 @@ type nablyudatelYadra struct {
 	// старта службы, и он мог оборваться посреди строки: её остаток при
 	// первом чтении пропускается.
 	seredinaStroki bool
+	// mestoSdvinulos — с последней записи места смещение ушло или файл
+	// сменился: место пора записать на диск.
+	mestoSdvinulos bool
+	// mestoZapisano — когда место последний раз легло на диск: чаще раза в
+	// ShagZapisiMesta не пишем.
+	mestoZapisano time.Time
+	// zamorozhen — служба уходит: место записано окончательно, дальше не
+	// читаем (иначе уходящая копия перезаписала бы место после того, как
+	// новая уже начала с него).
+	zamorozhen bool
 
 	oknoNachalo time.Time
 	soed        int
 	otkazy      int
+	shumV6      int
 	kody        map[string]int
 	imena       map[string]int
 
@@ -78,13 +97,16 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 	n := &nablyudatelYadra{
 		pisatel: zapisi.Novyy(hranenie.Papka()),
 		put:     yadro.PutZhurnalaVPapke(hranenie.PapkaYadra()),
+		mesto:   filepath.Join(hranenie.Papka(), ImyaMestaChteniya),
 		kody:    map[string]int{},
 		imena:   map[string]int{},
 	}
 	if s.Yadro != nil {
 		n.spravochnik = yadro.NovyeImena(s.Yadro)
 	}
-	n.nachatSKonca()
+	n.nachat(time.Now())
+	s.slezhkaYadra.Store(n)
+	defer s.slezhkaYadra.CompareAndSwap(n, nil)
 	// Обстановка одной записью на старте: по ней видно, с какими правами и в
 	// каком режиме работала машина, когда случилось остальное.
 	n.pisatel.Sreda(map[string]any{"rezhim": s.rezhimKartiny(), "prava": s.estPrava()})
@@ -93,15 +115,70 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Служба уходит штатно (обновление, остановка): место чтения —
+			// с нынешним временем, чтобы следующая копия продолжила с него.
+			n.zamok.Lock()
+			if !n.zamorozhen {
+				n.zapomnitMesto(time.Now())
+			}
+			n.zamok.Unlock()
 			return
 		case <-t.C:
+			if s.vykl(vyklZapisiYadra) {
+				continue
+			}
 			n.zahod(time.Now())
 		}
 	}
 }
 
+// ZapomnitMestoChteniyaYadra — служба уходит: записать место чтения журнала
+// ядра сейчас и больше не читать.
+//
+// Зовётся синхронно на путях ухода (остановка в main, установка обновления,
+// уступка места новой копии) до выхода процесса: отмена контекста слежки сама
+// по себе не ждёт горутину, и процесс мог выйти раньше, чем она запишет место
+// (а в режиме трея контекст отменяется только на самом выходе из main, а при
+// обновлении процесс уходит через os.Exit). Слежки нет (KELEVRA_BEZ_ZAPISEY,
+// ещё не стартовала) — ничего.
+func (s *Sluzhba) ZapomnitMestoChteniyaYadra() {
+	n := s.slezhkaYadra.Load()
+	if n == nil {
+		return
+	}
+	n.zamok.Lock()
+	defer n.zamok.Unlock()
+	n.zapomnitMesto(time.Now())
+	n.zamorozhen = true
+}
+
+// prodolzhitSlezhkuZaYadrom — уход не состоялся (новая копия не поднялась):
+// слежка читает дальше.
+func (s *Sluzhba) prodolzhitSlezhkuZaYadrom() {
+	n := s.slezhkaYadra.Load()
+	if n == nil {
+		return
+	}
+	n.zamok.Lock()
+	defer n.zamok.Unlock()
+	n.zamorozhen = false
+}
+
+// ShagZapisiMesta — не чаще какого шага место чтения пишется на диск.
+//
+// Минута, а не каждый заход (10 с): это запись в папку данных круглые сутки,
+// пока ядро что-то пишет. Цена редкой записи — после аварии (не штатной
+// остановки) следующая копия перечитает до минуты строк; штатная остановка
+// пишет место сама (ZapomnitMestoChteniyaYadra).
+var ShagZapisiMesta = time.Minute
+
 // zahod — один проход по новому хвосту журнала ядра.
 func (n *nablyudatelYadra) zahod(seychas time.Time) {
+	n.zamok.Lock()
+	defer n.zamok.Unlock()
+	if n.zamorozhen {
+		return
+	}
 	if n.oknoNachalo.IsZero() {
 		n.oknoNachalo = seychas
 	}
@@ -111,6 +188,9 @@ func (n *nablyudatelYadra) zahod(seychas time.Time) {
 			n.uchest(stroka)
 		}
 	}
+	if n.mestoSdvinulos && seychas.Sub(n.mestoZapisano) >= ShagZapisiMesta {
+		n.zapomnitMesto(seychas)
+	}
 	if seychas.Sub(n.oknoNachalo) >= OknoSvodkiYadra {
 		n.zakrytOkno(seychas)
 	}
@@ -118,14 +198,13 @@ func (n *nablyudatelYadra) zahod(seychas time.Time) {
 
 // nachatSKonca ставит смещение на нынешний конец журнала ядра.
 //
-// Смещение живёт только в памяти. Раньше после перезапуска службы оно
-// начиналось с нуля, и журнал, уже разобранный прошлой копией службы,
-// разбирался заново: старые отказы ложились в одно свежее окно и давали
-// ложную «беду» (ноутбук 07–08.10: «отказов 1023 из 1466» при выключенном
-// ядре — ровно сумма трёх настоящих окон утра). Всё, что лежит в журнале к
-// старту службы, к этой её жизни не относится; новое ядро она поднимет со
-// свежим журналом (его узнаём по смене файла и читаем с начала).
-// Цена — строки, которые ядро без хозяина дописало, пока службы не было:
+// Запасной путь старта, когда прошлая копия службы не оставила места чтения
+// (первый запуск этой версии) или оставила устаревшее (chtenie_yadra.go).
+// Раньше смещение после перезапуска службы начиналось с нуля, и журнал, уже
+// разобранный прошлой копией, разбирался заново: старые отказы ложились в
+// одно свежее окно и давали ложную «беду» (ноутбук 07–08.10: «отказов 1023
+// из 1466» при выключенном ядре — ровно сумма трёх настоящих окон утра).
+// Цена конца файла — строки, которые ядро дописало, пока службы не было:
 // они не учитываются. Ложная тревога хуже.
 func (n *nablyudatelYadra) nachatSKonca() {
 	f, err := os.Open(n.put)
@@ -166,6 +245,7 @@ func (n *nablyudatelYadra) prochitatNovoe() ([]string, error) {
 	if st.Size() < n.razmer || (n.fayl != nil && !os.SameFile(n.fayl, st)) {
 		n.smeshenie = 0
 		n.seredinaStroki = false
+		n.mestoSdvinulos = true
 	}
 	n.fayl = st
 	n.razmer = st.Size()
@@ -204,12 +284,14 @@ func (n *nablyudatelYadra) prochitatNovoe() ([]string, error) {
 		n.smeshenie += int64(perviy + 1)
 		bufer = bufer[perviy+1:]
 		n.seredinaStroki = false
+		n.mestoSdvinulos = true
 	}
 	poslednPerevod := bytes.LastIndexByte(bufer, '\n')
 	if poslednPerevod < 0 {
 		return nil, nil
 	}
 	n.smeshenie += int64(poslednPerevod + 1)
+	n.mestoSdvinulos = true
 	return razbitNaStroki(string(bufer[:poslednPerevod+1])), nil
 }
 
@@ -219,6 +301,9 @@ func (n *nablyudatelYadra) uchest(stroka string) {
 	switch {
 	case s.Otkaz:
 		n.otkazy++
+		if s.ShumV6() {
+			n.shumV6++
+		}
 		n.kody[s.Kod]++
 		// Ядро печатает в строке отказа адрес, а имя знает, но не пишет.
 		// Спрашиваем его у служебного порта — иначе ось «сайт» в журнале
@@ -238,18 +323,36 @@ func (n *nablyudatelYadra) uchest(stroka string) {
 
 // zakrytOkno — сводка за окно и обнуление счётчиков.
 func (n *nablyudatelYadra) zakrytOkno(seychas time.Time) {
-	soed, otkazy := n.soed, n.otkazy
+	soed, otkazy, shum := n.soed, n.otkazy, n.shumV6
 	kody, imena := n.kody, n.imena
 	n.oknoNachalo = seychas
-	n.soed, n.otkazy = 0, 0
+	n.soed, n.otkazy, n.shumV6 = 0, 0, 0
 	n.kody, n.imena = map[string]int{}, map[string]int{}
 	if soed == 0 && otkazy == 0 {
 		return
 	}
-	n.pisatel.Svodka(int(OknoSvodkiYadra.Seconds()), soed, otkazy, kody, topImen(imena, 5))
-	if otkazy > 0 && soed > 0 && otkazy*100/soed >= 15 {
-		log.Printf("записи: за окно отказов %d из %d соединений — это уже беда", otkazy, soed)
+	n.pisatel.Svodka(int(OknoSvodkiYadra.Seconds()), soed, otkazy, shum, kody, topImen(imena, 5))
+	if bedaZaOkno(soed, otkazy, shum) {
+		if shum > 0 {
+			log.Printf("записи: за окно отказов %d из %d соединений — это уже беда (ещё %d отказов по IPv6 без пути не в счёт)",
+				otkazy-shum, soed-shum, shum)
+		} else {
+			log.Printf("записи: за окно отказов %d из %d соединений — это уже беда", otkazy, soed)
+		}
 	}
+}
+
+// bedaZaOkno — порог «беды»: 15% отказов от соединений окна.
+//
+// Шум шестой версии (zapisi.Sobytie.ShumV6) вычитается с обеих сторон: каждая
+// такая попытка — соединение, которое программа тут же повторила по четвёртой
+// версии, то есть ни отказом, ни отдельным соединением для человека она не
+// была. Без вычитания порог пробивался этим шумом на каждом старте у машин без
+// IPv6 (ноутбук 07.10: 1023 из 1031 отказа — шум, по IPv4 ни одного).
+func bedaZaOkno(soed, otkazy, shumV6 int) bool {
+	otkazy -= shumV6
+	soed -= shumV6
+	return otkazy > 0 && soed > 0 && otkazy*100/soed >= 15
 }
 
 // topImen — пять самых частых имён: этого хватает, чтобы увидеть «ломается
@@ -259,8 +362,8 @@ func topImen(imena map[string]int, skolko int) map[string]int {
 		return imena
 	}
 	type para struct {
-		imya  string
-		raz   int
+		imya string
+		raz  int
 	}
 	spisok := make([]para, 0, len(imena))
 	for i, r := range imena {

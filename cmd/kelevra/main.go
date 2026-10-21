@@ -211,6 +211,10 @@ func main() {
 			zapustitZnachok()
 		}
 	}
+	// Запись автозапуска — на копию в Program Files, если она там есть
+	// (pochinka_avtozapuska.go). После установки службы выше копия там уже
+	// лежит; окно из «Загрузок» тоже пишет путь Program Files, не свой.
+	pochinitAvtozapusk()
 
 	// Окно — ВНЕ замка (см. adresKopii): pokazatOkno не возвращается, пока
 	// человек не закроет окно.
@@ -701,6 +705,9 @@ func zhitZnachkom(papka, putZhurnala string) {
 	} else {
 		go ubratHvostProshlogoObnovleniya()
 	}
+	// Запись автозапуска — на копию в Program Files (pochinka_avtozapuska.go):
+	// значок и есть то, что автозапуск поднимает при входе.
+	pochinitAvtozapusk()
 	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
 		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
 			if err := vinsluzhba.Zapustit(); err != nil {
@@ -862,6 +869,9 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	if err != nil {
 		umeret(putZhurnala, "Kelevra не смогла подготовить свои файлы", err)
 	}
+	// Штатный уход — отметка для испытания пульта: перезапуск после него не
+	// падение. os.Exit (обновление, авария) отметки не оставляет.
+	defer s.PultVyhod()
 	// Хук подключается тут, а не живёт внутри internal/sluzhba: пакет sluzhba
 	// про трей и Windows ничего не знает (см. комментарий поля). На Windows
 	// это настоящий пузырь (trey_windows.go), на остальных платформах — след
@@ -880,6 +890,8 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 		est, _ := vinsluzhba.Ustanovlena()
 		return est
 	}
+	// Служба Windows работает от системы: автозапуск человека — дело окна.
+	s.AvtozapuskVOkne = !sTreem
 	if sTreem {
 		s.PerezapuskPosleObnovleniya = zapustitSmenuPosleObnovleniya
 	} else {
@@ -929,6 +941,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// состояние, и запусти мы приём параллельно, он успел бы увидеть
 	// «ничего не поднято» и поднять второе ядро рядом с живым.
 	s.PrinyatZhivoeYadro(ctx, sledTunnelyaPriStarte)
+	// Пульс X-Sostoyanie — до первого запроса к выдаче (подключение и
+	// профиль ниже уходят сразу): иначе первый /info едет без пульса, а
+	// следующий запрос бывает через час (internal/sluzhba PervyyPuls).
+	s.PervyyPuls()
 	if !sTreem {
 		// Служба Windows только что поставлена по просьбе человека — связь
 		// поднимается сама (флаг кладёт установщик, см. hranenie).
@@ -950,6 +966,9 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// бы дней приложение ни висело в трее. Только СПРАШИВАЕТ и запоминает
 	// находку для /api/sostoyanie — не ставит сама (см. комментарий метода).
 	go s.SleditZaObnovleniem(ctx, periodFonovoyProverki())
+	// Ядро тоже сверяется со свежей подписанной сборкой и меняется при
+	// следующем подключении (internal/sluzhba/smena_yadra.go).
+	go s.SveryatYadro(ctx, periodFonovoyProverki())
 	// Раз в сутки, в конце дня, копия отдаёт свои журналы разработчику
 	// (internal/zhurnaly). Тот же ctx, что у двух горутин выше — defer
 	// otmena() гасит всех троих разом. Тумблер человека проверяется внутри,
@@ -966,6 +985,12 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// раз — сразу после удачного подъёма связи. У того, чья машина работает
 	// сутками, правила не менялись никогда, и это была честная жалоба.
 	go s.SveryatPravila(ctx, sluzhba.ShagSverkiPravil)
+	// Пульт мозга (internal/pult): испытание новых настроек и пульс
+	// X-Sostoyanie, лёгкий опрос /info при opros.info_min и долгий опрос при
+	// kanal.dolgiy_opros. Без пульта последние два молчат.
+	go s.SleditZaPultom(ctx)
+	go s.SleditZaSvodkoy(ctx)
+	go s.SleditZaDolgimOprosom(ctx)
 
 	// Авторежим по умолчанию выключен (см. hranenie.Nastroyki.Avtorezhim) —
 	// заводим служителя, только если человек сам его включил в прошлый раз.
@@ -1001,6 +1026,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 		<-vneshniy.Done()
 		log.Printf("служба Windows: диспетчер попросил остановиться")
 	}
+
+	// Место чтения журнала ядра — синхронно, пока процесс точно жив: горутина
+	// слежки по отмене контекста могла не успеть до выхода.
+	s.ZapomnitMestoChteniyaYadra()
 
 	// Значок обязан исчезнуть ДО того, как гаснет ядро: путь «Выход» из
 	// меню трея снимает его сам (trey_windows.go), но этот путь —

@@ -39,3 +39,9 @@ func zakrytStaroeOkno() itogSmenyOkna {
 func pokazatOknoPaneli(ssylka string) {
 	fmt.Println("окна тут нет; панель сети:", ssylka)
 }
+
+// soobshchitOPromahePoiska вне Windows — та же строка журнала, что и там
+// (podnyat_okno.go общий для всех систем).
+func soobshchitOPromahePoiska(kto string) {
+	log.Printf("%s: окна тут не ищут", kto)
+}

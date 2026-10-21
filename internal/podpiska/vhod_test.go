@@ -44,8 +44,9 @@ func TestVoytiVhodUstroystva(t *testing.T) {
 	}
 }
 
-// Старый сервер семьи входа устройства не знает (404) — код берётся старым путём /k/,
-// и это первая дверь: семья остаётся там же, где была.
+// Старый сервер семьи входа устройства не знает (404), своя сеть кода не знает (404) —
+// код берётся старым путём /k/ у первой двери: семья остаётся там же, где была.
+// Старым путём вторую дверь не спрашивают.
 func TestVoytiStaryyPutNaPervoyDveri(t *testing.T) {
 	staraya := dver(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/k/KOD2" {
@@ -54,8 +55,11 @@ func TestVoytiStaryyPutNaPervoyDveri(t *testing.T) {
 		}
 		w.WriteHeader(404)
 	})
-	novayaZvali := false
-	novaya := dver(t, func(w http.ResponseWriter, r *http.Request) { novayaZvali = true; w.WriteHeader(404) })
+	var novayaZaprosy []string
+	novaya := dver(t, func(w http.ResponseWriter, r *http.Request) {
+		novayaZaprosy = append(novayaZaprosy, r.Method+" "+r.URL.Path)
+		w.WriteHeader(404)
+	})
 	adres, err := klientDlyaDverey().Voyti(context.Background(), "KOD2", []string{staraya, novaya})
 	if err != nil {
 		t.Fatalf("ждал вход старым путём, получил: %v", err)
@@ -63,8 +67,101 @@ func TestVoytiStaryyPutNaPervoyDveri(t *testing.T) {
 	if adres != "http://"+staraya+"/k/KOD2" {
 		t.Fatalf("не тот адрес: %s", adres)
 	}
-	if novayaZvali {
-		t.Fatal("до второй двери дошли, хотя первая код знает")
+	if strings.Join(novayaZaprosy, ",") != "POST /k/KOD2/ustroystvo" {
+		t.Fatalf("у второй двери ждал только вход устройства, были: %v", novayaZaprosy)
+	}
+}
+
+// Переехавший человек: старый сервер пересылает его старый путь в свою сеть и отдал бы
+// общий /k/<код>, но своя сеть (вторая дверь) заводит машину по ключу — берём ключ.
+// Иначе на машине не действуют лимит устройств и отключение по одному.
+func TestVoytiPereehavshiyPoluchaetKlyuch(t *testing.T) {
+	staryyPutZvali := false
+	staraya := dver(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/k/KOD7" {
+			staryyPutZvali = true
+			w.Write([]byte(primerKonfiga))
+			return
+		}
+		w.WriteHeader(404)
+	})
+	novaya := dver(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/k/KOD7/ustroystvo" {
+			w.Write([]byte(`{"profil":"https://n/u/k7k7k7k7k7k7","slot":"01-7"}`))
+			return
+		}
+		w.WriteHeader(404)
+	})
+	adres, err := klientDlyaDverey().Voyti(context.Background(), "KOD7", []string{staraya, novaya})
+	if err != nil || adres != "https://n/u/k7k7k7k7k7k7" {
+		t.Fatalf("ждал ключ своей сети, получил %q, %v", adres, err)
+	}
+	if staryyPutZvali {
+		t.Fatal("старым путём ходили, хотя вход устройства удался")
+	}
+}
+
+// 200 без адреса /u/<ключ> (пустой, общий /k/, чужая схема) — не вход: такой адрес не
+// сохраняется, идём к следующей двери.
+func TestVoytiNegodnyyAdresProfilya(t *testing.T) {
+	for _, plohoy := range []string{`{}`, `{"profil":"https://n/k/OBSHCHIY_KOD"}`, `{"profil":"ftp://n/u/k8k8k8k8k8k8"}`, `{"profil":"https://n/u/k8/../x"}`} {
+		d1 := dver(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.Write([]byte(plohoy))
+				return
+			}
+			w.WriteHeader(404)
+		})
+		d2 := dver(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.Write([]byte(`{"profil":"https://n/u/k9k9k9k9k9k9"}`))
+				return
+			}
+			w.WriteHeader(404)
+		})
+		adres, err := klientDlyaDverey().Voyti(context.Background(), "KOD8", []string{d1, d2})
+		if err != nil || adres != "https://n/u/k9k9k9k9k9k9" {
+			t.Errorf("%s: ждал вторую дверь, получил %q, %v", plohoy, adres, err)
+		}
+	}
+}
+
+// Код, перепечатанный группами через пробел, уходит без пробелов; знаки, которых в коде
+// не бывает, до сети не доходят.
+func TestVoytiKodIzVvoda(t *testing.T) {
+	var put string
+	d := dver(t, func(w http.ResponseWriter, r *http.Request) {
+		put = r.URL.Path
+		w.Write([]byte(`{"profil":"https://n/u/kAkAkAkAkAkA"}`))
+	})
+	if _, err := klientDlyaDverey().Voyti(context.Background(), " K7QM 2XRT\t9PLA ", []string{d}); err != nil {
+		t.Fatalf("вход: %v", err)
+	}
+	if put != "/k/K7QM2XRT9PLA/ustroystvo" {
+		t.Fatalf("не тот путь: %q", put)
+	}
+	put = ""
+	for _, plohoy := range []string{"abc/../../logs", "K7QM?x=1", "КОД12345", "ab"} {
+		if _, err := klientDlyaDverey().Voyti(context.Background(), plohoy, []string{d}); err == nil {
+			t.Errorf("%q: ждал отказ", plohoy)
+		}
+	}
+	if put != "" {
+		t.Fatalf("негодный код ушёл в сеть: %q", put)
+	}
+}
+
+func TestKlyuchUstroystva(t *testing.T) {
+	for adres, ozhid := range map[string]string{
+		"https://node2kv.example/u/AbC_123-xyz0":  "AbC_123-xyz0",
+		"https://node2kv.example/u/AbC_123-xyz0/": "AbC_123-xyz0",
+		"https://subkv.example/k/KOD12345":        "",
+		"":                                        "",
+		"https://n/u/k/info":                      "",
+	} {
+		if got := KlyuchUstroystva(adres); got != ozhid {
+			t.Errorf("KlyuchUstroystva(%q) = %q, ждал %q", adres, got, ozhid)
+		}
 	}
 }
 

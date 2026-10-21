@@ -47,7 +47,7 @@ func (s *Sluzhba) klientSeti(srok time.Duration) *http.Client {
 // adresVhodaSluzhby — куда повторять запрос через туннель; nil — туннель не
 // поднят или у живого ядра нет входа службы (принято от старой версии).
 func (s *Sluzhba) adresVhodaSluzhby() *url.URL {
-	if s.Yadro == nil {
+	if s.Yadro == nil || s.vykl(vyklZapasnoyPut) {
 		return nil
 	}
 	adres := s.Yadro.VhodSluzhby()

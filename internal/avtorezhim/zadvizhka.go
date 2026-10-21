@@ -24,6 +24,16 @@ type Zadvizhka struct {
 	tekushcheye Sostoyanie
 	kandidat    Sostoyanie
 	hitov       int
+	// Nuzhno — сколько подтверждений подряд нужно; 0 — [Podtverzhdeniy].
+	// Подстраивается пультом (avtomat.podtverzhdeniy, internal/sluzhba).
+	Nuzhno int
+}
+
+func (z *Zadvizhka) nuzhno() int {
+	if z.Nuzhno > 0 {
+		return z.Nuzhno
+	}
+	return Podtverzhdeniy
 }
 
 // NovayaZadvizhka заводит задвижку, уже стоящую на nachalo (подтверждений
@@ -57,7 +67,7 @@ func (z *Zadvizhka) Predlozhit(nablyudeno Sostoyanie, dovereno bool) bool {
 		// Подтвердили то, на чём и так стоим — считаем кандидата тем же,
 		// чтобы одиночное отклонение в сторону не начинало набор с середины.
 		z.kandidat = nablyudeno
-		z.hitov = Podtverzhdeniy
+		z.hitov = z.nuzhno()
 		return false
 	}
 
@@ -68,7 +78,7 @@ func (z *Zadvizhka) Predlozhit(nablyudeno Sostoyanie, dovereno bool) bool {
 		z.hitov = 1
 	}
 
-	nuzhno := Podtverzhdeniy
+	nuzhno := z.nuzhno()
 	if dovereno && nablyudeno != Neizvestno {
 		nuzhno = 1
 	}

@@ -3,9 +3,11 @@
 package avtozapusk
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -13,16 +15,15 @@ import (
 // Куст, внутри которого лежит ветка автозагрузки. Есть на любой Windows.
 const kustVetki = `Software\Microsoft\Windows\CurrentVersion`
 
-// Тест трогает НАСТОЯЩУЮ пользовательскую ветку реестра — под wine это
-// песочница стенда, у человека этот тест никогда не выполняется. Чтобы не
-// оставить за собой чужой автозапуск, исходное состояние снимается и
-// возвращается назад.
+// Настоящую ветку автозагрузки тест только ЧИТАЕТ: недоступная ветка — НЕ
+// особенность стенда, а ровно та беда, ради которой тест и написан
+// (автозапуск молча перестаёт работать у человека). Пропуск оправдан только
+// тогда, когда нет самого куста CurrentVersion — машина вообще не Windows.
 //
-// Осторожно с пропуском: недоступная ветка автозагрузки — это НЕ особенность
-// стенда, а ровно та беда, ради которой тест и написан (автозапуск молча
-// перестаёт работать у человека). Раньше здесь стоял Skip, и порча пути в
-// vetka проходила мимо всей приёмки зелёной. Пропуск оправдан только тогда,
-// когда нет самого куста CurrentVersion — то есть машина вообще не Windows.
+// Пишет тест в свою ветку (vetka уводится в Software\KelevraProverka\…):
+// до 22.10 он писал в настоящий HKCU\…\Run и возвращал запись после, и
+// прогон на машине человека на время (а при падении посреди — насовсем)
+// портил ему автозапуск. Своя ветка убирается за собой.
 func vernutPosle(t *testing.T) {
 	t.Helper()
 	k, err := registry.OpenKey(registry.CURRENT_USER, vetka, registry.QUERY_VALUE)
@@ -34,26 +35,32 @@ func vernutPosle(t *testing.T) {
 		// ветки автозагрузки в нём нет — там никто никогда ничего не
 		// запускал. У ЖИВОГО человека она есть всегда, и её отсутствие —
 		// настоящая беда, поэтому вне CI проверка по-прежнему падает.
-		if os.Getenv("GITHUB_ACTIONS") == "true" {
-			t.Skipf("ветки автозагрузки нет на раннере (профиль пустой): %v", err)
+		if os.Getenv("GITHUB_ACTIONS") != "true" {
+			t.Fatalf("куст %s на месте, а ветка автозагрузки %s недоступна (%v) — автозапуск у человека работать не будет", kustVetki, vetka, err)
 		}
-		t.Fatalf("куст %s на месте, а ветка автозагрузки %s недоступна (%v) — автозапуск у человека работать не будет", kustVetki, vetka, err)
+	} else {
+		k.Close()
 	}
-	bylo, _, errCht := k.GetStringValue(Imya)
-	k.Close()
+
+	nastoyashchaya, bylaSluzhba := vetka, sluzhbaEst
+	svoya := fmt.Sprintf(`%s\%d`, kornevayaProverki, time.Now().UnixNano())
+	vetka = svoya + `\Run`
+	sluzhbaEst = func() bool { return false }
+	if kw, _, err := registry.CreateKey(registry.CURRENT_USER, vetka, registry.SET_VALUE); err != nil {
+		t.Fatalf("своя ветка проверки не заводится: %v", err)
+	} else {
+		kw.Close()
+	}
 	t.Cleanup(func() {
-		if errCht == registry.ErrNotExist {
-			_ = Vyklyuchit()
-			return
-		}
-		kw, _, err := registry.CreateKey(registry.CURRENT_USER, vetka, registry.SET_VALUE)
-		if err != nil {
-			return
-		}
-		defer kw.Close()
-		_ = kw.SetStringValue(Imya, bylo)
+		vetka, sluzhbaEst = nastoyashchaya, bylaSluzhba
+		_ = registry.DeleteKey(registry.CURRENT_USER, svoya+`\Run`)
+		_ = registry.DeleteKey(registry.CURRENT_USER, svoya)
+		_ = registry.DeleteKey(registry.CURRENT_USER, kornevayaProverki) // пустая — уйдёт, нет — останется
 	})
 }
+
+// kornevayaProverki — ветка, под которой проверки заводят свою «автозагрузку».
+const kornevayaProverki = `Software\KelevraProverka`
 
 func TestVklyuchitVyklyuchit(t *testing.T) {
 	vernutPosle(t)
@@ -143,5 +150,35 @@ func TestUstarelaVidnaChuzhayaZapis(t *testing.T) {
 	}
 	if !ust {
 		t.Fatalf("запись ведёт на другой файл, а Ustarela молчит")
+	}
+}
+
+// Окно пишет автозапуск на копию в Program Files, а не на себя: окно бывает
+// запущено из «Загрузок», и запись на него умирает с уборкой папки (беда ПК
+// 18–21.10). Свежесть сверяется с тем же путём.
+func TestVklyuchitNaChuzhoyPut(t *testing.T) {
+	vernutPosle(t)
+	sluzhbaEst = func() bool { return true }
+	const pf = `C:\Program Files\Kelevra\Kelevra.exe`
+	if err := VklyuchitNa(pf); err != nil {
+		t.Fatalf("включить на Program Files: %v", err)
+	}
+	k, err := registry.OpenKey(registry.CURRENT_USER, vetka, registry.QUERY_VALUE)
+	if err != nil {
+		t.Fatalf("открыть ветку: %v", err)
+	}
+	zapis, _, err := k.GetStringValue(Imya)
+	k.Close()
+	if err != nil {
+		t.Fatalf("прочитать запись: %v", err)
+	}
+	if zapis != `"`+pf+`" `+ArgumentSoSluzhboy {
+		t.Fatalf("запись %q, ждали путь Program Files с %s", zapis, ArgumentSoSluzhboy)
+	}
+	if ust, err := UstarelaDlya(pf); err != nil || ust {
+		t.Fatalf("запись на Program Files сверена с ним же как устаревшая: %v %v", ust, err)
+	}
+	if ust, err := Ustarela(); err != nil || !ust {
+		t.Fatalf("с exe теста запись на Program Files обязана читаться устаревшей: %v %v", ust, err)
 	}
 }

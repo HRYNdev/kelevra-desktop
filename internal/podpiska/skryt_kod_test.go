@@ -9,9 +9,15 @@ import (
 func TestSkrytKodVStroke(t *testing.T) {
 	const kod = "ABCD1234efgh"
 	for _, c := range []struct{ vhod, ozhid string }{
-		{"Post \"https://x.example/k/" + kod + "/ustroystvo\": dial tcp: refused", "Post \"https://x.example/k/***gh/ustroystvo\": dial tcp: refused"},
-		{"https://x.example/u/" + kod, "https://x.example/u/***gh"},
-		{"https://x.example/s/" + kod + "/info?device=1", "https://x.example/s/***gh/info?device=1"},
+		{"Post \"https://x.example/k/" + kod + "/ustroystvo\": dial tcp: refused", "Post \"https://x.example/k/AB…/ustroystvo\": dial tcp: refused"},
+		{"https://x.example/u/" + kod, "https://x.example/u/AB…"},
+		{"https://x.example/s/" + kod + "/info?device=1", "https://x.example/s/AB…/info?device=1"},
+		{"https://x.example/i/" + kod, "https://x.example/i/AB…"},
+		{"https://x.example/panel/vhod/" + kod + "?x=1", "https://x.example/panel/vhod/AB…?x=1"},
+		// короткий код начала не оставляет вовсе — иначе «маска» показала бы его целиком
+		{"https://x.example/k/AB12CD", "https://x.example/k/…"},
+		// проверка живости сервера — не код
+		{"https://x.example/k/health", "https://x.example/k/health"},
 		{"без кода", "без кода"},
 	} {
 		if got := SkrytKod(c.vhod); got != c.ozhid {
@@ -31,7 +37,7 @@ func TestVoytiOshibkaSetiBezKoda(t *testing.T) {
 	if strings.Contains(err.Error(), kod) {
 		t.Fatalf("код в тексте ошибки: %v", err)
 	}
-	if !strings.Contains(SkrytKod(err.Error()), "***") && !strings.Contains(err.Error(), "***") {
+	if !strings.Contains(err.Error(), "/SE…") {
 		t.Fatalf("маски нет: %v", err)
 	}
 }

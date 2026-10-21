@@ -224,6 +224,27 @@ func ZagolovokPasporta(h http.Header, pasport string) {
 	}
 }
 
+// ZagolovokPulta — X-Pult: что клиент понимает из пульта, какую версию принял,
+// квитанции команд и непринятые ключи (договор KelevraServer docs/PULT.md).
+// Пустая строка — заголовка нет.
+func ZagolovokPulta(h http.Header, pult string) {
+	if p := vASCII(pult); p != "" {
+		h.Set("X-Pult", p)
+	}
+}
+
+// ZagolovokSostoyaniya — X-Sostoyanie: пульс устройства одной строкой (режим
+// автомата, туннель, сеть, последний переход, активный узел). Пусто — нет.
+func ZagolovokSostoyaniya(h http.Header, sost string) {
+	if s := vASCII(sost); s != "" {
+		h.Set("X-Sostoyanie", s)
+	}
+}
+
+// IdVZagolovke — идентификатор устройства ровно в том виде, в каком он уходит
+// заголовком X-Device-Id: пульт сверяет своего адресата (komu) именно с ним.
+func IdVZagolovke(deviceID string) string { return vASCII(deviceID) }
+
 // sobrat склеивает производителя и изделие в одну строку, не повторяя
 // производителя дважды: у Lenovo изделие уже называется «Lenovo IdeaPad…».
 func sobrat(proizvoditel, izdelie string) string {

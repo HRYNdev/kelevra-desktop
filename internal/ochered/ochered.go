@@ -46,9 +46,32 @@ type Ochered struct {
 	Ruchnoy func() bool
 	Log     func(format string, args ...any)
 	Seychas func() time.Time
+	// Porog и Vozvrat — пороги очереди, которые может подстроить пульт
+	// (uzel.porog_otkazov, uzel.vozvrat_na_pervyy_min); 0 — константы выше.
+	// Функциями: пульт меняется на ходу, а очередь живёт, пока не сменится конфиг.
+	Porog   func() int
+	Vozvrat func() time.Duration
 
 	provalov    int
 	pervyyZhivS time.Time
+}
+
+func (o *Ochered) porog() int {
+	if o.Porog != nil {
+		if p := o.Porog(); p > 0 {
+			return p
+		}
+	}
+	return ProvalovDoPerehoda
+}
+
+func (o *Ochered) vozvrat() time.Duration {
+	if o.Vozvrat != nil {
+		if v := o.Vozvrat(); v > 0 {
+			return v
+		}
+	}
+	return VozvratCherez
 }
 
 func (o *Ochered) seychas() time.Time {
@@ -161,14 +184,14 @@ func (o *Ochered) Shag(ctx context.Context) bool {
 			o.log("очередь узлов: первый узел «%s» снова отвечает — вернусь, если продержится", o.Uzly[0])
 			return false
 		}
-		if o.seychas().Sub(o.pervyyZhivS) < VozvratCherez {
+		if o.seychas().Sub(o.pervyyZhivS) < o.vozvrat() {
 			return false
 		}
 		return o.vstat(0, "первый узел жив "+o.seychas().Sub(o.pervyyZhivS).Round(time.Second).String())
 	}
 	o.provalov++
-	if o.provalov < ProvalovDoPerehoda {
-		o.log("очередь узлов: узел «%s» не ответил (%d из %d)", tek, o.provalov, ProvalovDoPerehoda)
+	if o.provalov < o.porog() {
+		o.log("очередь узлов: узел «%s» не ответил (%d из %d)", tek, o.provalov, o.porog())
 		return false
 	}
 	for j := range o.Uzly {

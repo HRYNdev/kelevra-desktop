@@ -139,16 +139,27 @@ func pokazatOkno(url string) {
 		os.Exit(1)
 	}
 	// Перезапуск окна после обновления службы (perezapusk_okna.go): новая копия
-	// запускается ПОСЛЕ Destroy — иначе она нашла бы это окно (podnyatChuzheeOkno),
-	// подняла его и ушла. defer стоит раньше defer w.Destroy(), значит
-	// исполняется позже него.
+	// запускается ПОСЛЕ того, как окно разрушено, — иначе она нашла бы это
+	// окно (podnyatChuzheeOkno), подняла его и ушла, а оно исчезло бы следом
+	// вместе с процессом (стенд 21.10, разбор — podnyat_okno.go).
+	//
+	// w.Destroy для этого НЕ годится: он только кладёт WM_CLOSE в очередь
+	// окна (webview.go: Destroy), а очередь после возврата w.Run никто не
+	// читает — окно остаётся на экране до выхода процесса. Поэтому окно
+	// рушится прямо: DestroyWindow из потока, который его создал (горутина
+	// прибита к нему LockOSThread выше, отпускается последним defer'ом).
+	// Окно, уже закрытое крестиком, разрушено раньше — повторный вызов
+	// просто вернёт отказ.
 	var nadoPerezapustit atomic.Bool
 	defer func() {
+		procDestroyWindow.Call(uintptr(w.Window()))
 		if nadoPerezapustit.Load() {
+			if _, est := naytiOkno(); est {
+				log.Printf("перезапуск окна: окно ещё на экране после DestroyWindow")
+			}
 			zapustitOknoZanovo()
 		}
 	}()
-	defer w.Destroy()
 	// go-webview2 не ставит окну свой значок — HWND у него класса
 	// webview2 без RegisterClassExW.hIcon (в отличие от трея, который
 	// регистрирует класс сам, см. trey_windows.go). Window() отдаёт HWND
@@ -210,6 +221,17 @@ func pokazatOkno(url string) {
 		return true
 	}); err != nil {
 		log.Printf("кнопка «Дать права» не привязана: %v", err)
+	}
+	// Тумблер «Автозапуск»: запись живёт в HKCU человека, а служба Windows
+	// работает от системы и видит свою ветку — читает и пишет её окно
+	// (avtozapusk_okna.go).
+	if err := w.Bind("kelevraAvtozapuskSostoyanie", func() sostoyanieAvtozapuska {
+		return avtozapuskOknaNastoyashchiy.sostoyanie()
+	}); err != nil {
+		log.Printf("состояние автозапуска не привязано: %v", err)
+	}
+	if err := w.Bind("kelevraAvtozapusk", avtozapuskOknaNastoyashchiy.pereklyuchit); err != nil {
+		log.Printf("тумблер автозапуска не привязан: %v", err)
 	}
 	// Служба вернулась после обновления НОВЕЕ окна — окно закрывается и
 	// запускается заново тем же .exe (на диске он уже новый): у старого
@@ -277,16 +299,55 @@ var (
 // internal/yadro/yadro.go). Не нашло окно (например, оно ещё не успело
 // появиться) — возвращает false, и вызывающий код обязан откатиться на
 // pokazatOkno, как было раньше.
+//
+// Найденное окно поднимается, только если оно живо, и после подъёма
+// караулится (podnyat_okno.go): окно прошлой копии, которая как раз
+// перезапускается после обновления службы, ещё на экране, но уже уходит —
+// поднять его и выйти значило остаться без окна.
 func podnyatChuzheeOkno() bool {
-	hwnd, est := naytiOkno()
-	if !est {
-		soobshchitOPromahePoiska("поднятие чужого окна")
-		return false
+	return podnyatOknoEsliZhivo(oknoSistemy{
+		nayti: func() (uintptr, bool) {
+			h, est := naytiOkno()
+			return uintptr(h), est
+		},
+		otvechaet: oknoOtvechaet,
+		podnyat: func(hwnd uintptr) {
+			procShowWindow.Call(hwnd, swRestore)
+			procSetForegroundWindow.Call(hwnd)
+		},
+		est: func(hwnd uintptr) bool {
+			r, _, _ := procIsWindow.Call(hwnd)
+			return r != 0
+		},
+	}, srokUhodaUmirayushchegoOkna, srokSlezhkiZaPodnyatym, shagUhodaUmirayushchegoOkna)
+}
+
+var procIsWindow = user32TreyDLL.NewProc("IsWindow")
+
+// procSendMessageTimeoutW/procDestroyWindow — свои проки этого файла.
+var (
+	procSendMessageTimeoutW = user32TreyDLL.NewProc("SendMessageTimeoutW")
+	procDestroyWindow       = user32TreyDLL.NewProc("DestroyWindow")
+)
+
+const (
+	smtoAbortIfHung = 0x0002
+	// srokOtvetaOkna — живое окно отвечает на WM_NULL за миллисекунды.
+	srokOtvetaOknaMs = 1000
+)
+
+// oknoOtvechaet — поток окна крутит очередь сообщений: WM_NULL дошёл и
+// вернулся за srokOtvetaOknaMs. Окно, чей w.Run уже вернулся (процесс
+// выходит), молчит. Отказ по правам (UIPI: окно запущено с правами выше
+// наших) — не ответ «мёртво»: тогда судить не по чему, и окно считается
+// живым, как было до этой проверки.
+func oknoOtvechaet(hwnd uintptr) bool {
+	var rez uintptr
+	r, _, err := procSendMessageTimeoutW.Call(hwnd, wmNull, 0, 0, smtoAbortIfHung, srokOtvetaOknaMs, uintptr(unsafe.Pointer(&rez)))
+	if r != 0 {
+		return true
 	}
-	procShowWindow.Call(uintptr(hwnd), swRestore)
-	procSetForegroundWindow.Call(uintptr(hwnd))
-	log.Printf("поднятие чужого окна: нашёл hwnd=%#x, развернул и вывел на передний план", hwnd)
-	return true
+	return err == windows.ERROR_ACCESS_DENIED
 }
 
 // wmClose — Win32 WM_CLOSE: то же сообщение, что система шлёт окну по
