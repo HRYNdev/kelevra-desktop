@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -128,29 +129,8 @@ func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, string, error) {
 // пробные явно — флагом BratProbnye или своим списком (Spisok).
 // nuzhnaPodpis — сборки без файла подписи пропускаются.
 func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPodpis bool) (Sborka, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, y.spisok(), nil)
+	relizy, err := spisokRelizov(ctx, klient, y.spisok())
 	if err != nil {
-		return Sborka{}, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	otvet, err := klient.Do(req)
-	if err != nil {
-		return Sborka{}, fmt.Errorf("не дотянулся до списка сборок ядра: %w", err)
-	}
-	defer otvet.Body.Close()
-	if otvet.StatusCode != http.StatusOK {
-		return Sborka{}, fmt.Errorf("список сборок ядра недоступен: %w", &obnovlenie.OshibkaStatusa{Kod: otvet.StatusCode})
-	}
-	var relizy []struct {
-		Tag        string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-		Assets     []struct {
-			Name string `json:"name"`
-			URL  string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(io.LimitReader(otvet.Body, 8<<20)).Decode(&relizy); err != nil {
 		return Sborka{}, err
 	}
 	nuzhen := ImyaArhiva()
@@ -197,6 +177,80 @@ func (y *Yadro) vybratSborku(ctx context.Context, klient *http.Client, nuzhnaPod
 		return Sborka{}, fmt.Errorf("в сборках ядра нет подписанного файла %s", nuzhen)
 	}
 	return Sborka{}, fmt.Errorf("в сборках ядра нет файла %s", nuzhen)
+}
+
+// relizYadra — релиз из списка GitHub, только нужные поля.
+type relizYadra struct {
+	Tag        string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+	Assets     []struct {
+		Name string `json:"name"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// PredelStranicRelizov — сколько страниц списка релизов обходить. Релизов в
+// репозитории на 21.10.2026 — 92, живая сборка ядра на 91-м месте: одной
+// страницы в 100 вот-вот перестанет хватать. Десять страниц — тысяча
+// релизов; дальше обход обрывается, а не ходит бесконечно.
+const PredelStranicRelizov = 10
+
+// spisokRelizov собирает список релизов постранично: следующая страница —
+// по заголовку Link (rel="next"), который отдаёт GitHub, и только на тот же
+// сервер, что первая. Свой список стенда без Link — одна страница.
+func spisokRelizov(ctx context.Context, klient *http.Client, adres string) ([]relizYadra, error) {
+	nachalo, err := url.Parse(adres)
+	if err != nil {
+		return nil, err
+	}
+	var vse []relizYadra
+	for stranica := 0; stranica < PredelStranicRelizov && adres != ""; stranica++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, adres, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		otvet, err := klient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("не дотянулся до списка сборок ядра: %w", err)
+		}
+		if otvet.StatusCode != http.StatusOK {
+			otvet.Body.Close()
+			return nil, fmt.Errorf("список сборок ядра недоступен: %w", &obnovlenie.OshibkaStatusa{Kod: otvet.StatusCode})
+		}
+		var relizy []relizYadra
+		err = json.NewDecoder(io.LimitReader(otvet.Body, 8<<20)).Decode(&relizy)
+		sleduyushchaya := sleduyushchayaStranica(otvet.Header.Get("Link"))
+		otvet.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		vse = append(vse, relizy...)
+		adres = ""
+		if sleduyushchaya != "" && len(relizy) > 0 {
+			if u, err := url.Parse(sleduyushchaya); err == nil && u.Scheme == nachalo.Scheme && u.Host == nachalo.Host {
+				adres = u.String()
+			}
+		}
+	}
+	return vse, nil
+}
+
+// sleduyushchayaStranica — адрес rel="next" из заголовка Link GitHub:
+// <https://…&page=2>; rel="next", <…>; rel="last".
+func sleduyushchayaStranica(link string) string {
+	for _, chast := range strings.Split(link, ",") {
+		adres, parametry, ok := strings.Cut(strings.TrimSpace(chast), ";")
+		if !ok || !strings.Contains(parametry, `rel="next"`) {
+			continue
+		}
+		adres = strings.TrimSpace(adres)
+		if strings.HasPrefix(adres, "<") && strings.HasSuffix(adres, ">") {
+			return adres[1 : len(adres)-1]
+		}
+	}
+	return ""
 }
 
 func skachat(ctx context.Context, klient *http.Client, ssylka, kuda string) error {
