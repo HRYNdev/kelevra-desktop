@@ -8,7 +8,6 @@ package obnovlenie
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -118,22 +117,10 @@ func Proverit(ctx context.Context, klient *http.Client, adres, tekushchaya strin
 	if klient == nil {
 		klient = &http.Client{Timeout: 15 * time.Second}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, adres, nil)
+	// Постранично (stranicy.go): одной страницы в 100 релизов скоро не хватит.
+	relizy, err := SobratStranicy[relizJSON](ctx, klient, adres, 1<<20)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	otvet, err := klient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer otvet.Body.Close()
-	if otvet.StatusCode != http.StatusOK {
-		return nil, &OshibkaStatusa{Kod: otvet.StatusCode}
-	}
-	var relizy []relizJSON
-	if err := json.NewDecoder(io.LimitReader(otvet.Body, 1<<20)).Decode(&relizy); err != nil {
-		return nil, &OshibkaRazbora{Prichina: err}
 	}
 	// Берём МАКСИМУМ по версии, а не первый попавшийся в ответе.
 	// Порядок в ответе GitHub по версиям НЕ упорядочен: 24.08 в этом же

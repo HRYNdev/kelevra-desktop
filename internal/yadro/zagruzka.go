@@ -3,7 +3,7 @@ package yadro
 import (
 	"archive/zip"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -61,26 +61,29 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 	return raspakovat(arhiv, y.Bin)
 }
 
+// relizYadra — релиз из списка GitHub, только нужные поля.
+type relizYadra struct {
+	Tag    string `json:"tag_name"`
+	Assets []struct {
+		Name string `json:"name"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
 func (y *Yadro) ssylkaNaYadro(ctx context.Context) (string, string, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, y.spisok(), nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	otvet, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	// Постранично (obnovlenie.SobratStranicy): на 21.10.2026 релизов 92, и
+	// сборка ядра на 91-м месте — одной страницы в 100 скоро не хватит.
+	relizy, err := obnovlenie.SobratStranicy[relizYadra](ctx, &http.Client{Timeout: 20 * time.Second}, y.spisok(), 8<<20)
 	if err != nil {
+		var status *obnovlenie.OshibkaStatusa
+		var razbor *obnovlenie.OshibkaRazbora
+		switch {
+		case errors.As(err, &status):
+			return "", "", fmt.Errorf("список сборок ядра недоступен (ответ %d)", status.Kod)
+		case errors.As(err, &razbor):
+			return "", "", err
+		}
 		return "", "", fmt.Errorf("не дотянулся до списка сборок ядра: %w", err)
-	}
-	defer otvet.Body.Close()
-	if otvet.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("список сборок ядра недоступен (ответ %d)", otvet.StatusCode)
-	}
-	var relizy []struct {
-		Tag    string `json:"tag_name"`
-		Assets []struct {
-			Name string `json:"name"`
-			URL  string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(otvet.Body).Decode(&relizy); err != nil {
-		return "", "", err
 	}
 	nuzhen := ImyaArhiva()
 	for _, r := range relizy { // релизы приходят от свежих к старым
