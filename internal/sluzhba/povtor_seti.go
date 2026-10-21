@@ -246,6 +246,10 @@ type fonovoeDelo struct {
 	sdelat func(ctx context.Context) error
 	// zhdatSet — подождать сеть после сна; false — не дождались. nil — не ждать.
 	zhdatSet func(ctx context.Context) (bool, time.Duration)
+	// periodSeychas — период, который действует сейчас (пульт мог его сменить);
+	// сверяется после каждого тика, новый вступает со следующего цикла. nil —
+	// период постоянный.
+	periodSeychas func() time.Duration
 
 	// Подмены для проверок; nil — настоящие часы и случайность.
 	tiki    <-chan time.Time
@@ -266,10 +270,23 @@ func (d fonovoeDelo) krutit(ctx context.Context) {
 		sluchay = rand.Float64
 	}
 	tiki := d.tiki
+	var t *time.Ticker
 	if tiki == nil {
-		t := time.NewTicker(d.period)
+		t = time.NewTicker(d.period)
 		defer t.Stop()
 		tiki = t.C
+	}
+	smenitPeriod := func() {
+		if d.periodSeychas == nil {
+			return
+		}
+		if novyy := d.periodSeychas(); novyy > 0 && novyy != d.period {
+			log.Printf("%s: период теперь %s (было %s)", d.imya, novyy, d.period)
+			d.period = novyy
+			if t != nil {
+				t.Reset(novyy)
+			}
+		}
 	}
 
 	stupen := 0
@@ -299,6 +316,7 @@ func (d fonovoeDelo) krutit(ctx context.Context) {
 	proshlyy := seychas()
 	if d.srazu {
 		popytka(false)
+		smenitPeriod()
 	}
 	for {
 		select {
@@ -313,6 +331,7 @@ func (d fonovoeDelo) krutit(ctx context.Context) {
 			// раз через минуту после тика.
 			stupen, povtor = 0, nil
 			popytka(posleSna)
+			smenitPeriod()
 		case <-povtor:
 			povtor = nil
 			popytka(false)
@@ -333,7 +352,8 @@ func (s *Sluzhba) delo(imya string, period time.Duration, sdelat func(context.Co
 				est = avtorezhim.EstShlyuz
 			}
 			nachalo := time.Now()
-			ok := dozhdatsyaSeti(ctx, est, srokOzhidaniyaSeti, shagOzhidaniyaSeti, time.After)
+			srok := s.pult.Dlitelnost("set.ozhidanie_posle_sna_s", time.Second, srokOzhidaniyaSeti)
+			ok := dozhdatsyaSeti(ctx, est, srok, shagOzhidaniyaSeti, time.After)
 			return ok, time.Since(nachalo)
 		},
 	}

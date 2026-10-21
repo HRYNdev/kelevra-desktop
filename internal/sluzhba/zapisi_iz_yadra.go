@@ -95,6 +95,9 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if s.vykl(vyklZapisiYadra) {
+				continue
+			}
 			n.zahod(time.Now())
 		}
 	}

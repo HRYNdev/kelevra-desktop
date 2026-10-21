@@ -862,6 +862,9 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	if err != nil {
 		umeret(putZhurnala, "Kelevra не смогла подготовить свои файлы", err)
 	}
+	// Штатный уход — отметка для испытания пульта: перезапуск после него не
+	// падение. os.Exit (обновление, авария) отметки не оставляет.
+	defer s.PultVyhod()
 	// Хук подключается тут, а не живёт внутри internal/sluzhba: пакет sluzhba
 	// про трей и Windows ничего не знает (см. комментарий поля). На Windows
 	// это настоящий пузырь (trey_windows.go), на остальных платформах — след
@@ -966,6 +969,12 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// раз — сразу после удачного подъёма связи. У того, чья машина работает
 	// сутками, правила не менялись никогда, и это была честная жалоба.
 	go s.SveryatPravila(ctx, sluzhba.ShagSverkiPravil)
+	// Пульт мозга (internal/pult): испытание новых настроек и пульс
+	// X-Sostoyanie, лёгкий опрос /info при opros.info_min и долгий опрос при
+	// kanal.dolgiy_opros. Без пульта последние два молчат.
+	go s.SleditZaPultom(ctx)
+	go s.SleditZaSvodkoy(ctx)
+	go s.SleditZaDolgimOprosom(ctx)
 
 	// Авторежим по умолчанию выключен (см. hranenie.Nastroyki.Avtorezhim) —
 	// заводим служителя, только если человек сам его включил в прошлый раз.

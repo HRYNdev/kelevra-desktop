@@ -39,6 +39,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/prava"
 	"github.com/HRYNdev/kelevra-desktop/internal/pravila"
 	"github.com/HRYNdev/kelevra-desktop/internal/proksi"
+	"github.com/HRYNdev/kelevra-desktop/internal/pult"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
@@ -359,6 +360,26 @@ type Sluzhba struct {
 	// мимо Novaya (проверки).
 	zapas        *zapasnoy.Put
 	zapasOdinRaz sync.Once
+
+	// pult — настройки и команды мозга (pult.go, internal/pult). nil — пульта
+	// нет (служба собрана мимо Novaya, проверки): всё из кода, как до пульта.
+	pult *pult.Pult
+	// avtorezhimOtpechatok — пороги автомата, с которыми заведён служитель
+	// (под avtorezhimZamok): сменились в пульте — служитель перезаводится.
+	avtorezhimOtpechatok string
+	// Под zamok: показание трафика ядра для испытания, пульс X-Sostoyanie,
+	// когда он последний раз менялся и активный узел.
+	trafikPulta  int64
+	puls         string
+	pulsKlyuch   string
+	pulsPerehod  time.Time
+	aktivnyyUzel string
+	// etagSvodki — ETag последнего ответа /info как его прислал сервер:
+	// лёгкий опрос повторяет его дословно в If-None-Match. Под zamok.
+	etagSvodki string
+	// oshibkaTihoy — чем кончилась последняя тихая установка (nil — встала или
+	// не пробовали): квитанция команды proverit_obnovlenie. Под zamok.
+	oshibkaTihoy error
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -413,6 +434,8 @@ func Novaya() (*Sluzhba, error) {
 	s.Podpiska.Pasport = s.SobratPasport
 	// Подписка ходит с запасным путём через туннель (zapasnoy_put.go).
 	s.Podpiska.HTTP = s.klientSeti(20 * time.Second)
+	// Пульт с диска (слой 2), сводка /info с диска, заголовки X-Pult и X-Sostoyanie.
+	s.nachatPult()
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
@@ -598,14 +621,11 @@ func prichinaBedyObnovleniya(err error) string {
 // строкой, а не роняем ручку, чтобы окно не повисло (стенд гоняется без
 // сети нарочно, см. stend/oblik_snimok.py).
 func (s *Sluzhba) obnovlenieRuchka(w http.ResponseWriter, r *http.Request) {
-	adres := obnovlenie.SpisokReliza
-	if svoy := os.Getenv("KELEVRA_RELIZY"); svoy != "" {
-		adres = svoy // стенд
-	}
-	ctx, otmena := context.WithTimeout(r.Context(), srokProverkiObnovleniya)
+	srok := s.pult.Dlitelnost("obnovleniya.srok_knopki_s", time.Second, srokProverkiObnovleniya)
+	ctx, otmena := context.WithTimeout(r.Context(), srok)
 	defer otmena()
 	o := otvetObnovleniya{Tekushchaya: podpiska.Versiya}
-	n, err := obnovlenie.Proverit(ctx, s.klientSeti(srokProverkiObnovleniya), adres, podpiska.Versiya)
+	n, err := s.naytiObnovlenie(ctx, s.klientSeti(srok))
 	if err != nil {
 		log.Printf("проверка обновления по нажатию: %v", err)
 		o.Beda = prichinaBedyObnovleniya(err)
@@ -665,13 +685,11 @@ func (s *Sluzhba) proveritObnovlenieRaz(ctx context.Context) error {
 		s.zamok.Unlock()
 	}()
 
-	adres := obnovlenie.SpisokReliza
-	if svoy := os.Getenv("KELEVRA_RELIZY"); svoy != "" {
-		adres = svoy // стенд
-	}
-	ctx, otmena := context.WithTimeout(ctx, srokFonovoyProverkiObnovleniya)
+	srok := s.pult.Dlitelnost("obnovleniya.srok_proverki_s", time.Second, srokFonovoyProverkiObnovleniya)
+	ctx, otmena := context.WithTimeout(ctx, srok)
 	defer otmena()
-	n, err := obnovlenie.Proverit(ctx, s.klientSeti(srokFonovoyProverkiObnovleniya), adres, podpiska.Versiya)
+	// Сборка из пульта главнее GitHub; каналы proba/stop GitHub не спрашивают.
+	n, err := s.naytiObnovlenie(ctx, s.klientSeti(srok))
 	if err != nil {
 		// Нет сети — обычное дело для приложения, которое чинит сеть: тихо,
 		// без паники и без падения процесса. Сетевой отказ повторит тикер
@@ -801,6 +819,12 @@ func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
 	if os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") == "1" {
 		return
 	}
+	// Пульт может попросить не ставить тихо (obnovleniya.tiho=false): тогда
+	// находку объявляют пузырь и метка, а ставит человек нажатием.
+	if !s.pult.FlagIli("obnovleniya.tiho", true) {
+		log.Printf("тихая установка %s: выключена пультом — жду нажатия человека", n.Versiya)
+		return
+	}
 	s.zamok.Lock()
 	uzhe := s.idetUstanovkaObnovleniya
 	stavili := s.tihoStavili
@@ -817,8 +841,15 @@ func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
 
 	log.Printf("тихая установка %s: начинаю, человека не спрашиваю", n.Versiya)
 	put, err := s.PostavitNaydennoe()
+	s.zamok.Lock()
+	s.oshibkaTihoy = err
+	s.zamok.Unlock()
 	if err != nil {
 		log.Printf("тихая установка %s: не вышло (%v), остаюсь на прежней", n.Versiya, err)
+		if n.Sha256 != "" {
+			// Сборка из пульта не встала — мозгу словом в X-Pult.
+			s.pult.OshibkaObnovleniya(prichinaObnovleniya(err))
+		}
 		return
 	}
 	log.Printf("тихая установка %s: поставлено, файл %s", n.Versiya, put)
@@ -968,7 +999,8 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		log.Printf("установка обновления по тычку: не знаю, где лежу: %v", err)
 		return "", fmt.Errorf("путь к программе не определён: %w", err)
 	}
-	ctx, otmena := context.WithTimeout(context.Background(), srokUstanovkiObnovleniya)
+	srokUstanovki := s.pult.Dlitelnost("obnovleniya.srok_ustanovki_s", time.Second, srokUstanovkiObnovleniya)
+	ctx, otmena := context.WithTimeout(context.Background(), srokUstanovki)
 	defer otmena()
 	// Доля скачанного — единственное, что окно может показать человеку, пока
 	// идёт установка: сама ручка отвечает ОДИН раз и уже в конце, а окно
@@ -980,7 +1012,7 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		s.skachanoObnovleniya, s.vsegoObnovleniya = skachano, vsego
 		s.zamok.Unlock()
 	}
-	if err := obnovlenie.PostavitSHodom(ctx, s.klientSeti(srokUstanovkiObnovleniya), n, put, hod); err != nil {
+	if err := obnovlenie.PostavitSHodom(ctx, s.klientSeti(srokUstanovki), n, put, hod); err != nil {
 		log.Printf("установка обновления по тычку: не вышло (%v), работаю старой версией", err)
 		return "", fmt.Errorf("обновление не установлено: %w", err)
 	}
@@ -1058,7 +1090,10 @@ func (s *Sluzhba) ZadatVyhod(f func()) { s.vyhod = f }
 // повторяется сам с нарастающей паузой, а тик после сна сперва ждёт сеть —
 // см. fonovoeDelo в povtor_seti.go.
 func (s *Sluzhba) SleditZaObnovleniem(ctx context.Context, period time.Duration) {
-	d := s.delo("фоновая проверка обновления", period, s.proveritObnovlenieRaz)
+	d := s.delo("фоновая проверка обновления", s.pult.Dlitelnost("obnovleniya.period_proverki_min", time.Minute, period), s.proveritObnovlenieRaz)
+	d.periodSeychas = func() time.Duration {
+		return s.pult.Dlitelnost("obnovleniya.period_proverki_min", time.Minute, period)
+	}
 	d.srazu = os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") != "1"
 	d.krutit(ctx)
 }
@@ -1128,7 +1163,13 @@ func vecherOtpravki(t time.Time) time.Time {
 // стоила трафика и ждёт час (PovtorPosleOtkaza), а отказ до первого байта не
 // стоил ничего и ждёт до ближайшего тика (PovtorPosleOtkazaDoPeredachi).
 func poraOtpravlyatZhurnaly(seychas, uspeh, popytka time.Time, povtorCherez time.Duration) bool {
-	if !uspeh.IsZero() && seychas.Sub(uspeh) < PeriodOtpravkiZhurnalov {
+	return poraOtpravlyatZhurnalyS(seychas, uspeh, popytka, povtorCherez, PeriodOtpravkiZhurnalov)
+}
+
+// poraOtpravlyatZhurnalyS — то же правило с периодом параметром: его может
+// задать пульт (zhurnal.otpravka_min, zhurnal.chasto_do).
+func poraOtpravlyatZhurnalyS(seychas, uspeh, popytka time.Time, povtorCherez, period time.Duration) bool {
+	if !uspeh.IsZero() && seychas.Sub(uspeh) < period {
 		return false // час с удачной посылки ещё не прошёл
 	}
 	if povtorCherez <= 0 {
@@ -1202,7 +1243,8 @@ func (s *Sluzhba) OtpravitZhurnalyEsliPora(ctx context.Context, seychas time.Tim
 		uspeh = time.Unix(u, 0)
 	}
 	s.zamok.Lock()
-	if s.zhurnalyIdut || !poraOtpravlyatZhurnaly(seychas, uspeh, s.zhurnalyPopytka, s.zhurnalyPovtorCherez) {
+	period := s.periodZhurnalov(seychas)
+	if s.zhurnalyIdut || !poraOtpravlyatZhurnalyS(seychas, uspeh, s.zhurnalyPopytka, s.zhurnalyPovtorCherez, period) {
 		s.zamok.Unlock()
 		return
 	}
@@ -1224,9 +1266,13 @@ func (s *Sluzhba) OtpravitZhurnalyEsliPora(ctx context.Context, seychas time.Tim
 		// следующую попытку. Когда именно, решает цена отказа: до первого
 		// отправленного байта ждать час незачем (машина обычно просто ещё не
 		// подняла сеть после сна), а оборвавшаяся посылка ждёт как прежде.
-		povtor := PovtorPosleOtkaza
+		povtor := s.pult.Dlitelnost("zhurnal.povtor_posle_otkaza_min", time.Minute, PovtorPosleOtkaza)
 		if otkazDoPeredachi(err) {
-			povtor = PovtorPosleOtkazaDoPeredachi
+			povtor = s.pult.Dlitelnost("zhurnal.povtor_do_peredachi_min", time.Minute, PovtorPosleOtkazaDoPeredachi)
+		}
+		// Частый журнал (разбор живой беды) не ждёт после отказа дольше своего периода.
+		if povtor > period {
+			povtor = period
 		}
 		s.zamok.Lock()
 		s.zhurnalyPovtorCherez = povtor
@@ -1282,9 +1328,16 @@ func (s *Sluzhba) otpravshchikZhurnalov() *zhurnaly.Otpravshchik {
 			yadro.PutZhurnalaVPapke(hranenie.PapkaYadra()),
 			filepath.Join(hranenie.Papka(), zapisi.ImyaFayla),
 		),
-		PutMetok:  hranenie.PutOtmetokZhurnalov(),
-		Zagolovki: ustroystvo.Zagolovki,
-		HTTP:      s.klientSeti(zhurnaly.Srok),
+		PutMetok: hranenie.PutOtmetokZhurnalov(),
+		// Заголовки устройства плюс пульт и пульс — как у подписки.
+		Zagolovki: func(h http.Header, deviceID, versiya string) {
+			ustroystvo.Zagolovki(h, deviceID, versiya)
+			if s.pult != nil {
+				ustroystvo.ZagolovokPulta(h, s.pult.Zagolovok())
+				ustroystvo.ZagolovokSostoyaniya(h, s.sostoyanieDlyaZagolovka())
+			}
+		},
+		HTTP: s.klientSeti(zhurnaly.Srok),
 	}
 }
 
@@ -1394,7 +1447,7 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		if s.Yadro == nil || s.Yadro.Sost() != yadro.Rabotaet {
+		if s.Yadro == nil || s.Yadro.Sost() != yadro.Rabotaet || s.vykl(vyklOcheredUzlov) {
 			continue
 		}
 		syroy, err := os.ReadFile(s.Yadro.PutKonfiga())
@@ -1408,7 +1461,13 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 				pervyy := uzly[0]
 				o = &ochered.Ochered{Gruppa: gruppa, Uzly: uzly, Ya: yadroDlyaOcheredi{s.Yadro}, Log: log.Printf,
 					// Человек выбрал в окне не первый узел — его выбор, очередь не вмешивается.
-					Ruchnoy: func() bool { v := s.Nastroyki.Uzly[gruppa]; return v != "" && v != pervyy }}
+					Ruchnoy: func() bool { v := s.Nastroyki.Uzly[gruppa]; return v != "" && v != pervyy },
+					Porog: func() int {
+						v, _ := s.pult.Celoe("uzel.porog_otkazov")
+						return int(v)
+					},
+					Vozvrat: func() time.Duration { return s.pult.Dlitelnost("uzel.vozvrat_na_pervyy_min", time.Minute, 0) },
+				}
 				log.Printf("очередь узлов: %q, узлы %v", gruppa, uzly)
 			}
 		}
@@ -1827,7 +1886,8 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.avtorezhimZamok.Lock()
-	o.AvtorezhimVklyuchen = s.Nastroyki.Avtorezhim
+	// Автомат выключен пультом — окно не рисует его включённым.
+	o.AvtorezhimVklyuchen = s.Nastroyki.Avtorezhim && s.avtomatRazreshen()
 	if s.avtorezhimEkz != nil {
 		o.AvtorezhimObstanovka = s.avtorezhimEkz.Zadvizhka.Tekushcheye().String()
 		o.AvtorezhimSlepPrichina = s.avtorezhimEkz.PrichinaSlepoty()
@@ -1946,6 +2006,12 @@ func (s *Sluzhba) zapustitAvtorezhimSNachala(roditelskiy context.Context, nachal
 	if s.avtorezhimOtmena != nil {
 		return
 	}
+	if !s.avtomatRazreshen() {
+		// Выключатель пульта funkcii.avtorezhim: выбор человека на диске
+		// остаётся, служитель встанет, когда пульт разрешит (primenitPult).
+		log.Printf("авторежим: выключен пультом — слежение за сетью не включаю")
+		return
+	}
 	ctx, otmena := context.WithCancel(roditelskiy)
 	s.avtorezhimOtmena = otmena
 	// Новое слово человека: всё, что решил предыдущий служитель и не успело
@@ -1959,7 +2025,11 @@ func (s *Sluzhba) zapustitAvtorezhimSNachala(roditelskiy context.Context, nachal
 	s.avtorezhimEkz = sobratSluzhitelya()
 	if nachalo != avtorezhim.Neizvestno {
 		s.avtorezhimEkz.Zadvizhka = avtorezhim.NovayaZadvizhka(nachalo)
+		if v, est := s.pult.Celoe("avtomat.podtverzhdeniy"); est {
+			s.avtorezhimEkz.Zadvizhka.Nuzhno = int(v)
+		}
 	}
+	s.avtorezhimOtpechatok = s.otpechatokAvtomata()
 	sluzh := &avtorezhim.Sluzhitel{
 		Avtorezhim: s.avtorezhimEkz,
 		Sledchik:   avtorezhim.NovySledchik(),
@@ -1974,6 +2044,7 @@ func (s *Sluzhba) zapustitAvtorezhimSNachala(roditelskiy context.Context, nachal
 			s.avtorezhimPrimenit(ctx, moyoPokolenie, sost, povtor)
 		},
 	}
+	s.nastroitSluzhitelya(sluzh)
 	log.Printf("авторежим: включаю слежение за сетью")
 	go sluzh.Krutit(ctx)
 }
@@ -2010,7 +2081,7 @@ func (s *Sluzhba) avtorezhimAktualen(ctx context.Context, pokolenie uint64) bool
 	}
 	s.avtorezhimZamok.Lock()
 	defer s.avtorezhimZamok.Unlock()
-	return s.Nastroyki.Avtorezhim && s.avtorezhimPokolenie == pokolenie
+	return s.Nastroyki.Avtorezhim && s.avtorezhimPokolenie == pokolenie && s.avtomatRazreshen()
 }
 
 // avtorezhimPrimenit — приведение защиты от имени служителя поколения
@@ -2194,6 +2265,7 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 		s.svedeniya = sv
 		s.zamok.Unlock()
 		s.zapomnitDveri(sv)
+		s.prinyatSvodku(sv)
 	}
 	otdat(w, map[string]any{"gotovo": true}, nil)
 }
@@ -2339,6 +2411,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		s.podyomIdet = false
 		s.zamok.Unlock()
 	}()
+	s.otmetitNuzhenTunnel() // испытание пульта: туннель был нужен
 
 	// Права — раньше всего, даже раньше скачивания ядра: без них туннель не
 	// поднять, а качать мегабайты ради отказа незачем.
@@ -2534,7 +2607,7 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		// заставил бы СЛЕДУЮЩИЙ запуск искать несуществующий адаптер.
 		tunnel.UbratMetku()
 		var otkaz otkazPodyoma
-		if errors.As(err, &otkaz) {
+		if errors.As(err, &otkaz) && !s.vykl(vyklSrochnyyZhurnal) {
 			// Туннель не встал — журнал уезжает НЕМЕДЛЕННО, не дожидаясь
 			// ночи: 08.09 разбор упирался в то, что факты приходят через сутки.
 			go s.OtpravitZhurnalySrochno(context.WithoutCancel(ctx))
@@ -2674,6 +2747,8 @@ const KnopkaTaimautPoUmolchaniyu = 8 * time.Second
 func (s *Sluzhba) avtorezhimBoevoy() *avtorezhim.Avtorezhim {
 	a := avtorezhim.Novyy()
 	a.TunnelPodnyat = s.tunnelPodnyat
+	// Пороги и зонды из пульта (ключей нет — константы пакета, как раньше).
+	defer s.nastroitAvtorezhim(a)
 	if s.avtorezhimShlyuz != "" {
 		podmena := s.avtorezhimShlyuz
 		a.MakiShlyuzovFunc = func() ([]string, error) {
@@ -2712,7 +2787,7 @@ func (s *Sluzhba) domaSeychas(roditelskiy context.Context) avtorezhim.Sostoyanie
 	}
 	taimaut := s.avtorezhimKnopkaTaimaut
 	if taimaut <= 0 {
-		taimaut = KnopkaTaimautPoUmolchaniyu
+		taimaut = s.pult.Dlitelnost("avtomat.knopka_taimaut_s", time.Second, KnopkaTaimautPoUmolchaniyu)
 	}
 	ctx, otmena := context.WithTimeout(roditelskiy, taimaut)
 	defer otmena()
@@ -2764,6 +2839,11 @@ func (s *Sluzhba) Podklyuchit(ctx context.Context) error {
 	// RuchnoyVybor не ставит: она только приостанавливает автомат, и это
 	// нажатие возвращает его (см. otklyuchit). Тот же расклад, что Settings.autoModeEnabled (по умолчанию
 	// автомат) + chooseManually() (осознанный ручной) в AutoMode.kt.
+	if !s.avtomatRazreshen() {
+		// Автомат выключен пультом: кнопка поднимает защиту, как в ручном
+		// режиме, и выбор человека на диске не трогает.
+		return s.PodnyatZashchitu(context.Background())
+	}
 	if !avtorezhimVklyuchen && ruchnoyVybor {
 		// Ручной режим: поднимаем защиту безусловно, без захода domaSeychas
 		// (это лишние секунды ожидания на пустом месте) и не трогая
@@ -2898,6 +2978,11 @@ func (s *Sluzhba) ObnovitSvedeniya(ctx context.Context) {
 		log.Printf("сведения о подписке не обновились: %v", err)
 		return
 	}
+	s.prinyatSvedeniya(ctx, sv)
+}
+
+// prinyatSvedeniya — свежая сводка: в окно, двери, просьба журнала, пульт.
+func (s *Sluzhba) prinyatSvedeniya(ctx context.Context, sv *podpiska.Svedeniya) {
 	s.zamok.Lock()
 	s.svedeniya = sv
 	s.zamok.Unlock()
@@ -2915,6 +3000,7 @@ func (s *Sluzhba) ObnovitSvedeniya(ctx context.Context) {
 		log.Printf("сервер просит журнал сейчас — отправляю, не дожидаясь расписания")
 		go s.OtpravitZhurnalySrochno(context.WithoutCancel(ctx))
 	}
+	s.prinyatSvodku(sv)
 }
 
 // ObnovlyatProfil перекачивает конфиг по расписанию, как это делает мобильный клиент.
@@ -2923,14 +3009,13 @@ func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 	// 15 минут, а карточка «Подписка» видна человеку с первой секунды.
 	s.ObnovitSvedeniya(ctx)
 
-	shag := time.Duration(s.Nastroyki.ObnovlyatMin) * time.Minute
-	if shag < 15*time.Minute {
-		shag = 15 * time.Minute
-	}
+	shag := s.periodProfilya()
 	// Сетевой отказ повторяется сам, тик после сна сперва ждёт сеть
 	// (povtor_seti.go): раньше тут был голый тикер, и профиль, упавший на
 	// «no such host» в первую секунду после сна, ждал следующего часа.
-	s.delo("обновление профиля", shag, s.obnovitProfilRaz).krutit(ctx)
+	d := s.delo("обновление профиля", shag, s.obnovitProfilRaz)
+	d.periodSeychas = s.periodProfilya // пульт: profil.period_min
+	d.krutit(ctx)
 }
 
 // obnovitProfilRaz — один плановый заход за профилем и сведениями о подписке.
@@ -2999,7 +3084,7 @@ func (s *Sluzhba) SchitatTrafik(ctx context.Context, shag time.Duration) {
 // журнал и шлётся разработчику. Главное — что несостоявшийся опрос НИЧЕГО не
 // меняет: ни итога, ни отметки последнего показания, ни файла на диске.
 func (s *Sluzhba) UchestTrafik() {
-	if s.Yadro == nil || s.Nastroyki == nil {
+	if s.Yadro == nil || s.Nastroyki == nil || s.vykl(vyklUchetTrafika) {
 		return
 	}
 	t, err := s.Yadro.Trafik()
@@ -3131,15 +3216,24 @@ func (s *Sluzhba) snyatProksi() {
 // наложиться, а отметка об удаче не даёт ночной посылке уйти второй раз с
 // теми же байтами.
 func (s *Sluzhba) OtpravitZhurnalySrochno(ctx context.Context) {
+	_ = s.otpravitZhurnalySrochno(ctx)
+}
+
+// errZhurnalVyklyuchen — отправка журналов выключена стендом.
+var errZhurnalVyklyuchen = errors.New("отправка журналов выключена (KELEVRA_BEZ_OTPRAVKI_ZHURNALOV)")
+
+// otpravitZhurnalySrochno — тело OtpravitZhurnalySrochno с ошибкой для
+// квитанции команды пульта. Посылка уже в пути — не ошибка: журнал уходит.
+func (s *Sluzhba) otpravitZhurnalySrochno(ctx context.Context) error {
 	// Стендовый выключатель гасит и срочную посылку, не только расписание:
 	// копия на стенде с ним не должна слать журнал никуда.
 	if bezOtpravkiZhurnalov() {
-		return
+		return errZhurnalVyklyuchen
 	}
 	s.zamok.Lock()
 	if s.zhurnalyIdut {
 		s.zamok.Unlock()
-		return
+		return nil
 	}
 	s.zhurnalyIdut = true
 	otpravshchik := s.otpravshchikZhurnalovDlyaStenda
@@ -3155,11 +3249,12 @@ func (s *Sluzhba) OtpravitZhurnalySrochno(ctx context.Context) {
 	otchet, err := otpravshchik.Otpravit(ctx)
 	if err != nil {
 		log.Printf("срочная отправка журнала не удалась: %v — уйдёт по расписанию", err)
-		return
+		return err
 	}
 	log.Printf("срочная отправка журнала после неудачи связи: кусков %d, сырых %d Б, сжато %d Б",
 		len(otchet.Kuski), otchet.SyrykhBayt, otchet.SzhatoBayt)
 	s.Nastroyki.OtmetitOtpravkuZhurnalov(time.Now().Unix())
+	return nil
 }
 
 // tegiPravil — теги наборов правил боевого профиля, взятые из него самого.
@@ -3204,7 +3299,14 @@ func (s *Sluzhba) SveryatPravila(ctx context.Context, shag time.Duration) {
 	// приём, что у ObnovlyatProfil со сведениями о подписке.
 	// Сетевой отказ повторяется сам, тик после сна сперва ждёт сеть
 	// (povtor_seti.go).
-	d := s.delo("сверка правил", shag, s.ObnovitKeshPravil)
+	sverit := func(ctx context.Context) error {
+		if s.vykl(vyklSverkaPravil) {
+			return nil
+		}
+		return s.ObnovitKeshPravil(ctx)
+	}
+	d := s.delo("сверка правил", s.pult.Dlitelnost("pravila.sverka_min", time.Minute, shag), sverit)
+	d.periodSeychas = func() time.Duration { return s.pult.Dlitelnost("pravila.sverka_min", time.Minute, shag) }
 	d.srazu = true
 	d.krutit(ctx)
 }
