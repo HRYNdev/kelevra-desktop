@@ -268,7 +268,7 @@ func (y *Yadro) Prigotovit(ctx context.Context, klient *http.Client) (ItogPodgot
 		_ = os.Remove(vremenny)
 		return itog, err
 	}
-	if err := podpis.Proverit(vremenny, ImyaArhiva(), sig); err != nil {
+	if err := podpis.ProveritSTegom(vremenny, ImyaArhiva(), sborka.Teg, sig); err != nil {
 		_ = os.Remove(vremenny)
 		return itog, fmt.Errorf("%w: сборка ядра %s не отложена (%v)", obnovlenie.ErrPodpis, sborka.Teg, err)
 	}
@@ -408,7 +408,7 @@ func (y *Yadro) Smenit() (*Smena, error) {
 	}
 	arhiv := y.putArhivaNovogo()
 	// Подпись проверяется ещё раз: архив пролежал на диске.
-	if err := podpis.Proverit(arhiv, ImyaArhiva(), []byte(o.Podpis)); err != nil {
+	if err := podpis.ProveritSTegom(arhiv, ImyaArhiva(), o.Teg, []byte(o.Podpis)); err != nil {
 		y.ubratOtlozhennoe()
 		return nil, fmt.Errorf("%w: отложенная сборка ядра %s (%v), убрана", obnovlenie.ErrPodpis, o.Teg, err)
 	}

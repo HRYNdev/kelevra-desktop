@@ -27,6 +27,11 @@ type sborkaStenda struct {
 	podpisano  string // что подписано; "" — подписи в релизе нет
 	prerelease bool
 	draft      bool
+	// bezTega — подпись прежнего формата (без тега), как у живой сборки
+	// core-v1.14.0-beta.4-1.
+	bezTega bool
+	// tegPodpisi — под каким тегом подписан архив; пусто — под своим.
+	tegPodpisi string
 }
 
 // stendSmeny поднимает «GitHub» со списком сборок (от свежих к старым) и
@@ -48,7 +53,18 @@ func stendSmeny(t *testing.T, stoit string, sborki ...sborkaStenda) *Yadro {
 		if s.podpisano != "" {
 			tmp := filepath.Join(t.TempDir(), "p.zip")
 			os.WriteFile(tmp, zipYadra(t, s.podpisano), 0o644)
-			sig, err := podpis.Podpisat(base64.StdEncoding.EncodeToString(priv.Seed()), ImyaArhiva(), tmp)
+			seed := base64.StdEncoding.EncodeToString(priv.Seed())
+			teg := s.teg
+			if s.tegPodpisi != "" {
+				teg = s.tegPodpisi
+			}
+			var sig string
+			var err error
+			if s.bezTega {
+				sig, err = podpis.Podpisat(seed, ImyaArhiva(), tmp)
+			} else {
+				sig, err = podpis.PodpisatSTegom(seed, ImyaArhiva(), teg, tmp)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -348,5 +364,61 @@ func TestPrigotovitBezYadra(t *testing.T) {
 	y := stendSmeny(t, "", sborkaStenda{teg: "core-v2-1", yadro: "v2", podpisano: "v2"})
 	if _, err := y.Prigotovit(context.Background(), http.DefaultClient); !errors.Is(err, ErrNetYadra) {
 		t.Fatalf("ошибка %v, ждал ErrNetYadra", err)
+	}
+}
+
+// Подпись прежнего формата (без тега) на замену не годится: такой подписью
+// нельзя доказать, под каким тегом выпускалась сборка.
+func TestZamenaPoPodpisiBezTegaNeBeretsya(t *testing.T) {
+	y := stendSmeny(t, "v1", sborkaStenda{teg: "core-v2-1", yadro: "v2", podpisano: "v2", bezTega: true})
+	y.zapisatVersiyu("core-v1-1")
+	if _, err := y.Prigotovit(context.Background(), http.DefaultClient); !errors.Is(err, obnovlenie.ErrPodpis) {
+		t.Fatalf("подпись без тега: ошибка %v, ждал ErrPodpis", err)
+	}
+	if estFayl(y.putArhivaNovogo()) {
+		t.Fatal("архив с подписью без тега отложен")
+	}
+}
+
+// Атака откатом: старый подписанный архив (core-v1-1) выложен под тегом
+// core-v9.9.9-1. Подпись сходится с файлом, но не с тегом — не берётся.
+func TestStaryyArhivPodChuzhimTegomNeBeretsya(t *testing.T) {
+	y := stendSmeny(t, "v2", sborkaStenda{teg: "core-v9.9.9-1", yadro: "v1", podpisano: "v1", tegPodpisi: "core-v1-1"})
+	y.zapisatVersiyu("core-v2-1")
+	if _, err := y.Prigotovit(context.Background(), http.DefaultClient); !errors.Is(err, obnovlenie.ErrPodpis) {
+		t.Fatalf("архив под чужим тегом: ошибка %v, ждал ErrPodpis", err)
+	}
+	if s, _ := y.Smenit(); s != nil || soderzhimoe(t, y.Bin) != "v2" {
+		t.Fatal("ядро откатилось на старую сборку под чужим тегом")
+	}
+}
+
+// Первая установка принимает и прежний формат (живая сборка подписана им),
+// но версию не записывает: тег без подписи ничего не доказывает.
+func TestPervayaUstanovkaPrinimaetPrezhniyFormat(t *testing.T) {
+	obnovlenie.TrebovatPodpis = true
+	t.Cleanup(func() { obnovlenie.TrebovatPodpis = false })
+	y := stendSmeny(t, "", sborkaStenda{teg: "core-v1.14.0-beta.4-1", yadro: "v1", podpisano: "v1", bezTega: true})
+	if err := y.Zagruzit(context.Background()); err != nil {
+		t.Fatalf("первая установка по прежней подписи: %v", err)
+	}
+	if soderzhimoe(t, y.Bin) != "v1" {
+		t.Fatal("ядро не поставлено")
+	}
+	if v := y.Versiya(); v != "" {
+		t.Fatalf("по подписи без тега записана версия %q", v)
+	}
+	// С подписью с тегом версия записывается.
+	y2 := stendSmeny(t, "", sborkaStenda{teg: "core-v1.14.1-1", yadro: "v2", podpisano: "v2"})
+	if err := y2.Zagruzit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if v := y2.Versiya(); v != "core-v1.14.1-1" {
+		t.Fatalf("версия %q", v)
+	}
+	// Под чужим тегом первая установка тоже не проходит.
+	y3 := stendSmeny(t, "", sborkaStenda{teg: "core-v9.9.9-1", yadro: "v1", podpisano: "v1", tegPodpisi: "core-v1-1"})
+	if err := y3.Zagruzit(context.Background()); err == nil {
+		t.Fatal("архив под чужим тегом поставлен")
 	}
 }

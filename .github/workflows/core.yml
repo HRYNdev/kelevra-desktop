@@ -99,11 +99,14 @@ jobs:
         with:
           path: sign-src
 
+      # Тег релиза входит в подпись (второй формат): замена ядра у стоящих
+      # установок принимает архив только под тем тегом, под которым он подписан.
       - name: Подписать архив ядра
         env:
           KELEVRA_SIGN_KEY: ${{ secrets.KELEVRA_SIGN_KEY }}
+          TEG_YADRA: core-${{ env.CORE_REF }}-${{ github.run_number }}
         run: |
-          (cd sign-src && go run ./cmd/podpisat ../sing-box-windows-amd64.zip sing-box-windows-amd64.zip)
+          (cd sign-src && go run ./cmd/podpisat ../sing-box-windows-amd64.zip sing-box-windows-amd64.zip "$TEG_YADRA")
           test -s sing-box-windows-amd64.zip.sig
 
       - uses: softprops/action-gh-release@v3

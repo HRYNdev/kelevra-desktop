@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -98,5 +99,38 @@ func TestVshityyKlyuchRazbiraetsya(t *testing.T) {
 func TestZakrytyyKlyuchNeRazbiraetsya(t *testing.T) {
 	if _, err := Podpisat("abc", "x", "y"); err == nil {
 		t.Fatal("мусорный закрытый ключ принят")
+	}
+}
+
+// Подпись с тегом: проходит только под своим тегом; подпись без тега под
+// проверку с тегом не проходит, и наоборот.
+func TestPodpisSTegom(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	staryy := KlyuchHex
+	KlyuchHex = hex.EncodeToString(pub)
+	t.Cleanup(func() { KlyuchHex = staryy })
+	seed := base64.StdEncoding.EncodeToString(priv.Seed())
+	put := filepath.Join(t.TempDir(), "a.zip")
+	os.WriteFile(put, []byte("arhiv"), 0o644)
+
+	sTegom, err := PodpisatSTegom(seed, "a.zip", "core-v1.14.1-1", put)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ProveritSTegom(put, "a.zip", "core-v1.14.1-1", []byte(sTegom)); err != nil {
+		t.Fatalf("своя подпись с тегом не прошла: %v", err)
+	}
+	if err := ProveritSTegom(put, "a.zip", "core-v9.9.9-1", []byte(sTegom)); err == nil {
+		t.Fatal("подпись прошла под чужим тегом")
+	}
+	if err := Proverit(put, "a.zip", []byte(sTegom)); err == nil {
+		t.Fatal("подпись с тегом прошла как подпись без тега")
+	}
+	bezTega, _ := Podpisat(seed, "a.zip", put)
+	if err := ProveritSTegom(put, "a.zip", "core-v1.14.1-1", []byte(bezTega)); err == nil {
+		t.Fatal("подпись без тега прошла как подпись с тегом")
+	}
+	if _, err := PodpisatSTegom(seed, "a.zip", "", put); err == nil {
+		t.Fatal("подписано с пустым тегом")
 	}
 }

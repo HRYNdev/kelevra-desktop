@@ -36,6 +36,14 @@ const SufiksFayla = ".sig"
 // metka отделяет наши подписи от любых других, сделанных тем же ключом.
 const metka = "kelevra-podpis-v1"
 
+// metkaSTegom — второй формат: в подписанную строку входит ещё и тег релиза.
+// Без тега подпись подтверждает только «этот файл мы выпускали», но не «под
+// этим тегом»: старый подписанный архив ядра, выложенный под тегом
+// core-v9.9.9-1, прошёл бы проверку и откатил бы ядро у всех стоящих
+// установок. Замена ядра принимает только этот формат с тегом, совпадающим
+// с тегом релиза.
+const metkaSTegom = "kelevra-podpis-v2"
+
 // PredelRazmera — предел размера файла подписи: настоящая занимает около 90 байт.
 const PredelRazmera = 4 << 10
 
@@ -59,6 +67,10 @@ func soobshchenie(imya string, hesh []byte) []byte {
 	return []byte(metka + "\n" + imya + "\n" + hex.EncodeToString(hesh))
 }
 
+func soobshchenieSTegom(imya, teg string, hesh []byte) []byte {
+	return []byte(metkaSTegom + "\n" + imya + "\n" + teg + "\n" + hex.EncodeToString(hesh))
+}
+
 func heshFayla(put string) ([]byte, error) {
 	f, err := os.Open(put)
 	if err != nil {
@@ -76,6 +88,19 @@ func heshFayla(put string) ([]byte, error) {
 // сборки) и возвращает текст для файла .sig. imya — имя, под которым файл
 // выкладывается в релиз.
 func Podpisat(seedBase64, imya, put string) (string, error) {
+	return podpisat(seedBase64, put, func(hesh []byte) []byte { return soobshchenie(imya, hesh) })
+}
+
+// PodpisatSTegom — подпись второго формата: имя файла, тег релиза и sha256.
+// Файл .sig по виду тот же (base64), формат различается подписанной строкой.
+func PodpisatSTegom(seedBase64, imya, teg, put string) (string, error) {
+	if strings.TrimSpace(teg) == "" || strings.ContainsAny(teg, "\r\n") {
+		return "", errors.New("тег релиза пустой или с переводом строки")
+	}
+	return podpisat(seedBase64, put, func(hesh []byte) []byte { return soobshchenieSTegom(imya, teg, hesh) })
+}
+
+func podpisat(seedBase64, put string, soob func([]byte) []byte) (string, error) {
 	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(seedBase64))
 	if err != nil || len(seed) != ed25519.SeedSize {
 		return "", errors.New("закрытый ключ подписи не разобрать (ждём 32 байта в base64)")
@@ -85,7 +110,7 @@ func Podpisat(seedBase64, imya, put string) (string, error) {
 		return "", err
 	}
 	priv := ed25519.NewKeyFromSeed(seed)
-	sig := ed25519.Sign(priv, soobshchenie(imya, hesh))
+	sig := ed25519.Sign(priv, soob(hesh))
 	return base64.StdEncoding.EncodeToString(sig) + "\n", nil
 }
 
@@ -100,6 +125,23 @@ func Proverit(put, imya string, sig []byte) error {
 
 // ProveritKlyuchom — то же с явным ключом (для тестов и стенда).
 func ProveritKlyuchom(klyuch ed25519.PublicKey, put, imya string, sig []byte) error {
+	return proverit(klyuch, put, sig, func(hesh []byte) []byte { return soobshchenie(imya, hesh) })
+}
+
+// ProveritSTegom сверяет файл с подписью второго формата (с тегом релиза)
+// вшитым ключом. Подпись первого формата здесь не проходит.
+func ProveritSTegom(put, imya, teg string, sig []byte) error {
+	klyuch, err := Klyuch(KlyuchHex)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(teg) == "" {
+		return fmt.Errorf("%w: тег релиза пустой", ErrNeVerna)
+	}
+	return proverit(klyuch, put, sig, func(hesh []byte) []byte { return soobshchenieSTegom(imya, teg, hesh) })
+}
+
+func proverit(klyuch ed25519.PublicKey, put string, sig []byte, soob func([]byte) []byte) error {
 	tekst := strings.TrimSpace(string(sig))
 	if tekst == "" {
 		return ErrNetPodpisi
@@ -112,7 +154,7 @@ func ProveritKlyuchom(klyuch ed25519.PublicKey, put, imya string, sig []byte) er
 	if err != nil {
 		return err
 	}
-	if !ed25519.Verify(klyuch, soobshchenie(imya, hesh), syroe) {
+	if !ed25519.Verify(klyuch, soob(hesh), syroe) {
 		return ErrNeVerna
 	}
 	return nil

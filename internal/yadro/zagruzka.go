@@ -51,19 +51,42 @@ func (y *Yadro) Zagruzit(ctx context.Context) error {
 	defer os.Remove(arhiv)
 	// Ядро запускает служба от системы, поэтому архив ставится только с верной
 	// подписью нашего ключа (internal/podpis), до распаковки.
-	if obnovlenie.TrebovatPodpis {
-		if err := obnovlenie.ProveritPodpisFayla(ctx, &http.Client{Timeout: 30 * time.Second}, sborka.SsylkaPodpisi, arhiv, ImyaArhiva()); err != nil {
+	//
+	// Первая установка принимает оба формата подписи: живая сборка
+	// core-v1.14.0-beta.4-1 подписана первым (без тега). Версию же ядра
+	// запоминаем только по подписи с тегом: тег без подписи ничего не
+	// доказывает, а записанная чужая «версия» закрыла бы машине замену.
+	podpisSTegom := false
+	if sborka.SsylkaPodpisi != "" || obnovlenie.TrebovatPodpis {
+		sig, err := skachatPodpis(ctx, &http.Client{Timeout: 30 * time.Second}, sborka.SsylkaPodpisi)
+		if err == nil {
+			podpisSTegom = podpis.ProveritSTegom(arhiv, ImyaArhiva(), sborka.Teg, sig) == nil
+			if !podpisSTegom && obnovlenie.TrebovatPodpis {
+				err = podpis.Proverit(arhiv, ImyaArhiva(), sig)
+			}
+		}
+		if err != nil && obnovlenie.TrebovatPodpis {
 			log.Printf("подпись ядра %s НЕ подтверждена (ed25519): %v — ядро не поставлено", ImyaArhiva(), err)
 			return fmt.Errorf("%w: ядро не поставлено (%v)", obnovlenie.ErrPodpis, err)
 		}
-		log.Printf("подпись ядра %s верна (ed25519), распаковываю", ImyaArhiva())
+		if obnovlenie.TrebovatPodpis {
+			if podpisSTegom {
+				log.Printf("подпись ядра %s верна (ed25519, тег %s), распаковываю", ImyaArhiva(), sborka.Teg)
+			} else {
+				log.Printf("подпись ядра %s верна (ed25519, прежний формат без тега), распаковываю", ImyaArhiva())
+			}
+		}
 	}
+	y.zamokSmeny.Lock()
+	defer y.zamokSmeny.Unlock()
 	if err := raspakovat(arhiv, y.Bin); err != nil {
 		return err
 	}
-	// Версию поставленного ядра запоминаем сразу: по ней служба потом решает,
-	// нужна ли замена (smena.go).
-	y.zapisatVersiyu(sborka.Teg)
+	if podpisSTegom {
+		// Версию поставленного ядра запоминаем сразу: по ней служба потом
+		// решает, нужна ли замена (smena.go).
+		y.zapisatVersiyu(sborka.Teg)
+	}
 	return nil
 }
 

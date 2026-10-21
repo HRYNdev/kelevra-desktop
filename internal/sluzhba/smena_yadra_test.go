@@ -42,7 +42,7 @@ func stendZamenyYadra(t *testing.T) *Sluzhba {
 	arhiv := b.Bytes()
 	tmp := filepath.Join(t.TempDir(), "a.zip")
 	os.WriteFile(tmp, arhiv, 0o644)
-	sig, err := podpis.Podpisat(base64.StdEncoding.EncodeToString(priv.Seed()), yadro.ImyaArhiva(), tmp)
+	sig, err := podpis.PodpisatSTegom(base64.StdEncoding.EncodeToString(priv.Seed()), yadro.ImyaArhiva(), "core-v2-1", tmp)
 	if err != nil {
 		t.Fatal(err)
 	}

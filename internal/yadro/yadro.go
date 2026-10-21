@@ -49,6 +49,8 @@ type Yadro struct {
 	// у человека пробное ядро не ставится ни новой установке, ни на замену.
 	// Подпись требуется и для пробных.
 	BratProbnye bool
+	// zamokSmeny — файлы ядра и замены (smena.go) меняет один за раз.
+	zamokSmeny sync.Mutex
 	Klient      *http.Client
 
 	zamok   sync.Mutex
