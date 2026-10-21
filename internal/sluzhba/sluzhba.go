@@ -2433,7 +2433,12 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("подъём связи прерван: %w", err)
 		}
-		return iskhodnyyZapusk(c)
+		// Отказ самого запуска ядра помечается: только за него замена ядра
+		// может винить новую сборку (smena_yadra.go, novoeYadroVinovato).
+		if err := iskhodnyyZapusk(c); err != nil {
+			return oshibkaZapuskaYadra{err}
+		}
+		return nil
 	}
 	zctx, otmena := context.WithTimeout(ctx, 70*time.Second)
 	defer otmena()

@@ -108,13 +108,25 @@ func (s *Sluzhba) smenitYadroPeredPodyomom() *yadro.Smena {
 	return smena
 }
 
-// novoeYadroVinovato — мог ли отказ подъёма быть из-за нового ядра. Нет прав,
-// отмена и занятый адаптер от сборки ядра не зависят: откатывать незачем.
+// oshibkaZapuskaYadra — отказ самого запуска ядра (процесс упал на старте
+// или не ответил). Текст и причина — как у исходной ошибки.
+type oshibkaZapuskaYadra struct{ err error }
+
+func (o oshibkaZapuskaYadra) Error() string { return o.err.Error() }
+func (o oshibkaZapuskaYadra) Unwrap() error { return o.err }
+
+// novoeYadroVinovato — мог ли отказ подъёма быть из-за нового ядра. Винится
+// только отказ самого запуска ядра; нет прав, нет конфига, подбор имени
+// адаптера, отмена и занятый адаптер от сборки ядра не зависят.
 func novoeYadroVinovato(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
 	}
-	return !errors.Is(err, OshibkaNetPrav) && !errors.Is(err, OshibkaAdapterZanyat)
+	var zapusk oshibkaZapuskaYadra
+	if !errors.As(err, &zapusk) {
+		return false
+	}
+	return !errors.Is(err, OshibkaAdapterZanyat) && !adapterZanyatPoOshibke(zapusk.err)
 }
 
 // PodnyatZashchitu поднимает связь (podnyatZashchituRaz), перед этим ставит
@@ -136,10 +148,13 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 		// следующем подъёме.
 		return err
 	}
+	// Замок держится от отката до конца повторного подъёма: второе
+	// подключение не должно ни менять файл ядра, ни поднимать его, пока
+	// решается судьба сборки.
 	s.zamokSmenyYadra.Lock()
+	defer s.zamokSmenyYadra.Unlock()
 	if s.Yadro.PID() != "" {
 		// Ядро уже поднял кто-то другой (второе окно): файл не трогаем.
-		s.zamokSmenyYadra.Unlock()
 		return err
 	}
 	_ = s.Yadro.Ostanovit()
@@ -147,7 +162,6 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	s.zamok.Lock()
 	s.summaYadra = ""
 	s.zamok.Unlock()
-	s.zamokSmenyYadra.Unlock()
 	if oerr != nil {
 		log.Printf("замена ядра: сборка %s не поднялась (%v), и прежнее ядро не вернуть: %v", smena.Teg, err, oerr)
 		return err

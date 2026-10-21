@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpis"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
@@ -146,5 +147,90 @@ func TestBezPravYadroNeMenyaetsya(t *testing.T) {
 	}
 	if got := chtoVYadre(t, s); got != "staroe" {
 		t.Fatalf("без прав ядро сменилось: %q", got)
+	}
+}
+
+// Винится только отказ самого запуска ядра.
+func TestNovoeYadroVinovatoTolkoZaZapusk(t *testing.T) {
+	ctx := context.Background()
+	zapusk := oshibkaZapuskaYadra{errors.New("ядро упало при старте: FATAL[0000] decode config: unknown field")}
+	for _, sluchay := range []struct {
+		imya  string
+		err   error
+		hochu bool
+	}{
+		{"упало на старте", zapusk, true},
+		{"туннель не создан ядром", otkazPodyoma{OshibkaTunnelNePodnyalsya, zapusk}, true},
+		{"нет конфига", errors.New("конфигурация не подготовлена: open profil.json: no such file"), false},
+		{"ядро качается", errors.New("ядро уже качается"), false},
+		{"нет прав", OshibkaNetPrav, false},
+		{"адаптер занят до запуска", OshibkaAdapterZanyat, false},
+		{"адаптер занят при запуске", otkazPodyoma{OshibkaAdapterZanyat, oshibkaZapuskaYadra{errors.New(oshibkaZanyatogoAdaptera)}}, false},
+	} {
+		if got := novoeYadroVinovato(ctx, sluchay.err); got != sluchay.hochu {
+			t.Errorf("%s: винится %v, ждал %v", sluchay.imya, got, sluchay.hochu)
+		}
+	}
+	otmenen, otmena := context.WithCancel(ctx)
+	otmena()
+	if novoeYadroVinovato(otmenen, zapusk) {
+		t.Error("отменённый подъём винит новое ядро")
+	}
+}
+
+// Подъём сорвался не на запуске ядра (нет конфига) — новое ядро не
+// откатывается и не отвергается; следующий подъём продолжает пробу.
+func TestOtkazNeNaZapuskeNeOtkatyvaet(t *testing.T) {
+	s := stendZamenyYadra(t)
+	zapuskov := 0
+	s.zapustitYadro = func(ctx context.Context) error { zapuskov++; return nil }
+	profil, err := os.ReadFile(hranenie.PutProfilya())
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(hranenie.PutProfilya())
+	if err := s.PodnyatZashchitu(context.Background()); err == nil {
+		t.Fatal("без профиля связь поднялась")
+	}
+	if zapuskov != 0 {
+		t.Fatalf("ядро запускалось %d раз без конфига", zapuskov)
+	}
+	if got := chtoVYadre(t, s); got != "novoe" {
+		t.Fatalf("новое ядро откачено за чужую ошибку: на месте %q", got)
+	}
+	if err := os.WriteFile(hranenie.PutProfilya(), profil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PodnyatZashchitu(context.Background()); err != nil {
+		t.Fatalf("второй подъём: %v", err)
+	}
+	if got := chtoVYadre(t, s); got != "novoe" || s.Yadro.Versiya() != "core-v2-1" {
+		t.Fatalf("проба не подтвердилась: %q, %q", got, s.Yadro.Versiya())
+	}
+	if _, err := os.Stat(s.Yadro.Bin + ".prezhnee"); err == nil {
+		t.Fatal("после подтверждения осталось прежнее ядро")
+	}
+}
+
+// От отката до конца повторного подъёма замок замены держится.
+func TestZamokDerzhitsyaDoPovtornogoPodyoma(t *testing.T) {
+	s := stendZamenyYadra(t)
+	zamokSvoboden := true
+	s.zapustitYadro = func(ctx context.Context) error {
+		if chtoVYadre(t, s) == "novoe" {
+			return errors.New("ядро упало при старте: FATAL[0000] decode config: unknown field")
+		}
+		if s.zamokSmenyYadra.TryLock() {
+			s.zamokSmenyYadra.Unlock()
+		} else {
+			zamokSvoboden = false
+		}
+		return nil
+	}
+	if err := s.PodnyatZashchitu(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if zamokSvoboden {
+		t.Fatal("во время повторного подъёма на прежнем ядре замок замены был свободен")
 	}
 }
