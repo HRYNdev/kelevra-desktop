@@ -18,9 +18,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
@@ -58,6 +60,12 @@ type Klient struct {
 	// сервер устаревшим на неделю. nil — законно (стенды, ранний старт до
 	// первого замера): заголовок тогда просто не ставится.
 	Trafik func() int64
+
+	// Сроки входа устройства; ноль — SrokSoedineniyaVhoda, SrokOtvetaVhoda,
+	// SrokPervogoProhoda (поля — для проверок).
+	SrokSoedineniyaVhoda time.Duration
+	SrokOtvetaVhoda      time.Duration
+	SrokPervogoProhoda   time.Duration
 }
 
 // trafik — расход, если его есть кому назвать. Отдельный метод, чтобы место
@@ -234,19 +242,52 @@ func ChistyyKod(vvod string) string {
 	return strings.Join(strings.Fields(vvod), "")
 }
 
+// Сроки входа устройства (первый проход Voyti). Вход по коду в службе ограничен 30 с
+// целиком (sluzhba.kod), и первый проход не должен съедать их, когда одна из дверей
+// недоступна или режется по дороге: человек старой системы иначе ждал бы, пока
+// истечёт 20-секундный срок клиента на чужой двери, а с двумя такими дверями вход
+// падал бы по сроку, хотя его дверь отвечает за секунду.
+const (
+	// SrokSoedineniyaVhoda — сколько ждать соединения с дверью (TCP и TLS). Дверь,
+	// которую режут или которая лежит, отсекается здесь.
+	SrokSoedineniyaVhoda = 5 * time.Second
+	// SrokOtvetaVhoda — сколько ждать ответа двери, с которой соединились: заведение
+	// устройства на сервере включает выгрузку учётки в ядро и бывает небыстрым.
+	SrokOtvetaVhoda = 10 * time.Second
+	// SrokPervogoProhoda — весь первый проход по всем дверям. Остаток из 30 с —
+	// второму проходу (старый путь).
+	SrokPervogoProhoda = 12 * time.Second
+)
+
+func srokIli(d, poUmolchaniyu time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return poUmolchaniyu
+}
+
 // Voyti — вход по коду (KelevraServer docs/PRIGLASHENIE.md, образец — телефон,
 // Priglashenie.vybratDver). Возвращает адрес подписки, который сохранять.
 //
-// Два прохода. Первый — вход устройства у всех дверей по порядку: POST /k/<код>/ustroystvo,
+// Два прохода. Первый — вход устройства у дверей по порядку: POST /k/<код>/ustroystvo,
 // дверь своей сети заводит эту машину и выдаёт ей свой ключ, адрес /u/<ключ>. Только если
-// ни одна дверь машину так не завела, второй проход — старый путь /k/<код> у дверей,
-// ответивших 404/405 (нет такого входа или код незнаком), в том же порядке.
+// ни одна дверь машину так не завела, второй проход — старый путь /k/<код>: сперва у
+// дверей, ответивших 404/405 (нет такого входа или код незнаком), потом у тех, до кого
+// первый проход не дошёл за свой срок, и последними — у не ответивших (их могли резать
+// только для входа или только напрямую — старый путь идёт полным сроком и через
+// туннель, если он поднят).
 //
 // Почему не по одной двери, как телефон. Старый сервер семьи пересылает старый путь
 // переехавшего человека в свою сеть: при обходе «дверь за дверью» первая же дверь отдала
 // бы ему общий /k/<код>, и машина жила бы мимо ключа устройства — без лимита устройств и
 // без отключения по одному. Человек старой системы второй дверью не узнан (404) и
 // остаётся там же, где был.
+//
+// Почему первый проход по очереди, а не ко всем дверям сразу. Двери одной сети заводят
+// устройство в одном мозге, и каждое заведение выдаёт новый ключ: два одновременных
+// входа оставили бы машине ключ, который уже заменён. Время первого прохода держат
+// сроки выше: недоступная дверь стоит до SrokSoedineniyaVhoda, весь проход — не дольше
+// SrokPervogoProhoda.
 func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string, error) {
 	kod = ChistyyKod(kod)
 	if kod == "" {
@@ -257,18 +298,26 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 	}
 	var posledn error
 	neTolko404 := false
-	var stariePuti []string
+	var stariePuti, neSprosheny, molchali []string
+	ctx1, otmena1 := context.WithTimeout(ctx, srokIli(k.SrokPervogoProhoda, SrokPervogoProhoda))
+	defer otmena1()
 	for _, dver := range dveri {
 		dver = strings.TrimSpace(dver)
 		if dver == "" {
 			continue
 		}
-		status, o, err := k.vhodUstroystva(ctx, k.shema(), dver, kod)
+		if ctx1.Err() != nil {
+			// Срок первого прохода вышел — оставшимся дверям только старый путь.
+			neSprosheny = append(neSprosheny, dver)
+			continue
+		}
+		status, o, err := k.vhodUstroystva(ctx1, k.shema(), dver, kod)
 		if err != nil {
 			if status < 0 {
 				return "", err
 			}
 			posledn, neTolko404 = err, true
+			molchali = append(molchali, dver)
 			continue
 		}
 		switch {
@@ -286,8 +335,13 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 			posledn, neTolko404 = fmt.Errorf("дверь %s ответила %d", dver, status), true
 		}
 	}
-	for _, dver := range stariePuti {
-		// Входа устройства тут нет или код ему незнаком — спросим старым путём.
+	// Порядок второго прохода: ответившие 404/405, затем не спрошенные за срок первого
+	// прохода, и последними — не ответившие (вероятнее всего, лежат и сейчас).
+	for _, dver := range append(append(stariePuti, neSprosheny...), molchali...) {
+		if ctx.Err() != nil {
+			break
+		}
+		// Входа устройства тут нет, код ему незнаком или дверь не ответила — спросим старым путём.
 		_, adres, err := k.konfigNaDveri(ctx, dver, kod)
 		if err == nil {
 			return adres, nil
@@ -308,9 +362,23 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 }
 
 // vhodUstroystva — POST /k/<код>/ustroystvo на одной двери (вход устройства
-// своей сети). status < 0 с ошибкой — запрос не собрать; 0 с ошибкой — сеть.
+// своей сети). status < 0 с ошибкой — запрос не собрать; 0 с ошибкой — сеть
+// или срок: соединения нет за SrokSoedineniyaVhoda — дверь не ждём; соединились —
+// ответ ждём до SrokOtvetaVhoda.
 func (k *Klient) vhodUstroystva(ctx context.Context, shema, dver, kod string) (int, otvetVhoda, error) {
 	var o otvetVhoda
+	ctx, otmena := context.WithTimeout(ctx, srokIli(k.SrokOtvetaVhoda, SrokOtvetaVhoda))
+	defer otmena()
+	var soedineno atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { soedineno.Store(true) },
+	})
+	taymer := time.AfterFunc(srokIli(k.SrokSoedineniyaVhoda, SrokSoedineniyaVhoda), func() {
+		if !soedineno.Load() {
+			otmena()
+		}
+	})
+	defer taymer.Stop()
 	req, err := k.zaprosMetodom(ctx, http.MethodPost, fmt.Sprintf("%s://%s/k/%s/ustroystvo", shema, dver, kod))
 	if err != nil {
 		return -1, o, SkrytKodVOshibke(err)
@@ -511,10 +579,11 @@ var kodVAdrese = regexp.MustCompile(`(/(?:k|s|u|i|panel/vhod)/)([A-Za-z0-9_-]{4,
 // журнал: журнал уезжает на сервер, а в нём без этого лежал бы рабочий код целиком
 // («вход по коду не удался: Post https://…/k/<КОД>/ustroystvo»).
 //
-// Вид — как у сервера (KelevraServer server/app.py, maska_koda и maska_klyucha): первые
-// 4 знака и «…». Один вид на обеих сторонах нужен по двум причинам: строку клиента
-// можно сопоставить со строкой сервера, а журналы обеих сторон лежат в одном архиве —
-// при разных масках (сервер — начало, клиент — конец) архив хранил бы уже полкода.
+// Вид — первые 2 знака и «…». Сервер (KelevraServer server/app.py, maska_koda и
+// maska_klyucha) оставляет первые 4, сборки клиента с 0.6.82 — последние 2:
+// начало не длиннее серверного не добавляет к серверной строке ничего, а с прежней
+// клиентской маской в одном архиве журналов устройства складывается не больше чем в 4
+// знака из 12. Начало, а не конец — строку клиента можно сопоставить со строкой сервера.
 // Код короче 8 знаков (настоящие — 12 и длиннее) прячется целиком. В окне человеку код
 // показывает Maska — там вид общий с телефоном.
 func SkrytKod(tekst string) string {
@@ -527,12 +596,12 @@ func SkrytKod(tekst string) string {
 	})
 }
 
-// maskaZhurnala — код в журнале: первые 4 знака и «…» (короче 8 — только «…»).
+// maskaZhurnala — код в журнале: первые 2 знака и «…» (короче 8 — только «…»).
 func maskaZhurnala(kod string) string {
 	if len(kod) < 8 {
 		return "…"
 	}
-	return kod[:4] + "…"
+	return kod[:2] + "…"
 }
 
 // SkrytKodVOshibke — ошибка сети (*url.Error) носит адрес с кодом в тексте; отдаёт
