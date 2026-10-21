@@ -15,7 +15,7 @@ func TestRazborStrokYadra(t *testing.T) {
 		{
 			"отказ по шестой версии адреса, прямым выходом",
 			`+0500 2026-09-09 20:09:15 ERROR [3572860262 103ms] connection: open connection to [2a02:6b8:a::a]:443 using outbound/direct[direct]: dial wlan0: connect: network is unreachable`,
-			Sobytie{Otkaz: true, Adres: "2a02:6b8:a::a", Port: 443, Vyhod: "direct", Kod: "set_nedostupna", V6: true},
+			Sobytie{Otkaz: true, Adres: "2a02:6b8:a::a", Port: 443, Vyhod: "direct", Kod: "set_nedostupna", V6: true, shumV6: true},
 		},
 		{
 			"отказ по таймауту",
@@ -114,6 +114,29 @@ func TestShumV6(t *testing.T) {
 	for _, s := range nastoyashchie {
 		if Razobrat(s).ShumV6() {
 			t.Errorf("принят за шум IPv6, а это не он: %s", s)
+		}
+	}
+}
+
+// Составная причина (ядро перебрало адреса имени): шум — только если все
+// части — недоступность по IPv6. Часть по IPv4 делает отказ настоящим, и код
+// у него — код этой части, а не первой по списку.
+func TestSostavnayaPrichina(t *testing.T) {
+	sluchai := []struct {
+		stroka string
+		shum   bool
+		kod    string
+	}{
+		{`+0500 2026-10-21 21:00:00 ERROR [1 3s] connection: open connection to www.example.com:443 using outbound/direct[direct]: dial tcp [2a00::1]:443: connect: unreachable network | dial tcp 1.2.3.4:443: i/o timeout`, false, "taymaut"},
+		{`+0500 2026-10-21 21:00:00 ERROR [2 3s] connection: open connection to www.example.com:443 using outbound/direct[direct]: dial tcp 1.2.3.4:443: i/o timeout | dial tcp [2a00::1]:443: connect: unreachable network`, false, "taymaut"},
+		{`+0500 2026-10-21 21:00:00 ERROR [3 3s] connection: open connection to www.example.com:443 using outbound/direct[direct]: dial tcp [2a00::1]:443: connect: unreachable network | dial tcp [2a00::2]:443: connect: no route to host`, true, "set_nedostupna"},
+		{`+0500 2026-10-21 21:00:00 ERROR [4 3s] connection: open connection to www.example.com:443 using outbound/direct[direct]: dial tcp [2a00::1]:443: connect: unreachable network | dial tcp [2a00::2]:443: i/o timeout`, false, "taymaut"},
+		{`+0500 2026-10-21 21:00:00 ERROR [5 3s] connection: open connection to www.example.com:443 using outbound/direct[direct]: dial tcp [2a00::1]:443: connect: unreachable network | dial tcp 1.2.3.4:443: connect: network is unreachable`, false, "set_nedostupna"},
+	}
+	for _, sl := range sluchai {
+		s := Razobrat(sl.stroka)
+		if s.ShumV6() != sl.shum || s.Kod != sl.kod {
+			t.Errorf("%s:\n  шум %v код %s, ждал шум %v код %s", sl.stroka, s.ShumV6(), s.Kod, sl.shum, sl.kod)
 		}
 	}
 }

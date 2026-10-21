@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
@@ -41,6 +42,9 @@ var OknoSvodkiYadra = 10 * time.Minute
 
 // nablyudatelYadra — состояние чтения между заходами.
 type nablyudatelYadra struct {
+	// zamok — заход слежки и запись места при остановке службы идут из
+	// разных горутин (ZapomnitMestoChteniyaYadra зовёт main).
+	zamok   sync.Mutex
 	pisatel *zapisi.Pisatel
 	put     string
 	// mesto — файл, где смещение переживает перезапуск службы
@@ -59,6 +63,13 @@ type nablyudatelYadra struct {
 	// mestoSdvinulos — с последней записи места смещение ушло или файл
 	// сменился: место пора записать на диск.
 	mestoSdvinulos bool
+	// mestoZapisano — когда место последний раз легло на диск: чаще раза в
+	// ShagZapisiMesta не пишем.
+	mestoZapisano time.Time
+	// zamorozhen — служба уходит: место записано окончательно, дальше не
+	// читаем (иначе уходящая копия перезаписала бы место после того, как
+	// новая уже начала с него).
+	zamorozhen bool
 
 	oknoNachalo time.Time
 	soed        int
@@ -94,6 +105,8 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 		n.spravochnik = yadro.NovyeImena(s.Yadro)
 	}
 	n.nachat(time.Now())
+	s.slezhkaYadra.Store(n)
+	defer s.slezhkaYadra.CompareAndSwap(n, nil)
 	// Обстановка одной записью на старте: по ней видно, с какими правами и в
 	// каком режиме работала машина, когда случилось остальное.
 	n.pisatel.Sreda(map[string]any{"rezhim": s.rezhimKartiny(), "prava": s.estPrava()})
@@ -104,7 +117,11 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 		case <-ctx.Done():
 			// Служба уходит штатно (обновление, остановка): место чтения —
 			// с нынешним временем, чтобы следующая копия продолжила с него.
-			n.zapomnitMesto(time.Now())
+			n.zamok.Lock()
+			if !n.zamorozhen {
+				n.zapomnitMesto(time.Now())
+			}
+			n.zamok.Unlock()
 			return
 		case <-t.C:
 			if s.vykl(vyklZapisiYadra) {
@@ -115,8 +132,53 @@ func (s *Sluzhba) SleditZaYadrom(ctx context.Context, shag time.Duration) {
 	}
 }
 
+// ZapomnitMestoChteniyaYadra — служба уходит: записать место чтения журнала
+// ядра сейчас и больше не читать.
+//
+// Зовётся синхронно на путях ухода (остановка в main, установка обновления,
+// уступка места новой копии) до выхода процесса: отмена контекста слежки сама
+// по себе не ждёт горутину, и процесс мог выйти раньше, чем она запишет место
+// (а в режиме трея контекст отменяется только на самом выходе из main, а при
+// обновлении процесс уходит через os.Exit). Слежки нет (KELEVRA_BEZ_ZAPISEY,
+// ещё не стартовала) — ничего.
+func (s *Sluzhba) ZapomnitMestoChteniyaYadra() {
+	n := s.slezhkaYadra.Load()
+	if n == nil {
+		return
+	}
+	n.zamok.Lock()
+	defer n.zamok.Unlock()
+	n.zapomnitMesto(time.Now())
+	n.zamorozhen = true
+}
+
+// prodolzhitSlezhkuZaYadrom — уход не состоялся (новая копия не поднялась):
+// слежка читает дальше.
+func (s *Sluzhba) prodolzhitSlezhkuZaYadrom() {
+	n := s.slezhkaYadra.Load()
+	if n == nil {
+		return
+	}
+	n.zamok.Lock()
+	defer n.zamok.Unlock()
+	n.zamorozhen = false
+}
+
+// ShagZapisiMesta — не чаще какого шага место чтения пишется на диск.
+//
+// Минута, а не каждый заход (10 с): это запись в папку данных круглые сутки,
+// пока ядро что-то пишет. Цена редкой записи — после аварии (не штатной
+// остановки) следующая копия перечитает до минуты строк; штатная остановка
+// пишет место сама (ZapomnitMestoChteniyaYadra).
+var ShagZapisiMesta = time.Minute
+
 // zahod — один проход по новому хвосту журнала ядра.
 func (n *nablyudatelYadra) zahod(seychas time.Time) {
+	n.zamok.Lock()
+	defer n.zamok.Unlock()
+	if n.zamorozhen {
+		return
+	}
 	if n.oknoNachalo.IsZero() {
 		n.oknoNachalo = seychas
 	}
@@ -126,7 +188,7 @@ func (n *nablyudatelYadra) zahod(seychas time.Time) {
 			n.uchest(stroka)
 		}
 	}
-	if n.mestoSdvinulos {
+	if n.mestoSdvinulos && seychas.Sub(n.mestoZapisano) >= ShagZapisiMesta {
 		n.zapomnitMesto(seychas)
 	}
 	if seychas.Sub(n.oknoNachalo) >= OknoSvodkiYadra {

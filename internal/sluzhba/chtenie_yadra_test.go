@@ -237,3 +237,105 @@ func TestOknoSShumomV6BezBedy(t *testing.T) {
 		t.Fatalf("сводка %v: ждал otkazy=50, shum_v6=50, soed=100", svodka)
 	}
 }
+
+// Журнал без времени в строках (log.timestamp выключен): начало у разных
+// стартов ядра одинаковое. Новый файл, доросший до старого смещения, всё
+// равно узнаётся как новый — по номеру файла — и читается с нуля.
+func TestNovyyFaylBezVremeniVZhurnale(t *testing.T) {
+	dir := t.TempDir()
+	start := time.Date(2026, 10, 21, 21, 0, 0, 0, time.UTC)
+	odinakovo := "INFO[0000] sing-box started\nINFO[0000] inbound/tun[tun-in]: started\n"
+	staraya := novyyNablyudatel(dir)
+	staraya.nachat(start)
+	dopisat(t, staraya.put, odinakovo)
+	staraya.zahod(start.Add(10 * time.Second))
+
+	if err := os.Rename(staraya.put, staraya.put+".proshlyy"); err != nil {
+		t.Fatal(err)
+	}
+	dopisat(t, staraya.put, odinakovo+"novoe\n")
+
+	novaya := novyyNablyudatel(dir)
+	novaya.nachat(start.Add(30 * time.Second))
+	stroki, _ := novaya.prochitatNovoe()
+	if len(stroki) != 3 {
+		t.Fatalf("новый журнал с тем же началом прочитан как %q, ждал все три строки с нуля", stroki)
+	}
+}
+
+// Тот же номер файла (файл переписан на месте), то же начало, но перед
+// смещением лежит не то, что прошлая копия прочла: файл другой по
+// содержанию — с нуля. Это проверка хвоста отдельно от номера.
+func TestPerepisannyyNaMesteFaylSNulya(t *testing.T) {
+	dir := t.TempDir()
+	start := time.Date(2026, 10, 21, 21, 0, 0, 0, time.UTC)
+	// Начало длиннее отпечатка начала и одинаковое — различает только хвост.
+	nachalo := strings.Repeat("INFO[0000] odinakovo\n", 500)
+	staraya := novyyNablyudatel(dir)
+	staraya.nachat(start)
+	dopisat(t, staraya.put, nachalo+"ERROR [111 5ms] staroe\n")
+	staraya.zahod(start.Add(10 * time.Second))
+
+	if err := os.WriteFile(staraya.put, []byte(nachalo+"ERROR [222 7ms] drugoe\nesche\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	novaya := novyyNablyudatel(dir)
+	novaya.nachat(start.Add(20 * time.Second))
+	stroki, _ := novaya.prochitatNovoe()
+	if len(stroki) != 502 {
+		t.Fatalf("переписанный журнал прочитан как %d строк, ждал все 502 с нуля", len(stroki))
+	}
+}
+
+// Место пишется не чаще раза в минуту, сколько бы ядро ни писало.
+func TestMestoPishetsyaRazVMinutu(t *testing.T) {
+	dir := t.TempDir()
+	start := time.Date(2026, 10, 21, 21, 0, 0, 0, time.UTC)
+	n := novyyNablyudatel(dir)
+	n.nachat(start)
+	dopisat(t, n.put, "a\n")
+	n.zahod(start)
+	dopisat(t, n.put, "b\n")
+	n.zahod(start.Add(10 * time.Second))
+	if m, _ := prochestMesto(n.mesto); m.Smeshenie != 2 {
+		t.Fatalf("через 10 с место переписано (смещение %d), ждал прежнее 2", m.Smeshenie)
+	}
+	dopisat(t, n.put, "c\n")
+	n.zahod(start.Add(ShagZapisiMesta))
+	if m, _ := prochestMesto(n.mesto); m.Smeshenie != 6 {
+		t.Fatalf("через минуту место не записано (смещение %d), ждал 6", m.Smeshenie)
+	}
+}
+
+// Уход службы: место пишется сразу, синхронно, хотя минута не прошла, и
+// слежка больше не читает (иначе уходящая копия перезаписала бы место после
+// того, как новая уже с него начала). Уход сорвался — слежка читает дальше.
+func TestUhodSluzhbyZapisyvaetMestoSrazu(t *testing.T) {
+	s := &Sluzhba{}
+	s.ZapomnitMestoChteniyaYadra() // слежки нет — тихо ничего
+
+	dir := t.TempDir()
+	start := time.Now()
+	n := novyyNablyudatel(dir)
+	n.nachat(start)
+	s.slezhkaYadra.Store(n)
+	dopisat(t, n.put, "a\n")
+	n.zahod(start)
+	dopisat(t, n.put, "b\n")
+	n.zahod(start.Add(10 * time.Second))
+
+	s.ZapomnitMestoChteniyaYadra()
+	if m, _ := prochestMesto(n.mesto); m.Smeshenie != 4 {
+		t.Fatalf("при уходе место %d, ждал 4 (всё прочитанное)", m.Smeshenie)
+	}
+	dopisat(t, n.put, "c\n")
+	n.zahod(start.Add(2 * ShagZapisiMesta))
+	if n.smeshenie != 4 {
+		t.Fatalf("после ухода слежка читала дальше: смещение %d", n.smeshenie)
+	}
+	s.prodolzhitSlezhkuZaYadrom()
+	n.zahod(start.Add(3 * ShagZapisiMesta))
+	if n.smeshenie != 6 {
+		t.Fatalf("после сорванного ухода слежка не читает: смещение %d", n.smeshenie)
+	}
+}
