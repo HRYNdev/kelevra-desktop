@@ -4,23 +4,28 @@ name: core
 # Патч лежит в репозитории приложения (kelevra-box/core-xhttp) — держим в одном месте.
 #
 # Обе стороны берутся по фиксированной точке: sing-box — по тегу, патч — по
-# коммиту kelevra-box. Раньше патч брался с головы kelevra-box, а там он уже
-# переписан под sing-box v1.14.1 (sing-quic 0.7.0: другой BBR), и сборка
-# v1.14.0-beta.4 падала на congestion_meta2.NewBbrSenderWithProfile, хотя в
-# этом репозитории ничего не менялось. Пара по умолчанию — beta.4 и последний
-# коммит патча, который ещё под неё (до перехода Box на v1.14.1).
-# Сменить ядро — менять тег и коммит патча вместе.
+# коммиту kelevra-box. Тег и коммит патча — пара: патч на любом коммите
+# kelevra-box написан под тот тег, что стоит там же в release.yml (CORE_REF).
+# 18.10.2026 сборка v1.14.0-beta.4 падала на congestion_meta2.NewBbrSenderWithProfile
+# не из-за апстрима: патч брался с головы kelevra-box, уже переписанной под
+# v1.14.1 (sing-quic 0.7.0, другой BBR).
+#
+# Пара по умолчанию: v1.14.1 и коммит kelevra-box e213cfcc — патч с правкой 6
+# (Reality шлёт X25519MLKEM768, без неё Xray >= 26.9.8 на узлах ядро не пустит).
+# Коммит пока живёт в ветке PR #53 kelevra-box; после вливания поставить сюда
+# коммит из dev, в котором эта правка есть. Одно ядро на оба клиента: сменить
+# ядро — менять тег и коммит патча вместе, здесь и в release.yml Box.
 on:
   workflow_dispatch:
     inputs:
       core_ref:
         description: "Тег sing-box"
         required: false
-        default: "v1.14.0-beta.4"
+        default: "v1.14.1"
       patch_ref:
         description: "Коммит kelevra-box с патчем core-xhttp (SHA, совместимый с тегом выше)"
         required: false
-        default: "1af139394ca4bd633ff2395cd42899789466fcf7"
+        default: "e213cfccd57f7a04cd9074cac9e2113835a5524d"
       vypustit:
         description: "Выложить релиз core-* (иначе только сборка и проверки)"
         type: boolean
@@ -33,12 +38,12 @@ on:
         default: false
 
 env:
-  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.1' }}
   # Тег сборки ядра: номер прогона и номер повтора — повторный прогон не
   # кладёт второй архив под тот же тег. Клиент сравнивает теги по версии
   # (internal/yadro/versiya_sborki.go): core-v<semver>-<прогон>.<повтор>.
-  TEG_YADRA: core-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}-${{ github.run_number }}.${{ github.run_attempt }}
-  PATCH_REF: ${{ github.event.inputs.patch_ref || '1af139394ca4bd633ff2395cd42899789466fcf7' }}
+  TEG_YADRA: core-${{ github.event.inputs.core_ref || 'v1.14.1' }}-${{ github.run_number }}.${{ github.run_attempt }}
+  PATCH_REF: ${{ github.event.inputs.patch_ref || 'e213cfccd57f7a04cd9074cac9e2113835a5524d' }}
 
 jobs:
   build:
@@ -84,9 +89,12 @@ jobs:
       - name: Сборка под Windows
         working-directory: core
         run: |
+          # Версия как у Box (тег без ведущей v), иначе `sing-box version` пишет «unknown».
+          VERSION=$(git describe --tags | sed 's/^v//')
+          echo "версия ядра: $VERSION"
           GOOS=windows GOARCH=amd64 go build \
             -tags "with_utls,with_quic,with_gvisor,with_clash_api,with_wireguard" \
-            -trimpath -ldflags "-s -w" \
+            -trimpath -ldflags "-X github.com/sagernet/sing-box/constant.Version=$VERSION -s -w" \
             -o ../kelevra-core.exe ./cmd/sing-box
           ls -lh ../kelevra-core.exe
 
@@ -96,6 +104,18 @@ jobs:
             echo "транспорт xhttp внутри ядра: есть"
           else
             echo "ОШИБКА: ядро собрано без нашего транспорта"
+            exit 1
+          fi
+
+      # Правка 6 патча (Reality X25519MLKEM768): без неё Xray >= 26.9.8 на узлах
+      # это ядро не пустит. Такое ядро не выпускаем: сборка падает. Старый коммит
+      # патча без правки 6 этой проверки не пройдёт — так и задумано.
+      - name: Есть ли в ядре ML-KEM для Reality
+        run: |
+          if grep -q 'mlkemCurve' core/common/tls/reality_client.go; then
+            echo "Reality X25519MLKEM768: есть, ядро пройдёт Xray >= 26.9.8"
+          else
+            echo "::error::Reality X25519MLKEM768: НЕТ (патч $PATCH_REF без правки 6), с Xray >= 26.9.8 на узлах это ядро не подключится"
             exit 1
           fi
 
