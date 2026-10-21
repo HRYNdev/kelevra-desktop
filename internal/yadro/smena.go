@@ -260,6 +260,9 @@ type ItogPodgotovki struct {
 	// StarayaPodpis — сборка подписана прежним форматом (без тега): на
 	// замену не годится, архив не качается, пока её .sig не сменится.
 	StarayaPodpis bool
+	// OtvergnutoeNaMeste — отвергнутую сборку (Svezhaya) не удалось убрать
+	// с места ядра; уборка — при следующем подъёме.
+	OtvergnutoeNaMeste bool
 }
 
 // ErrNetYadra — ядра на машине нет: менять нечего, его поставит Zagruzit.
@@ -365,7 +368,11 @@ func (y *Yadro) reshitPodgotovku(sborka Sborka) (ItogPodgotovki, bool) {
 	itog := ItogPodgotovki{Svezhaya: sborka.Teg, Stoit: y.Versiya()}
 	if o, ok := y.chitatOtlozhennoe(); ok && o.Faza != "" {
 		// Идёт замена или проба: отложенное трогать нельзя.
-		itog.Otlozheno = true
+		if o.Faza == fazaOtkaz {
+			itog.Svezhaya, itog.OtvergnutoeNaMeste = o.Teg, true
+		} else {
+			itog.Otlozheno = true
+		}
 		return itog, false
 	}
 	v := y.chitatVersiyu()

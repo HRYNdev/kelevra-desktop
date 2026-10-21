@@ -48,6 +48,7 @@ func TestRev4OtklyuchitPokaBZhdyot(t *testing.T) {
 	// «Отключить»: как otklyuchit — поколение растёт, ядро гасится.
 	s.avtorezhimZamok.Lock()
 	s.avtorezhimPokolenie++
+	s.otklyucheniy++
 	s.avtorezhimZamok.Unlock()
 	close(razreshitA)
 	errA, errB := <-doneA, <-doneB
@@ -148,5 +149,21 @@ func TestRev4PanikaOtpuskaet(t *testing.T) {
 	}
 	if v := s.Yadro.Versiya(); v != "core-v2-1" {
 		t.Fatalf("после паники и второго подъёма версия %q", v)
+	}
+}
+
+// Пока подъём ждал, сменился режим автомата (не «Отключить»): своя причина.
+func TestSmenaRezhimaPokaZhdyot(t *testing.T) {
+	s := stendZamenyYadra(t)
+	s.zamokSmenyYadra.Lock()
+	done := make(chan error, 1)
+	go func() { done <- s.PodnyatZashchitu(context.Background()) }()
+	time.Sleep(150 * time.Millisecond)
+	s.avtorezhimZamok.Lock()
+	s.avtorezhimPokolenie++
+	s.avtorezhimZamok.Unlock()
+	s.zamokSmenyYadra.Unlock()
+	if err := <-done; !errors.Is(err, OshibkaRezhimSmenilsya) {
+		t.Fatalf("ошибка %v, ждал OshibkaRezhimSmenilsya", err)
 	}
 }

@@ -80,6 +80,8 @@ func (s *Sluzhba) prigotovitYadroRaz(ctx context.Context) error {
 		log.Printf("сверка ядра: свежая сборка %s на этой машине не поднималась — остаётся прежнее (%s)", itog.Svezhaya, slovoVersii(itog.Stoit))
 	case itog.Priznano:
 		log.Printf("сверка ядра: стоящее ядро — сборка %s (версия записана)", itog.Stoit)
+	case itog.OtvergnutoeNaMeste:
+		log.Printf("сверка ядра: отвергнутая сборка %s всё ещё на месте ядра — уберу при следующем подключении", itog.Svezhaya)
 	case itog.Otlozheno:
 		log.Printf("сверка ядра: стоит %s, свежая %s — подпись верна (ed25519), заменю при следующем подключении", slovoVersii(itog.Stoit), itog.Svezhaya)
 	case itog.Stoit == itog.Svezhaya:
@@ -155,6 +157,12 @@ func (s *Sluzhba) pokolenieAvtorezhima() uint64 {
 	return s.avtorezhimPokolenie
 }
 
+func (s *Sluzhba) chisloOtklyucheniy() uint64 {
+	s.avtorezhimZamok.Lock()
+	defer s.avtorezhimZamok.Unlock()
+	return s.otklyucheniy
+}
+
 // PodnyatZashchitu поднимает связь (podnyatZashchituRaz), перед этим ставит
 // отложенную сборку ядра, если она есть. Общее тело для ручки «Подключить» и
 // для авторежима.
@@ -165,6 +173,7 @@ func (s *Sluzhba) pokolenieAvtorezhima() uint64 {
 // ошибке, отмене или «Отключить».
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	pokolenie := s.pokolenieAvtorezhima()
+	otklyucheniy := s.chisloOtklyucheniy()
 	// Замок замены: с пробой он держится до её исхода (все прочие подъёмы
 	// ждут — ядро на пробе запускает только держатель), без пробы
 	// отпускается сразу. Ждать его дольше srokOzhidaniyaSmeny не стоит:
@@ -176,8 +185,12 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	// автомата): тогда связь не поднимаем.
 	if s.pokolenieAvtorezhima() != pokolenie {
 		s.zamokSmenyYadra.Unlock()
-		log.Printf("подъём связи не начат: пока шла проба нового ядра, решение о связи сменилось")
-		return OshibkaReshenieSmenilos
+		if s.chisloOtklyucheniy() != otklyucheniy {
+			log.Printf("подъём связи не начат: пока шла проба нового ядра, нажато «Отключить»")
+			return OshibkaReshenieSmenilos
+		}
+		log.Printf("подъём связи не начат: пока шла проба нового ядра, сменился режим автомата")
+		return OshibkaRezhimSmenilsya
 	}
 	smena := s.smenitYadroPeredPodyomom()
 	if smena == nil {
@@ -226,7 +239,13 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 	oerr := smena.Otkatit()
 	s.sbrositOtpechatokYadra()
 	if oerr != nil {
-		log.Printf("замена ядра: сборка %s не поднялась (%v), и прежнее ядро не вернуть: %v — поднимаю на последней подписанной сборке, кроме отвергнутых", smena.Teg, err, oerr)
+		if s.Yadro.EstBinar() {
+			// Упавшую сборку не удалось убрать с места ядра (фаза otkaz):
+			// подъём на ней бессмыслен, уборка повторится при следующем.
+			log.Printf("замена ядра: сборка %s не поднялась (%v), прежнее ядро не вернуть, и её файл не убрать с места ядра: %v — связь не поднимаю, повторю уборку при следующем подключении", smena.Teg, err, oerr)
+			return err
+		}
+		log.Printf("замена ядра: сборка %s не поднялась (%v), прежнее ядро не вернуть: %v — сборка отвергнута, поднимаю на последней подписанной сборке, кроме отвергнутых", smena.Teg, err, oerr)
 		if s.pokolenieAvtorezhima() != pokolenie || ctx.Err() != nil {
 			return err
 		}
@@ -258,8 +277,15 @@ var srokOzhidaniyaSmeny = 90 * time.Second
 // OshibkaIdetObnovlenieYadra — подъём не дождался исхода пробы нового ядра.
 var OshibkaIdetObnovlenieYadra = errors.New("Идёт обновление ядра Kelevra. Повторите подключение через минуту.")
 
-// OshibkaReshenieSmenilos — пока подъём ждал, связь отключили.
+// OshibkaReshenieSmenilos — пока подъём ждал, нажато «Отключить».
 var OshibkaReshenieSmenilos = errors.New("Подключение отменено: связь была отключена.")
+
+// OshibkaRezhimSmenilsya — пока подъём ждал, сменился режим автомата
+// (тумблер или решение автомата); подключением распоряжается он.
+var OshibkaRezhimSmenilsya = errors.New("Подключение отменено: изменён режим работы Kelevra.")
+
+// OshibkaYadroKachaetsya — ядро уже загружается другим подъёмом.
+var OshibkaYadroKachaetsya = errors.New("Идёт загрузка ядра Kelevra. Повторите подключение через минуту.")
 
 // vzyatZamokSmeny ждёт замок замены не дольше srokOzhidaniyaSmeny и не
 // дольше ctx.
