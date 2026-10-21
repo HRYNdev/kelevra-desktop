@@ -37,6 +37,19 @@ func ImyaArhiva() string {
 // Zagruzit скачивает ядро и кладёт его на место. Пользователю не нужно
 // ничего ставить руками: приложение приносит ядро себе само.
 func (y *Yadro) Zagruzit(ctx context.Context) error {
+	// Файла ядра нет, а прежнее подтверждённое лежит рядом (обрыв замены) —
+	// вернуть его, а не качать заново.
+	y.zamokSmeny.Lock()
+	if !y.EstBinar() && estFaylMesto(y.putPrezhnego()) {
+		err := y.vernutPrezhnee()
+		y.zamokSmeny.Unlock()
+		if err == nil {
+			log.Printf("файла ядра не было — вернул прежнее ядро, лежавшее рядом")
+			return nil
+		}
+	} else {
+		y.zamokSmeny.Unlock()
+	}
 	sborka, err := y.vybratSborku(ctx, &http.Client{Timeout: 20 * time.Second}, obnovlenie.TrebovatPodpis)
 	if err != nil {
 		return err

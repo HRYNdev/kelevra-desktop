@@ -51,7 +51,7 @@ type Yadro struct {
 	BratProbnye bool
 	// zamokSmeny — файлы ядра и замены (smena.go) меняет один за раз.
 	zamokSmeny sync.Mutex
-	Klient      *http.Client
+	Klient     *http.Client
 
 	zamok   sync.Mutex
 	derzh   *derzhatel
