@@ -27,7 +27,8 @@ Chromium — 168-252). Отдельно считает верхние/нижни
 сидят дефолтные кнопки-стрелки, если их не сняли явным display:none.
 
 Запуск:
-  python3 stend/oblik_polosa_prokrutki.py            (rc=0 зелёный, rc=1 красный)
+  python3 stend/oblik_polosa_prokrutki.py            (rc=0 зелёный, rc=1 красный,
+                                                        rc=3 — нет дисплея, не запускался)
   python3 stend/oblik_polosa_prokrutki.py --kontrol   (обязан покраснеть —
                                                         временно снимает
                                                         общий блок правил)
@@ -255,9 +256,28 @@ def sdelat_porchennuyu_kopiyu(rabochaya_papka):
     return rabochaya_papka
 
 
+# Код выхода «щуп не запускался» — не зелёный и не красный: сказать нечего.
+NE_ZAPUSKALSYA = 3
+
+
+def displey_est():
+    """Есть ли куда открыть headed-браузер. Windows и macOS рисуют на своём
+    рабочем столе; на остальных (линукс) нужен X-дисплей — свой Xvfb или
+    чужой DISPLAY. Без него Playwright падал трассой «Missing X server or
+    $DISPLAY» посреди замера; теперь щуп говорит это одной строкой."""
+    if sys.platform.startswith("win") or sys.platform == "darwin":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 def main():
     kontrol = "--kontrol" in sys.argv
     xvfb = zapustit_xvfb()
+    if not displey_est():
+        print("НЕ ЗАПУСКАЛСЯ: нет X-дисплея для headed-Chromium (headless полосу "
+              "прокрутки не рисует). Поставьте Xvfb и xdpyinfo (пакеты xvfb, "
+              "x11-utils) или задайте DISPLAY.", file=sys.stderr)
+        return NE_ZAPUSKALSYA
     try:
         papka = KOREN / ".stend" / "oblik_polosa"
         if kontrol:
