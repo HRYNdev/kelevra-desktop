@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
@@ -65,6 +66,10 @@ type Sluzhba struct {
 	// процесс, а тест должен управлять числом попыток и их исходом без
 	// живого ядра. По умолчанию nil — PodnyatZashchitu зовёт s.Yadro.Zapustit.
 	zapustitYadro func(context.Context) error
+	// slezhkaYadra — наблюдатель журнала ядра (zapisi_iz_yadra.go), пока
+	// он жив: через него main при остановке успевает записать место чтения
+	// (ZapomnitMestoChteniyaYadra), не дожидаясь горутины слежки.
+	slezhkaYadra atomic.Pointer[nablyudatelYadra]
 	// avtorezhimDlyaKnopki — точка подмены для тестов domaSeychas/podklyuchit:
 	// собирает *avtorezhim.Avtorezhim для одиночного доверенного захода
 	// кнопки «Подключиться» на подставных зондах, без настоящей сети. nil —
@@ -1012,8 +1017,12 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		// ядро, жив и он.
 		//
 		// Записка уже на диске: её пишет Zapustit, когда ядро ответило.
+		// Место чтения журнала ядра — до запуска новой копии: она начнёт
+		// с него, а эта уйдёт через os.Exit, не дожидаясь своей слежки.
+		s.ZapomnitMestoChteniyaYadra()
 		if err := s.PerezapuskPosleObnovleniya(put, pid); err != nil {
 			log.Printf("установка обновления: не поднял новую копию: %v", err)
+			s.prodolzhitSlezhkuZaYadrom()
 			return
 		}
 		if s.vyhod != nil {
@@ -3311,6 +3320,9 @@ func (s *Sluzhba) ustupitMestoRuchka(w http.ResponseWriter, r *http.Request) {
 	log.Printf("на машине запущена версия %s (работает %s) — гашу ядро и ухожу, место за ней", chuzhaya, podpiska.Versiya)
 	w.WriteHeader(http.StatusOK)
 	go func() {
+		// Место чтения журнала ядра — сразу: новая копия уже здесь и начнёт
+		// с него, а эта уйдёт через os.Exit.
+		s.ZapomnitMestoChteniyaYadra()
 		// Пауза — чтобы ответ успел уйти: тот же приём, что в PostavitNaydennoe.
 		time.Sleep(300 * time.Millisecond)
 		_ = s.OpustitZashchitu()
