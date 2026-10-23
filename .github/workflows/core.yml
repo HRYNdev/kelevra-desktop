@@ -10,11 +10,15 @@ name: core
 # не из-за апстрима: патч брался с головы kelevra-box, уже переписанной под
 # v1.14.1 (sing-quic 0.7.0, другой BBR).
 #
-# Пара по умолчанию: v1.14.1 и коммит kelevra-box 63e4a972 — патч с правками 6 и 7
-# (Reality шлёт X25519MLKEM768, без него Xray >= 26.9.8 на узлах ядро не пустит;
-# при этом у chrome ChaCha20 идёт первым — вид chrome + ML-KEM + AES первым на
-# части линий режется). Коммит пока живёт в ветке feat/mlkem-chacha kelevra-box;
-# после вливания поставить сюда коммит из dev, в котором обе правки есть. Одно ядро на оба клиента: сменить
+# Пара по умолчанию: v1.14.1 и коммит kelevra-box 922c9299 (ветка
+# feat/mlkem-po-priznaku) — патч с правками 6 и 7, привязанными к признаку профиля:
+# X25519MLKEM768 в Reality и ChaCha20 первым у chrome — только у выхода, где сервер
+# поставил tls.reality.support_x25519mlkem768: true. Без признака ClientHello как у
+# ядра без правок. Так новое рукопожатие включается сервером по людям и устройствам
+# (кольцом), а не всем, кто поставил ядро. Ядро до этого патча (в том числе сборки
+# с правками 6 и 7 без признака) на поле признака не стартует — сервер шлёт его
+# только ядрам с этим патчем (тег ядра в User-Agent). После вливания поставить сюда
+# коммит из dev, в котором правка есть. Одно ядро на оба клиента: сменить
 # ядро — менять тег и коммит патча вместе, здесь и в release.yml Box.
 on:
   workflow_dispatch:
@@ -26,7 +30,7 @@ on:
       patch_ref:
         description: "Коммит kelevra-box с патчем core-xhttp (SHA, совместимый с тегом выше)"
         required: false
-        default: "63e4a97222417daa842ca5c0fc792865872ab2e0"
+        default: "922c9299ca3409efdea1ab2c2bc358e94784e687"
       vypustit:
         description: "Выложить релиз core-* (иначе только сборка и проверки)"
         type: boolean
@@ -44,7 +48,7 @@ env:
   # кладёт второй архив под тот же тег. Клиент сравнивает теги по версии
   # (internal/yadro/versiya_sborki.go): core-v<semver>-<прогон>.<повтор>.
   TEG_YADRA: core-${{ github.event.inputs.core_ref || 'v1.14.1' }}-${{ github.run_number }}.${{ github.run_attempt }}
-  PATCH_REF: ${{ github.event.inputs.patch_ref || '63e4a97222417daa842ca5c0fc792865872ab2e0' }}
+  PATCH_REF: ${{ github.event.inputs.patch_ref || '922c9299ca3409efdea1ab2c2bc358e94784e687' }}
 
 jobs:
   build:
@@ -131,6 +135,27 @@ jobs:
             echo "::error::Reality ChaCha20 первым: НЕТ (патч $PATCH_REF без правки 7), ML-KEM с AES первым на части линий режется"
             exit 1
           fi
+
+      # Привязка правок 6 и 7 к признаку профиля. Ядро, которое шлёт ML-KEM без
+      # признака, включило бы новое рукопожатие всем разом — такое не выпускаем.
+      - name: ML-KEM только по признаку профиля
+        run: |
+          if grep -q 'SupportX25519MLKEM768' core/option/tls.go && grep -q 'if e.kelevraMLKEM {' core/common/tls/reality_client.go; then
+            echo "Reality X25519MLKEM768 и ChaCha первым: только по support_x25519mlkem768"
+          else
+            echo "::error::патч $PATCH_REF шлёт ML-KEM без признака профиля (нет support_x25519mlkem768) — новое рукопожатие ушло бы всем"
+            exit 1
+          fi
+
+      # Проверки ClientHello из патча (core-xhttp/tests): без признака — как апстрим
+      # поле за полем, с признаком — ML-KEM и ChaCha первым; признак читается из
+      # профиля разбором libbox. Сеть не нужна (net.Pipe).
+      - name: Проверки ClientHello
+        working-directory: core
+        run: |
+          cp ../app/core-xhttp/tests/reality_*_test.go common/tls/
+          go test -tags with_utls -count=1 ./common/tls/ -run 'TestRealityPriznak|TestRealityChaCha|TestRealityMLKEM|TestKelevraChaCha' -v | grep -E '^(=== RUN|--- |PASS|FAIL|ok)'
+          test "${PIPESTATUS[0]}" -eq 0
 
       - name: Упаковать как ждёт интерфейс
         run: |
