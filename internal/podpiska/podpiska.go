@@ -67,6 +67,11 @@ type Klient struct {
 	// что Pasport. nil — заголовка нет.
 	Pult       func() string
 	Sostoyanie func() string
+	// YadroTeg — тег сборки стоящего ядра (core-*), едет в User-Agent: ядро
+	// десктопа меняется отдельно от приложения, и только по нему сервер знает,
+	// что ядро шлёт в Reality (например, X25519MLKEM768). nil или пусто —
+	// User-Agent прежний.
+	YadroTeg func() string
 	// Сроки входа устройства; ноль — SrokSoedineniyaVhoda, SrokOtvetaVhoda,
 	// SrokPervogoProhoda (поля — для проверок).
 	SrokSoedineniyaVhoda time.Duration
@@ -104,6 +109,22 @@ func (k *Klient) http() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
+// tegYadraVAgent — тег сборки ядра, который можно положить в User-Agent как есть.
+var tegYadraVAgent = regexp.MustCompile(`^core-v[0-9A-Za-z.\-]{1,60}$`)
+
+// agent — User-Agent запросов к серверу: "Kelevra-Desktop/<версия> (windows)",
+// со стоящим ядром — "Kelevra-Desktop/<версия> (windows; core-v1.14.1-7.1)".
+// Тег не по образцу core.yml не шлём: заголовок однострочный ASCII.
+func agent(versiya string, yadroTeg func() string) string {
+	ua := "Kelevra-Desktop/" + versiya + " (windows"
+	if yadroTeg != nil {
+		if t := yadroTeg(); tegYadraVAgent.MatchString(t) {
+			ua += "; " + t
+		}
+	}
+	return ua + ")"
+}
+
 func (k *Klient) zapros(ctx context.Context, url string) (*http.Request, error) {
 	return k.zaprosMetodom(ctx, http.MethodGet, url)
 }
@@ -113,7 +134,7 @@ func (k *Klient) zaprosMetodom(ctx context.Context, metod, url string) (*http.Re
 	if err != nil {
 		return nil, err
 	}
-	r.Header.Set("User-Agent", "Kelevra-Desktop/"+Versiya+" (windows)")
+	r.Header.Set("User-Agent", agent(Versiya, k.YadroTeg))
 	// x-hwid/x-device-os остаются: сервер понимает их как запасной путь, а
 	// снести их отсюда значит на день-другой (пока обновление доедет до всех
 	// копий) оставить старые клиенты вовсе безымянными.

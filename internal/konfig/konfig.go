@@ -92,6 +92,11 @@ type Kartina struct {
 	// VhodSluzhby — адрес входа службы (host:port), если он вписан в конфиг
 	// (см. Vybor.VhodSluzhby); пусто — не вписан.
 	VhodSluzhby string `json:"vhod_sluzhby,omitempty"`
+	// FakeipBylo — диапазон fakeip из профиля, если клиент увёл свой fakeip
+	// от зоны домашнего роутера (dns.go, DiapazonFakeipKlienta); пусто — не
+	// уводил. Ради журнала: «missing fakeip record» без этой строки не с чем
+	// сверить.
+	FakeipBylo string `json:"fakeip_bylo,omitempty"`
 }
 
 // ClashPoUmolchaniyu — адрес, если профиль про Clash API молчит.
@@ -347,6 +352,9 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// правило про fakeip в боевом профиле — именно такое), и решать про
 	// fakeip надо по тому, что от dns осталось, а не по тому, что было.
 	soglasovatFakeip(d)
+	// После soglasovatFakeip: переносить диапазон есть смысл, только если
+	// сервер fakeip пережил согласование. Разбор — dns.go, DiapazonFakeipKlienta.
+	k.FakeipBylo = razvestiFakeipSRouterom(d)
 	okrepitPryamoyResolverVTunnele(d)
 	vpisatSekretClash(d, v.ClashSekret)
 	k.ClashAdres, k.ClashSekret = clash(d)
