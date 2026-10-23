@@ -496,13 +496,23 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	// слова «mtu» в нём не было ни разу за всю историю, про наборы правил он
 	// не писал ничего вовсе, и разбирать жалобы «сайты по 10 секунд» и
 	// «списки не обновляются» было буквально нечем.
-	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s%s",
-		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), pripiskaVhoda(k), zametka(k.Zametka))
+	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s%s%s",
+		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), pripiskaVhoda(k), pripiskaFakeip(k), zametka(k.Zametka))
 	return nil
 }
 
 // pripiskaVhoda — вход службы для строки журнала (запасной путь через
 // туннель): без него по журналу не понять, мог ли повтор вообще случиться.
+// pripiskaFakeip — куда клиент увёл свой fakeip от зоны домашнего роутера
+// (konfig.DiapazonFakeipKlienta). Без неё «missing fakeip record» в журнале
+// ядра не сверить с тем, какой диапазон ядро на самом деле держало.
+func pripiskaFakeip(k konfig.Kartina) string {
+	if k.FakeipBylo == "" {
+		return ""
+	}
+	return ", fakeip " + konfig.DiapazonFakeipKlienta + " (в профиле " + k.FakeipBylo + ")"
+}
+
 func pripiskaVhoda(k konfig.Kartina) string {
 	if k.VhodSluzhby == "" {
 		return ", запасного пути через туннель нет"

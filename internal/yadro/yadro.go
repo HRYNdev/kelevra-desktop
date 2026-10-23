@@ -50,6 +50,11 @@ type Yadro struct {
 	// у человека пробное ядро не ставится ни новой установке, ни на замену.
 	// Подпись требуется и для пробных.
 	BratProbnye bool
+	// SbrasyvatKeshDns — сбрасывать кеш DNS системы, когда ядро встало и когда
+	// погашено (dns_kesh_windows.go). Ставит только служба (novoeYadro):
+	// проверки, гоняющие настоящее ядро, не должны трогать кеш машины, на
+	// которой их запускают.
+	SbrasyvatKeshDns bool
 	// zamokSmeny — файлы ядра и замены (smena.go) меняет один за раз.
 	zamokSmeny sync.Mutex
 	// probaVydana — Smena уже у одного вызывающего (под zamokSmeny).
@@ -288,6 +293,9 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 					Kogda:       time.Now(),
 				})
 				log.Printf("ядро ответило: связь работает")
+				if y.SbrasyvatKeshDns {
+					sbrositKeshDns("ядро встало")
+				}
 				return nil
 			}
 		}
@@ -304,6 +312,11 @@ func (y *Yadro) Ostanovit() error {
 		return nil
 	}
 	log.Printf("останавливаю ядро (pid %d, %s)", d.pid, rodYadra(d))
+	if y.SbrasyvatKeshDns {
+		// После того как ядро погасло (defer): ответы, полученные через
+		// него, иначе дотекают в кеше Windows до конца TTL.
+		defer sbrositKeshDns("ядро погашено")
+	}
 	// Записку снимаем ДО того, как гасим: если нас убьют посреди остановки,
 	// преемница не должна получить приглашение принять ядро, которого уже нет.
 	UbratPeredachu(y.Papka)
