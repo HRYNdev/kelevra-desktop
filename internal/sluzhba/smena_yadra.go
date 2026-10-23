@@ -34,6 +34,9 @@ func novoeYadro() *yadro.Yadro {
 		Papka:       hranenie.PapkaYadra(),
 		Spisok:      os.Getenv("KELEVRA_RELIZY_YADRA"),
 		BratProbnye: os.Getenv("KELEVRA_YADRO_PROBNYE") == "1",
+		// Кеш DNS системы — на каждом подъёме и гашении ядра: разбор 23.10,
+		// konfig.DiapazonFakeipKlienta и yadro/dns_kesh_windows.go.
+		SbrasyvatKeshDns: true,
 	}
 }
 
