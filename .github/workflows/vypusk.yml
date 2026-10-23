@@ -84,9 +84,24 @@ jobs:
           # r.Prerelease), поэтому непроверенное живьём не уезжает всей семье
           # само, а тот, кто взялся проверять, берёт его со страницы релизов,
           # а не из вложений к сборке.
+          #
+          # Кольцо: строка «kolco: proba» в аннотации тега делает предварительным
+          # и выпуск без суффикса. Такую сборку получают только устройства, кому
+          # её назначил пульт (ссылка на файл этого релиза); GitHub Latest
+          # остаётся прежним. Всем — потом той же сборкой, без пересборки:
+          # gh release edit <тег> --prerelease=false --latest.
+          git fetch --force origin "refs/tags/$TEG:refs/tags/$TEG"
+          KOLCO=false
+          if git tag -l --format='%(contents)' "$TEG" | grep -qx 'kolco: proba'; then
+            KOLCO=true
+          fi
           case "$VERSIYA" in
             *-*) echo "predvaritelnyy=true" >> "$GITHUB_OUTPUT"; echo "выпуск предварительный" ;;
-            *)   echo "predvaritelnyy=false" >> "$GITHUB_OUTPUT" ;;
+            *)   if [ "$KOLCO" = true ]; then
+                   echo "predvaritelnyy=true" >> "$GITHUB_OUTPUT"; echo "выпуск предварительный: кольцо (пульт), не Latest"
+                 else
+                   echo "predvaritelnyy=false" >> "$GITHUB_OUTPUT"
+                 fi ;;
           esac
           echo "выпускаю $VERSIYA по тегу $TEG"
 
@@ -139,7 +154,7 @@ jobs:
           # %(contents) тогда отдаёт сообщение коммита, а не аннотацию.
           # Перетягиваем настоящий тег с сервера, перезаписав локальный.
           git fetch --force origin "refs/tags/$TEG:refs/tags/$TEG"
-          git tag -l --format='%(contents)' "$TEG" > build/opisanie.md
+          git tag -l --format='%(contents)' "$TEG" | grep -vx 'kolco: proba' > build/opisanie.md || true
           if [ ! -s build/opisanie.md ]; then
             echo "Сборка $TEG." > build/opisanie.md
           fi
