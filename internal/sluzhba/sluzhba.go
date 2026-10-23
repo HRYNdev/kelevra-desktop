@@ -453,6 +453,8 @@ func Novaya() (*Sluzhba, error) {
 	// Паспорт назначаем ПОСЛЕ сборки: он читает саму службу (режим, права,
 	// возраст профиля), поэтому раньше её существования не собирается.
 	s.Podpiska.Pasport = s.SobratPasport
+	// Тег стоящего ядра — в User-Agent: по нему сервер знает, что умеет ядро.
+	s.Podpiska.YadroTeg = s.Yadro.Versiya
 	// Подписка ходит с запасным путём через туннель (zapasnoy_put.go).
 	s.Podpiska.HTTP = s.klientSeti(20 * time.Second)
 	// Пульт с диска (слой 2), сводка /info с диска, заголовки X-Pult и X-Sostoyanie.

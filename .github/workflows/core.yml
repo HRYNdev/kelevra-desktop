@@ -10,10 +10,11 @@ name: core
 # не из-за апстрима: патч брался с головы kelevra-box, уже переписанной под
 # v1.14.1 (sing-quic 0.7.0, другой BBR).
 #
-# Пара по умолчанию: v1.14.1 и коммит kelevra-box e213cfcc — патч с правкой 6
-# (Reality шлёт X25519MLKEM768, без неё Xray >= 26.9.8 на узлах ядро не пустит).
-# Коммит пока живёт в ветке PR #53 kelevra-box; после вливания поставить сюда
-# коммит из dev, в котором эта правка есть. Одно ядро на оба клиента: сменить
+# Пара по умолчанию: v1.14.1 и коммит kelevra-box 63e4a972 — патч с правками 6 и 7
+# (Reality шлёт X25519MLKEM768, без него Xray >= 26.9.8 на узлах ядро не пустит;
+# при этом у chrome ChaCha20 идёт первым — вид chrome + ML-KEM + AES первым на
+# части линий режется). Коммит пока живёт в ветке feat/mlkem-chacha kelevra-box;
+# после вливания поставить сюда коммит из dev, в котором обе правки есть. Одно ядро на оба клиента: сменить
 # ядро — менять тег и коммит патча вместе, здесь и в release.yml Box.
 on:
   workflow_dispatch:
@@ -25,7 +26,7 @@ on:
       patch_ref:
         description: "Коммит kelevra-box с патчем core-xhttp (SHA, совместимый с тегом выше)"
         required: false
-        default: "e213cfccd57f7a04cd9074cac9e2113835a5524d"
+        default: "63e4a97222417daa842ca5c0fc792865872ab2e0"
       vypustit:
         description: "Выложить релиз core-* (иначе только сборка и проверки)"
         type: boolean
@@ -43,7 +44,7 @@ env:
   # кладёт второй архив под тот же тег. Клиент сравнивает теги по версии
   # (internal/yadro/versiya_sborki.go): core-v<semver>-<прогон>.<повтор>.
   TEG_YADRA: core-${{ github.event.inputs.core_ref || 'v1.14.1' }}-${{ github.run_number }}.${{ github.run_attempt }}
-  PATCH_REF: ${{ github.event.inputs.patch_ref || 'e213cfccd57f7a04cd9074cac9e2113835a5524d' }}
+  PATCH_REF: ${{ github.event.inputs.patch_ref || '63e4a97222417daa842ca5c0fc792865872ab2e0' }}
 
 jobs:
   build:
@@ -116,6 +117,18 @@ jobs:
             echo "Reality X25519MLKEM768: есть, ядро пройдёт Xray >= 26.9.8"
           else
             echo "::error::Reality X25519MLKEM768: НЕТ (патч $PATCH_REF без правки 6), с Xray >= 26.9.8 на узлах это ядро не подключится"
+            exit 1
+          fi
+
+      # Правка 7 патча: с ML-KEM у chrome ChaCha20 первым. Ядро с ML-KEM, но без
+      # неё, на части линий режется окнами (вид chrome + ML-KEM + AES первым) —
+      # такое тоже не выпускаем.
+      - name: Есть ли в ядре ChaCha20 первым при ML-KEM
+        run: |
+          if grep -q 'kelevraRealityChaCha' core/common/tls/reality_client.go && test -f core/common/tls/kelevra_reality_chacha.go; then
+            echo "Reality ChaCha20 первым при X25519MLKEM768: есть"
+          else
+            echo "::error::Reality ChaCha20 первым: НЕТ (патч $PATCH_REF без правки 7), ML-KEM с AES первым на части линий режется"
             exit 1
           fi
 

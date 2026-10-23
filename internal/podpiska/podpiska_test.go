@@ -186,3 +186,32 @@ func TestBezIstochnikaRashodaZagolovkaNet(t *testing.T) {
 		t.Fatalf("клиент без источника расхода всё же поставил X-Device-Traffic")
 	}
 }
+
+func TestAgentSTegomYadra(t *testing.T) {
+	for _, s := range []struct {
+		teg  func() string
+		zhdu string
+	}{
+		{nil, "Kelevra-Desktop/1.2.3 (windows)"},
+		{func() string { return "" }, "Kelevra-Desktop/1.2.3 (windows)"},
+		{func() string { return "core-v1.14.1-7.1" }, "Kelevra-Desktop/1.2.3 (windows; core-v1.14.1-7.1)"},
+		{func() string { return "core-v1.14.0-beta.4-1" }, "Kelevra-Desktop/1.2.3 (windows; core-v1.14.0-beta.4-1)"},
+		{func() string { return "core-v1.14.1-7.1\r\nX-Evil: 1" }, "Kelevra-Desktop/1.2.3 (windows)"},
+		{func() string { return "sing-box 1.14.1" }, "Kelevra-Desktop/1.2.3 (windows)"},
+	} {
+		if est := agent("1.2.3", s.teg); est != s.zhdu {
+			t.Errorf("есть %q, ждём %q", est, s.zhdu)
+		}
+	}
+}
+
+func TestZaprosShlyotTegYadra(t *testing.T) {
+	k := &Klient{YadroTeg: func() string { return "core-v1.14.1-7.1" }}
+	r, err := k.zapros(context.Background(), "https://example.test/k/ABC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ua := r.Header.Get("User-Agent"); !strings.HasSuffix(ua, "(windows; core-v1.14.1-7.1)") || !strings.HasPrefix(ua, "Kelevra-Desktop/") {
+		t.Fatalf("User-Agent без тега ядра: %q", ua)
+	}
+}
