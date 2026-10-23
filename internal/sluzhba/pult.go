@@ -64,6 +64,7 @@ func reestrDesktop() pult.Reestr {
 		{Imya: "obnovleniya.tiho", Tip: pult.Flag, Umolchanie: "true", Gde: "тихая установка найденного обновления (postavitTiho)"},
 		{Imya: "obnovleniya.kanal", Tip: pult.Vybor, Varianty: []string{"obychnyy", "proba", "stop"}, Umolchanie: "obychnyy", Gde: "proba — только сборка из пульта, stop — не обновляться; GitHub не спрашивается"},
 		{Imya: "funkcii.avtorezhim", Tip: pult.Flag, Umolchanie: "true", Gde: "автомат дома/не дома (выключатель, сразу)"},
+		{Imya: klyuchProbnyeYadra, Tip: pult.Flag, Umolchanie: "false", Gde: "брать пробные (prerelease) сборки ядра на сверке ядра (bratProbnyeYadra); выпуск ядра кольцом"},
 		{Imya: "kanal.dolgiy_opros", Tip: pult.Flag, Umolchanie: "false", Gde: "долгий опрос …/pult/zhdat (SleditZaDolgimOprosom)"},
 
 		// Периоды и сроки службы.

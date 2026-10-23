@@ -15,6 +15,7 @@
 | `obnovleniya.tiho` | bool | — | true | тихая установка найденного обновления (postavitTiho) |
 | `obnovleniya.kanal` | выбор | obychnyy \| proba \| stop | obychnyy | proba — только сборка из пульта, stop — не обновляться; GitHub не спрашивается |
 | `funkcii.avtorezhim` | bool | — | true | автомат дома/не дома (выключатель, сразу) |
+| `yadro.probnye` | bool | — | false | брать пробные (prerelease) сборки ядра на сверке ядра (bratProbnyeYadra); выпуск ядра кольцом |
 | `kanal.dolgiy_opros` | bool | — | false | долгий опрос …/pult/zhdat (SleditZaDolgimOprosom) |
 | `profil.period_min` | int | 15–1440 | obnovlyat_min из настроек (60), не меньше 15 | плановое обновление профиля и сводки (ObnovlyatProfil) |
 | `obnovleniya.period_proverki_min` | int | 30–1440 | 240 | фоновая проверка обновления (SleditZaObnovleniem) |
