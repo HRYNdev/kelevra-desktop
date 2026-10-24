@@ -19,7 +19,7 @@
 | `profil.period_min` | int | 15–1440 | obnovlyat_min из настроек (60), не меньше 15 | плановое обновление профиля и сводки (ObnovlyatProfil) |
 | `obnovleniya.period_proverki_min` | int | 30–1440 | 240 | фоновая проверка обновления (SleditZaObnovleniem) |
 | `obnovleniya.srok_proverki_s` | int | 5–300 | 30 | срок ответа на фоновую проверку (srokFonovoyProverkiObnovleniya) |
-| `obnovleniya.srok_knopki_s` | int | 2–60 | 6 | срок ответа на «Проверить обновление» (srokProverkiObnovleniya) |
+| `obnovleniya.srok_knopki_s` | int | 2–60 | 25 | срок ответа на «Проверить обновление» (srokProverkiObnovleniya) |
 | `obnovleniya.srok_ustanovki_s` | int | 30–1800 | 180 | срок скачивания сборки (srokUstanovkiObnovleniya) |
 | `zhurnal.povtor_posle_otkaza_min` | int | 5–1440 | 60 | повтор журнала после оборванной посылки (PovtorPosleOtkaza) |
 | `zhurnal.povtor_do_peredachi_min` | int | 1–60 | 3 | повтор журнала после отказа до первого байта |

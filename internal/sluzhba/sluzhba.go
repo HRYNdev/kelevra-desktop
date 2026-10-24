@@ -201,9 +201,9 @@ type Sluzhba struct {
 	// поднимали. Окно показывает строку в состоянии «Нет подключения».
 	otkaz string
 
-	// naydennoeObnovlenie — находка ФОНОВОЙ проверки (SleditZaObnovleniem,
-	// obnovlenieProveritRuchka), не ручного нажатия кнопки: та отвечает
-	// прямо в HTTP-ответ и не запоминает себя. nil — фон ничего не нашёл
+	// naydennoeObnovlenie — находка фоновой проверки (SleditZaObnovleniem,
+	// obnovlenieProveritRuchka) и, с 24.10, удачного ручного нажатия
+	// (obnovlenieRuchka: его ответ окну может и не дойти — см. её комментарий). nil — фон ничего не нашёл
 	// (или ещё не спрашивал). Видна человеку через /api/sostoyanie тем же
 	// полем, что и остальная правда о приложении — молчащая в логе находка
 	// человеку не видна вообще.
@@ -227,6 +227,20 @@ type Sluzhba struct {
 	// выше: второй тычок в пузырь, пока первый ещё качает найденную сборку, не
 	// должен звать obnovlenie.Postavit второй раз (см. PostavitNaydennoe).
 	idetUstanovkaObnovleniya bool
+	// ustanovkaKonec — закрывается, когда ИДУЩАЯ установка кончилась любым
+	// исходом; ustanovkaItogVersiya/ustanovkaItogOshibka — этот исход. Нужны
+	// второму тычку: пока тихая установка (postavitTiho) уже качает, кнопка
+	// «ОБНОВИТЬ» в окне раньше получала «установка уже идёт», и окно рисовало
+	// это бедой «Обновление не установлено», хотя версия вставала (ноут 01-3,
+	// 24.10). Теперь второй тычок ждёт итога первой установки и отвечает им.
+	ustanovkaKonec       chan struct{}
+	ustanovkaItogVersiya string
+	ustanovkaItogOshibka error
+	// postavlenoObnovlenie — версия, которая уже встала на диск: эта копия
+	// вот-вот уйдёт на перезапуск (пауза ~300 мс в PostavitNaydennoe). Пока
+	// поле не пусто, повторный тычок отвечает успехом, а не ставит ещё раз,
+	// и /api/sostoyanie говорит окну «установлено, перезапускается».
+	postavlenoObnovlenie string
 	// posleObnovleniya — номер версии, которую человеку надо показать в окне
 	// разъяснением, и признак того, что показывать вообще надо. Гасится
 	// первым же опросом состояния (см. Sostoyanie): один раз, не навсегда.
@@ -595,11 +609,14 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 }
 
 // srokProverkiObnovleniya — сколько ждём ответа GitHub на нажатие «Проверить
-// обновление» в окне. Короче обычного (obnovlenie идёт в фоне при старте) —
-// тут человек стоит и смотрит на подпись «Проверяем…».
+// обновление» в окне. Короче фонового — тут человек стоит и смотрит на
+// подпись «Проверяем…», — но не 6 секунд, как было до 24.10: список релизов
+// больше 90 штук и идёт страницами, через туннель GitHub отвечает около
+// 10 секунд, и шесть секунд обрывали проверку на полуслове, когда фоновая с
+// тем же списком проходила (ноут 01-3, 24.10).
 // var, а не const: тест на таймаут (obnovlenie_test.go) сокращает срок,
-// иначе пришлось бы ждать настоящие 6 секунд на каждый прогон.
-var srokProverkiObnovleniya = 6 * time.Second
+// иначе пришлось бы ждать настоящие секунды на каждый прогон.
+var srokProverkiObnovleniya = 25 * time.Second
 
 // srokFonovoyProverkiObnovleniya — тот же вопрос GitHub, но фоном (тикер и
 // толчок от другой копии): тут никто не стоит и не смотрит, а до
@@ -653,19 +670,53 @@ func prichinaBedyObnovleniya(err error) string {
 // Ошибка сети — обычное дело для приложения, которое чинит сеть: отдаём её
 // строкой, а не роняем ручку, чтобы окно не повисло (стенд гоняется без
 // сети нарочно, см. stend/oblik_snimok.py).
+//
+// Контекст — свой, НЕ r.Context() (ноут 01-3, 24.10: «список релизов не
+// разобрать: context canceled» на двух нажатиях подряд). Запрос окна рвётся
+// по своим причинам — окно перешло на новый адрес службы, закрылось,
+// перезагрузило страницу, — и проверка обрывалась на полуслове, а человек
+// видел «не удалось проверить». Теперь она доходит до конца сама, а находку
+// кладёт туда же, куда фоновая (naydennoeObnovlenie): даже если ответ этому
+// запросу уже некому отдать, окно увидит её следующим опросом /api/sostoyanie
+// и следующее нажатие поставит её.
 func (s *Sluzhba) obnovlenieRuchka(w http.ResponseWriter, r *http.Request) {
 	srok := s.pult.Dlitelnost("obnovleniya.srok_knopki_s", time.Second, srokProverkiObnovleniya)
-	ctx, otmena := context.WithTimeout(r.Context(), srok)
+	ctx, otmena := context.WithTimeout(context.Background(), srok)
 	defer otmena()
 	o := otvetObnovleniya{Tekushchaya: podpiska.Versiya}
 	n, err := s.naytiObnovlenie(ctx, s.klientSeti(srok))
 	if err != nil {
 		log.Printf("проверка обновления по нажатию: %v", err)
 		o.Beda = prichinaBedyObnovleniya(err)
-	} else if n != nil {
-		o.Novaya = n.Versiya
+	} else {
+		if n != nil {
+			o.Novaya = n.Versiya
+			log.Printf("проверка обновления по нажатию: найдена версия %s", n.Versiya)
+		}
+		s.zapomnitNahodku(n)
+	}
+	if r.Context().Err() != nil {
+		log.Printf("проверка обновления по нажатию: окно ушло, не дождавшись ответа; итог сохранён для /api/sostoyanie")
 	}
 	otdat(w, o, nil)
+}
+
+// zapomnitNahodku — итог удачной проверки (фоновой или по нажатию) туда, где
+// его видят окно (/api/sostoyanie) и значок трея (MetkaObnovleniya). nil —
+// «версия и так свежая», это тоже правда, и прежнюю находку она снимает.
+func (s *Sluzhba) zapomnitNahodku(n *obnovlenie.Novaya) {
+	s.zamok.Lock()
+	s.naydennoeObnovlenie = n
+	s.zamok.Unlock()
+	if s.MetkaObnovleniya != nil {
+		// СОСТОЯНИЕ, а не событие: и находку, и её исчезновение (версия и
+		// так свежая) значок обязан отразить — см. поле MetkaObnovleniya.
+		if n != nil {
+			s.MetkaObnovleniya(n.Versiya)
+		} else {
+			s.MetkaObnovleniya("")
+		}
+	}
 }
 
 // obnovlenieProveritRuchka — тихий толчок фоновой проверке от ДРУГОЙ копии
@@ -732,18 +783,7 @@ func (s *Sluzhba) proveritObnovlenieRaz(ctx context.Context) error {
 		}
 		return err
 	}
-	s.zamok.Lock()
-	s.naydennoeObnovlenie = n // может стать снова nil — «версия и так свежая», это тоже правда
-	s.zamok.Unlock()
-	if s.MetkaObnovleniya != nil {
-		// СОСТОЯНИЕ, а не событие: и находку, и её исчезновение (версия и
-		// так свежая) значок обязан отразить — см. поле MetkaObnovleniya.
-		if n != nil {
-			s.MetkaObnovleniya(n.Versiya)
-		} else {
-			s.MetkaObnovleniya("")
-		}
-	}
+	s.zapomnitNahodku(n) // может стать снова nil — «версия и так свежая», это тоже правда
 	if n != nil {
 		log.Printf("фоновая проверка обновления: найдена версия %s", n.Versiya)
 		s.povestitEsliNovaya(n.Versiya)
@@ -865,7 +905,7 @@ func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
 		return
 	}
 	s.zamok.Lock()
-	uzhe := s.idetUstanovkaObnovleniya
+	uzhe := s.idetUstanovkaObnovleniya || s.postavlenoObnovlenie != ""
 	stavili := s.tihoStavili
 	s.zamok.Unlock()
 	if uzhe {
@@ -1001,28 +1041,42 @@ func (s *Sluzhba) obnovleniePostavitRuchka(w http.ResponseWriter, r *http.Reques
 // комментарий). Тычок человека — вот то согласие, которого не хватало.
 //
 // idetUstanovkaObnovleniya под тем же zamok, что и naydennoeObnovlenie: второй
-// тычок, пока первый ещё качает, тихо получает «установка уже идёт» вместо
-// того, чтобы звать obnovlenie.Postavit второй раз (риск наложения записи —
-// см. комментарий Postavit про CreateTemp на процесс).
+// тычок, пока первый ещё качает, не зовёт obnovlenie.Postavit второй раз (риск
+// наложения записи — см. комментарий Postavit про CreateTemp на процесс), а
+// ЖДЁТ итога идущей установки и отвечает им (zhdatIdushchuyuUstanovku). До
+// 24.10 он получал ошибку «установка уже идёт», и окно, нажатое во время
+// тихой установки (postavitTiho), рисовало её бедой при вставшей версии.
 //
 // Любая неудача — ничего не гасим и не трогаем: эта копия продолжает жить
 // старой версией, человек может нажать «Проверить обновление» и попробовать
 // снова. Успех — ядро НЕ гасим (новая копия его примет), поднимаем смену
 // (PerezapuskPosleObnovleniya)
 // и завершаем процесс, — с той же паузой ~300мс, чтобы HTTP-ответ успел уйти.
-func (s *Sluzhba) PostavitNaydennoe() (string, error) {
+func (s *Sluzhba) PostavitNaydennoe() (versiya string, oshibka error) {
+	srokUstanovki := s.pult.Dlitelnost("obnovleniya.srok_ustanovki_s", time.Second, srokUstanovkiObnovleniya)
 	s.zamok.Lock()
+	if v := s.postavlenoObnovlenie; v != "" {
+		// Версия уже на диске, копия уходит на перезапуск: ставить второй
+		// раз нечего, а ответ «не вышло» был бы враньём.
+		s.zamok.Unlock()
+		log.Printf("установка обновления: версия %s уже встала, копия перезапускается", v)
+		return v, nil
+	}
+	if s.idetUstanovkaObnovleniya {
+		konec := s.ustanovkaKonec
+		s.zamok.Unlock()
+		log.Printf("установка обновления: уже идёт — жду её итога, второй раз не ставлю")
+		return s.zhdatIdushchuyuUstanovku(konec, srokUstanovki)
+	}
 	if s.naydennoeObnovlenie == nil {
 		s.zamok.Unlock()
 		return "", fmt.Errorf("обновления нет: сперва проверка")
 	}
-	if s.idetUstanovkaObnovleniya {
-		s.zamok.Unlock()
-		return "", fmt.Errorf("установка уже идёт")
-	}
 	n := *s.naydennoeObnovlenie
 	s.idetUstanovkaObnovleniya = true
 	s.skachanoObnovleniya, s.vsegoObnovleniya = 0, 0
+	konec := make(chan struct{})
+	s.ustanovkaKonec = konec
 	s.zamok.Unlock()
 	defer func() {
 		s.zamok.Lock()
@@ -1030,7 +1084,13 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		// Ход гасим вместе с замком — на ЛЮБОМ исходе, включая обрыв
 		// посреди скачивания: доля пережившей себя загрузки — враньё.
 		s.skachanoObnovleniya, s.vsegoObnovleniya = 0, 0
+		// Итог — до закрытия konec: ждущий тычок читает его сразу после.
+		s.ustanovkaItogVersiya, s.ustanovkaItogOshibka = versiya, oshibka
+		if oshibka == nil && versiya != "" {
+			s.postavlenoObnovlenie = versiya
+		}
 		s.zamok.Unlock()
+		close(konec)
 	}()
 
 	put, err := obnovlenie.PutSebya()
@@ -1038,7 +1098,6 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		log.Printf("установка обновления по тычку: не знаю, где лежу: %v", err)
 		return "", fmt.Errorf("путь к программе не определён: %w", err)
 	}
-	srokUstanovki := s.pult.Dlitelnost("obnovleniya.srok_ustanovki_s", time.Second, srokUstanovkiObnovleniya)
 	ctx, otmena := context.WithTimeout(context.Background(), srokUstanovki)
 	defer otmena()
 	// Доля скачанного — единственное, что окно может показать человеку, пока
@@ -1088,6 +1147,11 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		s.ZapomnitMestoChteniyaYadra()
 		if err := s.PerezapuskPosleObnovleniya(put, pid); err != nil {
 			log.Printf("установка обновления: не поднял новую копию: %v", err)
+			// Перезапуска не будет: окну больше нельзя говорить
+			// «перезапускается», а следующий тычок вправе ставить снова.
+			s.zamok.Lock()
+			s.postavlenoObnovlenie = ""
+			s.zamok.Unlock()
 			s.prodolzhitSlezhkuZaYadrom()
 			return
 		}
@@ -1098,6 +1162,32 @@ func (s *Sluzhba) PostavitNaydennoe() (string, error) {
 		os.Exit(0)
 	}()
 	return n.Versiya, nil
+}
+
+// zhdatIdushchuyuUstanovku — второй тычок во время идущей установки: ждём её
+// итога (konec закрывает PostavitNaydennoe первого тычка) и отвечаем им же.
+// Успех первой — успех и второго: версия на диске, копия перезапускается.
+// Срок — тот же, что у самой установки, с запасом: первая сама оборвётся
+// по своему сроку раньше и закроет konec.
+func (s *Sluzhba) zhdatIdushchuyuUstanovku(konec <-chan struct{}, srok time.Duration) (string, error) {
+	if konec == nil {
+		return "", fmt.Errorf("установка уже идёт")
+	}
+	t := time.NewTimer(srok + 10*time.Second)
+	defer t.Stop()
+	select {
+	case <-konec:
+	case <-t.C:
+		return "", fmt.Errorf("установка ещё идёт, итога не дождался")
+	}
+	s.zamok.Lock()
+	v, err := s.ustanovkaItogVersiya, s.ustanovkaItogOshibka
+	s.zamok.Unlock()
+	if err != nil {
+		return "", err
+	}
+	log.Printf("установка обновления: идущая установка кончилась успехом (%s), отвечаю им", v)
+	return v, nil
 }
 
 // ZadatVyhod меняет способ, которым копия уходит после того, как поставила
@@ -1690,6 +1780,15 @@ type otvetSostoyaniya struct {
 	// поэтому доля и считается от ContentLength живого соединения
 	// (obnovlenie.Hod), а не от размера релиза из списка GitHub.
 	ObnovlenieDolya float64 `json:"obnovlenie_dolya,omitempty"`
+	// ObnovlenieIdet — установка найденной версии идёт прямо сейчас (тихая,
+	// postavitTiho, или по тычку). Окно в это время не предлагает «ОБНОВИТЬ»,
+	// а показывает ход: раньше диалог звал нажать, нажатие получало «установка
+	// уже идёт», и окно рисовало это бедой (ноут 01-3, 24.10).
+	ObnovlenieIdet bool `json:"obnovlenie_idet,omitempty"`
+	// ObnovleniePostavleno — версия уже на диске, эта копия уходит на
+	// перезапуск: окно пишет «Готово, перезапускается…» и обрыв связи после
+	// этого бедой не считает.
+	ObnovleniePostavleno string `json:"obnovlenie_postavleno,omitempty"`
 	// PravaUzheSprosheny — приложение уже (само или кнопкой) спрашивало права
 	// администратора хоть раз, отдельно от Prava (есть ли они СЕЙЧАС): вместе
 	// эти два поля различают «ещё не спрашивали» и «спрашивали и отказали».
@@ -1899,6 +1998,8 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		}
 		o.ObnovlenieDolya = d
 	}
+	o.ObnovlenieIdet = s.idetUstanovkaObnovleniya
+	o.ObnovleniePostavleno = s.postavlenoObnovlenie
 	s.zamok.Unlock()
 	o.Rezhim = string(k.Rezhim)
 	// Zametka описывает, что идёт через Kelevra (internal/konfig/konfig.go) —
