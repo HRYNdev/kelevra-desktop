@@ -2462,7 +2462,13 @@ function risovatUzly(gruppy) {
   koren2.innerHTML = "";
   let vybranEl = null;
   for (const g of gruppy) {
-    if (g.seychas && g.seychas !== tekushchiyUzel) {
+    // Только РУЧНАЯ группа (!g.sam) говорит, что выбрал человек. Группа с
+    // Sam=true — внутренняя автоматика Clash (urltest), её g.seychas меняется
+    // сама и подставлялась сюда как «текущий узел», если такая группа шла
+    // в списке позже ручной (сортировка по имени на сервере, uzly.go) —
+    // надпись на карточке «Выход» называла сервер, который выбрал не
+    // человек, а автоматика (баг из handoff 23-24.10, oblik/index.html:2527).
+    if (!g.sam && g.seychas && g.seychas !== tekushchiyUzel) {
       tekushchiyUzel = g.seychas;
       // Узел приезжает вторым запросом: без этого подпись под «защищено»
       // висела бы без имени узла до следующего опроса.
