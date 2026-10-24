@@ -381,7 +381,7 @@ func (p *Put) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Context().Err() != nil {
 		return nil, err1 // запрос отменил сам вызывающий — повторять некому
 	}
-	if napisano && !idempotentnyy(req.Method) {
+	if napisano && !idempotentnyy(req.Method) && !povtorRazreshen(req) {
 		// Запрос уже ушёл: сервер мог его принять, второй раз слать нельзя.
 		return nil, err1
 	}
@@ -516,6 +516,19 @@ func idempotentnyy(metod string) bool {
 		return true
 	}
 	return false
+}
+
+// povtorRazreshen — отправитель сам объявил запрос безопасным для повтора
+// заголовком Idempotency-Key (так же его понимает net/http: с ним Transport
+// сам повторяет POST на свежем соединении, когда старое оказалось мёртвым).
+//
+// Зачем. POST /logs рвался посреди тела («remote error: tls: bad record MAC»,
+// «EOF»; разбор 24.10.2026 по журналам nginx обоих VPS и устройств): заголовки
+// ушли, значит по старому правилу второго пути не было, и журнал ждал час.
+// А сервер /logs повтор принимает честно: отпечаток sha256 тела, второй раз
+// отвечает «ok, povtor» и ничего не кладёт (KelevraServer app.py receive_logs).
+func povtorRazreshen(req *http.Request) bool {
+	return req.Header.Get("Idempotency-Key") != "" || req.Header.Get("X-Idempotency-Key") != ""
 }
 
 // korotko — причина отказа для журнала. Ошибки транспорта адреса запроса не

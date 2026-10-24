@@ -19,6 +19,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +37,17 @@ const Potolok int64 = 25 << 20
 
 // TipTela — тем же значением помечено тело у android-клиента.
 const TipTela = "application/gzip"
+
+// ZagolovokPovtora — заголовок, которым посылка объявляет себя безопасной для
+// повтора (его же понимает net/http, см. Otpravit).
+const ZagolovokPovtora = "Idempotency-Key"
+
+// KlyuchPovtora — ключ повтора посылки: начало sha256 тела. Тот же отпечаток
+// сервер считает сам, так что ключ ничего нового о посылке не говорит.
+func KlyuchPovtora(telo []byte) string {
+	h := sha256.Sum256(telo)
+	return hex.EncodeToString(h[:16])
+}
 
 // Srok — сколько ждём коллектор. 25 МБ по обычному каналу уходят с запасом.
 const Srok = 3 * time.Minute
@@ -353,6 +366,13 @@ func (o *Otpravshchik) Otpravit(ctx context.Context) (Otchet, error) {
 	if o.Zagolovki != nil {
 		o.Zagolovki(zapros.Header, o.DeviceID, o.Versiya)
 	}
+	// Посылку можно слать повторно: сервер узнаёт её по sha256 тела и второй
+	// раз отвечает «ok», ничего не кладя. Заголовок говорит это транспорту —
+	// net/http сам повторит на свежем соединении, если старое умерло в простое,
+	// а запасной путь (internal/zapasnoy) повторит через туннель обрыв посреди
+	// тела («bad record MAC», «EOF», разбор 24.10.2026). Без него оборванная
+	// посылка ждала следующей попытки час.
+	zapros.Header.Set(ZagolovokPovtora, KlyuchPovtora(telo))
 	otvet, err := o.klient().Do(zapros)
 	if err != nil {
 		return Otchet{}, err
