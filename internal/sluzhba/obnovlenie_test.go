@@ -1,6 +1,7 @@
 package sluzhba
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -326,5 +327,47 @@ func TestNePokazannyyPuzyrNeOtmechaetsya(t *testing.T) {
 	s.povestitEsliNovaya("0.9.0")
 	if popytok != 2 {
 		t.Fatal("про уже объявленную версию пузырь прозвучал второй раз")
+	}
+}
+
+// Запрос окна оборвался посреди проверки (ноут 01-3, 24.10: «список релизов
+// не разобрать: context canceled» на двух нажатиях подряд). Проверка обязана
+// дойти до конца сама и положить находку туда, где окно её увидит следующим
+// опросом (/api/sostoyanie), а не умереть вместе с запросом.
+func TestObnovlenieRuchkaNeObryvaetsyaSZaprosomOkna(t *testing.T) {
+	s := stend(t)
+	m := s.Obsluzhit()
+	podmenitVersiyu(t, "0.4.0")
+
+	nachalos := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(nachalos)
+		time.Sleep(400 * time.Millisecond) // длинный список через туннель
+		fmt.Fprint(w, relizObnovleniya("app-v0.9.0", obnovlenie.ImyaFayla, 42))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("KELEVRA_RELIZY", srv.URL)
+
+	ctx, otmena := context.WithCancel(context.Background())
+	r := httptest.NewRequest("GET", "/"+s.klyuch+"/api/obnovlenie", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	go func() {
+		<-nachalos
+		otmena() // окно ушло, не дождавшись
+	}()
+	m.ServeHTTP(w, r)
+
+	var o otvetObnovleniya
+	if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+		t.Fatalf("не разобрал ответ: %v", err)
+	}
+	if o.Beda != "" || o.Novaya != "0.9.0" {
+		t.Fatalf("обрыв запроса окна оборвал и проверку: %+v", o)
+	}
+	s.zamok.Lock()
+	n := s.naydennoeObnovlenie
+	s.zamok.Unlock()
+	if n == nil || n.Versiya != "0.9.0" {
+		t.Fatalf("находка по нажатию не сохранена для /api/sostoyanie: %+v", n)
 	}
 }

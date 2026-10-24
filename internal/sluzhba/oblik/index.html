@@ -1448,8 +1448,19 @@ const $ = (id) => document.getElementById(id);
 let smenaKoda = false;
 
 async function api(put, telo) {
-  const o = await fetch(koren + "api/" + put, telo
-      ? {method:"POST", body: JSON.stringify(telo)} : undefined);
+  let o;
+  try {
+    o = await fetch(koren + "api/" + put, telo
+        ? {method:"POST", body: JSON.stringify(telo)} : undefined);
+  } catch (e) {
+    // Связь со службой оборвалась, ответа нет вовсе — это не отказ службы.
+    // Установка обновления различает эти два случая (postavitObnovlenie):
+    // после удачной установки служба уходит на перезапуск, и обрыв — её
+    // нормальный уход, а не беда.
+    const obryv = new Error("нет связи со службой");
+    obryv.obryv = true;
+    throw obryv;
+  }
   const d = await o.json().catch(() => ({}));
   if (!o.ok) throw new Error(d.beda || "не вышло");
   return d;
@@ -1700,8 +1711,17 @@ let obnovlenieItog = null;
 
 // Состояние УСТАНОВКИ найденного обновления (вторая дверь к тому же
 // /api/obnovlenie_postavit, что и тычок в пузырь трея): null — ничего не
-// нажимали, "idet" — запрос в полёте, иначе {beda:true} | {gotovo, versiya}.
+// нажимали, "idet" — запрос в полёте или служба ставит сама, иначе
+// {beda:true} | {gotovo, versiya, kogda}.
 let ustanovkaItog = null;
+// ustanovkaSluzhby — "idet" выставлено не нашим нажатием, а по слову службы
+// (s.obnovlenie_idet): тихая установка postavitTiho. До 24.10 окно про неё не
+// знало, звало «ОБНОВИТЬ», нажатие получало «установка уже идёт» — и окно
+// рисовало бедой то, что на деле вставало (ноут 01-3).
+let ustanovkaSluzhby = false;
+// Сколько ждать новую копию после «Готово, перезапускается…», прежде чем
+// признать, что перезапуска не было, и снова предложить установку.
+const SROK_PEREZAPUSKA_MS = 90 * 1000;
 
 // Версия, по которой человек уже сказал «ПОЗЖЕ» (или просто закрыл диалог).
 // Живёт только до перезапуска окна: обещание «позже» — про сейчас, а не
@@ -1753,17 +1773,63 @@ function podpisObnovleniya(s) {
 // Замок тут двойной и оба нужны: локальный (ustanovkaItog === "idet") гасит
 // второй клик до отправки, а серверный (idetUstanovkaObnovleniya, sluzhba.go)
 // отвечает понятной бедой, если оба клика всё-таки успели уйти.
+//
+// Нажатие во время тихой установки служба не отвергает, а ждёт её итога и
+// отвечает им (sluzhba.go: zhdatIdushchuyuUstanovku). Удача — служба через
+// ~300 мс уходит на перезапуск, и если ответ не успел дойти, fetch рвётся:
+// такой обрыв (e.obryv) — «установлено, перезапускается», а не беда.
 async function postavitObnovlenie() {
   if (ustanovkaItog === "idet") return;
+  const versiya = (poslednee && poslednee.novaya_versiya_dostupna) || "";
   ustanovkaItog = "idet";
+  ustanovkaSluzhby = false;
   pererisovatObnovlenie();
   try {
     const d = await api("obnovlenie_postavit", {});
-    ustanovkaItog = {gotovo: true, versiya: d.versiya};
+    ustanovkaItog = {gotovo: true, versiya: d.versiya || versiya, kogda: Date.now()};
   } catch (e) {
-    ustanovkaItog = {beda: true};
+    ustanovkaItog = e.obryv
+        ? {gotovo: true, versiya: versiya, kogda: Date.now()}
+        : {beda: true};
   }
   pererisovatObnovlenie();
+}
+
+// sveritUstanovkuSoSluzhboy — правда службы об установке поверх своей:
+// служба могла начать ставить сама (тихая установка) или уже поставить.
+// Зовётся на каждом опросе /api/sostoyanie до отрисовки.
+function sveritUstanovkuSoSluzhboy(s) {
+  if (s.obnovlenie_postavleno) {
+    if (!(ustanovkaItog && ustanovkaItog.gotovo)) {
+      ustanovkaItog = {gotovo: true, versiya: s.obnovlenie_postavleno, kogda: Date.now()};
+    }
+    ustanovkaSluzhby = false;
+    return;
+  }
+  if (s.obnovlenie_idet) {
+    if (ustanovkaItog === null || (ustanovkaItog && ustanovkaItog.beda)) {
+      ustanovkaItog = "idet";
+      ustanovkaSluzhby = true;
+    }
+    return;
+  }
+  // Служба больше не ставит и не поставила: её тихая установка не удалась
+  // (причина — в журнале). Беды не рисуем — человек её не просил; кнопка
+  // снова предлагает поставить.
+  if (ustanovkaSluzhby && ustanovkaItog === "idet") {
+    ustanovkaItog = null;
+    ustanovkaSluzhby = false;
+  }
+  if (ustanovkaItog && ustanovkaItog.gotovo) {
+    // Новая копия уже отвечает своей версией — разъяснение больше не нужно.
+    if (ustanovkaItog.versiya && s.versiya === ustanovkaItog.versiya) {
+      ustanovkaItog = null;
+    } else if (Date.now() - (ustanovkaItog.kogda || 0) > SROK_PEREZAPUSKA_MS) {
+      // Ждали перезапуска дольше разумного, а служба та же и ничего не
+      // ставит: перезапуска не было. Снова честно предлагаем установку.
+      ustanovkaItog = null;
+    }
+  }
 }
 
 // Ход установки виден СРАЗУ в обоих местах — и в пункте настроек, и в
@@ -1805,7 +1871,8 @@ function narisovatDialogObnovleniya() {
   polosa.firstElementChild.style.width = dolya === null ? "" : Math.round(dolya * 100) + "%";
   const hod = $("dialog-obnovleniya-hod");
   hod.hidden = !(idet || gotovo || beda);
-  hod.textContent = idet ? (dolya === null ? "Загрузка…" : "Загрузка… " + Math.round(dolya * 100) + "%")
+  hod.textContent = idet ? (dolya === null ? (ustanovkaSluzhby ? "Устанавливаем…" : "Загрузка…")
+          : "Устанавливаем… " + Math.round(dolya * 100) + "%")
       : gotovo ? "Готово, Kelevra перезапускается…"
       : beda ? "Обновление не установлено" : "";
   // Пока идёт установка, ставить второй раз нечего, а после успеха — некуда:
@@ -2193,6 +2260,7 @@ async function obnovit() {
   // находку (обычно — потому что новая копия уже поднялась): держать
   // «Готово, перезапускается…» дольше этого значило бы врать о состоянии,
   // которого уже нет.
+  sveritUstanovkuSoSluzhboy(s);
   if (ustanovkaItog && ustanovkaItog.gotovo && !s.novaya_versiya_dostupna) {
     ustanovkaItog = null;
   }
@@ -2206,7 +2274,9 @@ async function obnovit() {
   // Диалог поднимается сам, но ровно один раз на версию и НИКОГДА поверх
   // того, что человек открыл руками: чужая шторка на экране — знак, что он
   // сейчас занят другим (см. shtorkaOtkryta).
-  if (novaya && novaya !== otlozhennayaVersiya && ustanovkaItog === null
+  // Тихая установка службы (ustanovkaSluzhby) диалог тоже поднимает — но уже
+  // с ходом установки вместо кнопки «ОБНОВИТЬ» (narisovatDialogObnovleniya).
+  if (novaya && novaya !== otlozhennayaVersiya && (ustanovkaItog === null || ustanovkaSluzhby)
       && !nuzhenKod && shtorkaOtkryta() === null) {
     otkrytShtorku("dialog-obnovleniya-fon");
   }
@@ -2749,7 +2819,10 @@ $("knopka-obnovlenie").onclick = async () => {
   } catch (e) {
     // api() уже упала сама (сеть до СВОЕЙ службы, не до GitHub) — беда от
     // /api/obnovlenie сюда бы дошла как d.beda выше, а не через catch.
-    obnovlenieItog = {beda: "не удалось проверить"};
+    // Обрыв связи со службой — проверка там доходит сама (sluzhba.go:
+    // obnovlenieRuchka держит свой срок, а не запрос окна) и кладёт находку
+    // в /api/sostoyanie: подпись сменится сама следующим опросом.
+    obnovlenieItog = e.obryv ? null : {beda: "не удалось проверить"};
   }
   if (poslednee) $("podpis-obnovlenie").textContent = podpisObnovleniya(poslednee);
 };

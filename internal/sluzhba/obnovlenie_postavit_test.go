@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -133,20 +135,28 @@ func TestObnovleniePostavitRuchkaStavitNaydennuyuVersiyu(t *testing.T) {
 	}
 }
 
-// Второй тычок, пока первый ещё качает, обязан получить ВНЯТНЫЙ ответ, а не
-// повиснуть и не уйти молча — то, из-за чего окно вправе просто заблокировать
-// кнопку на время запроса (idetUstanovkaObnovleniya уже держит замок на
-// стороне службы, sluzhba.go:418).
-func TestObnovleniePostavitRuchkaVtoroyTychokPokaIdetUstanovka(t *testing.T) {
+// Второй тычок, пока первый ещё качает (так бывает всегда, когда тихая
+// установка postavitTiho уже идёт, а человек жмёт «ОБНОВИТЬ» в окне), не
+// ставит второй раз и НЕ отвечает бедой: ждёт итога первой установки и
+// отвечает им. До 24.10 он получал 400 «установка уже идёт», и окно рисовало
+// «Обновление не установлено» при вставшей версии (ноут 01-3).
+//
+// Заодно — что видит окно в /api/sostoyanie: пока ставится —
+// obnovlenie_idet, после — obnovlenie_postavleno; и что третий тычок после
+// удачи отвечает успехом сразу, не качая сборку снова.
+func TestObnovleniePostavitRuchkaVtoroyTychokZhdetItoga(t *testing.T) {
 	s := stend(t)
 	m := s.Obsluzhit()
 	put := vosstanovitSebya(t)
 
 	nachalos := make(chan struct{})
 	mozhnoProdolzhat := make(chan struct{})
+	var zaprosov atomic.Int32
 	soderzhimoe := sborkaPohozhayaNaSebya(t, put, "PODMENA-SBORKI-DLYA-GONKI")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(nachalos)
+		if zaprosov.Add(1) == 1 {
+			close(nachalos)
+		}
 		<-mozhnoProdolzhat
 		fmt.Fprint(w, soderzhimoe)
 	}))
@@ -170,21 +180,108 @@ func TestObnovleniePostavitRuchkaVtoroyTychokPokaIdetUstanovka(t *testing.T) {
 		t.Fatal("первый тычок не дошёл до скачивания за 5с — ручка не отвечает, а не держит замок")
 	}
 
-	r2 := httptest.NewRequest("POST", "/"+s.klyuch+"/api/obnovlenie_postavit", nil)
-	w2 := httptest.NewRecorder()
-	m.ServeHTTP(w2, r2)
-	close(mozhnoProdolzhat)
-	<-kodPervogo
+	if sost := sostoyanieOkna(t, s); !sost.ObnovlenieIdet || sost.ObnovleniePostavleno != "" {
+		t.Fatalf("пока ставится, окно должно видеть obnovlenie_idet: %+v", sost)
+	}
 
-	if w2.Code != http.StatusBadRequest {
-		t.Fatalf("второй тычок пока идёт первый: ждал 400, получил %d: %s", w2.Code, w2.Body.String())
+	vtoroy := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRequest("POST", "/"+s.klyuch+"/api/obnovlenie_postavit", nil)
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, r)
+		vtoroy <- w
+	}()
+	select {
+	case w := <-vtoroy:
+		t.Fatalf("второй тычок ответил, не дождавшись итога первой установки: %d %s", w.Code, w.Body.String())
+	case <-time.After(300 * time.Millisecond):
 	}
-	var beda map[string]string
-	if err := json.Unmarshal(w2.Body.Bytes(), &beda); err != nil {
-		t.Fatalf("не разобрал ответ второго тычка: %v", err)
+	close(mozhnoProdolzhat)
+	if k := <-kodPervogo; k != 200 {
+		t.Fatalf("первый тычок: код %d", k)
 	}
-	if !strings.Contains(beda["beda"], "уже идёт") {
-		t.Fatalf("второй тычок ответил не по делу: %+v", beda)
+	var w2 *httptest.ResponseRecorder
+	select {
+	case w2 = <-vtoroy:
+	case <-time.After(5 * time.Second):
+		t.Fatal("второй тычок не ответил за 5с после конца первой установки")
+	}
+	if w2.Code != 200 {
+		t.Fatalf("второй тычок пока идёт первый: ждал 200 (итог первой), получил %d: %s", w2.Code, w2.Body.String())
+	}
+	var o struct {
+		Gotovo  bool   `json:"gotovo"`
+		Versiya string `json:"versiya"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &o); err != nil || !o.Gotovo || o.Versiya != "8.8.8" {
+		t.Fatalf("второй тычок ответил не итогом первой установки: %s (%v)", w2.Body.String(), err)
+	}
+
+	if sost := sostoyanieOkna(t, s); sost.ObnovlenieIdet || sost.ObnovleniePostavleno != "8.8.8" {
+		t.Fatalf("после установки окно должно видеть obnovlenie_postavleno=8.8.8: %+v", sost)
+	}
+
+	r3 := httptest.NewRequest("POST", "/"+s.klyuch+"/api/obnovlenie_postavit", nil)
+	w3 := httptest.NewRecorder()
+	m.ServeHTTP(w3, r3)
+	if w3.Code != 200 {
+		t.Fatalf("третий тычок после удачи: %d %s", w3.Code, w3.Body.String())
+	}
+	if n := zaprosov.Load(); n != 1 {
+		t.Fatalf("сборку качали %d раз, ждал ровно один", n)
+	}
+}
+
+// Первая установка провалилась — ждавший второй тычок получает ЕЁ отказ, а
+// не молчание и не успех.
+func TestObnovleniePostavitVtoroyTychokPoluchaetOtkazPervogo(t *testing.T) {
+	s := stend(t)
+	_ = vosstanovitSebya(t)
+
+	nachalos := make(chan struct{})
+	mozhnoProdolzhat := make(chan struct{})
+	var odin sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		odin.Do(func() { close(nachalos) })
+		<-mozhnoProdolzhat
+		http.Error(w, "нет", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	s.zamok.Lock()
+	s.naydennoeObnovlenie = &obnovlenie.Novaya{Versiya: "6.6.6", Ssylka: srv.URL, Razmer: 10}
+	s.zamok.Unlock()
+
+	pervyy := make(chan error, 1)
+	go func() {
+		_, err := s.PostavitNaydennoe()
+		pervyy <- err
+	}()
+	select {
+	case <-nachalos:
+	case <-time.After(5 * time.Second):
+		t.Fatal("первая установка не дошла до скачивания за 5с")
+	}
+	vtoroy := make(chan error, 1)
+	go func() {
+		_, err := s.PostavitNaydennoe()
+		vtoroy <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	close(mozhnoProdolzhat)
+	if err := <-pervyy; err == nil {
+		t.Fatal("первая установка на ответ 500 должна была провалиться")
+	}
+	select {
+	case err := <-vtoroy:
+		if err == nil || !strings.Contains(err.Error(), "не установлено") {
+			t.Fatalf("второй тычок: ждал отказ первой установки, получил %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("второй тычок не дождался итога первой")
+	}
+	if sost := sostoyanieOkna(t, s); sost.ObnovlenieIdet || sost.ObnovleniePostavleno != "" {
+		t.Fatalf("после провала окно не должно видеть ни хода, ни «поставлено»: %+v", sost)
 	}
 }
 

@@ -280,7 +280,13 @@ func main() {
 		// сторож переводит его на новый адрес (storozh_okna.go). Открывать
 		// второе окно в этом же процессе нельзя — go-webview2 падает внутри
 		// себя, проверено на живом стенде 09.09.
+		//
+		// Значок трея — при открытии (фоном, окно не ждёт) и при закрытии:
+		// крестик окна в трей не сворачивает, и без живого --trey приложение
+		// пропадало с глаз совсем (ноут 01-3, 24.10; znachok_odin.go).
+		go podnyatZnachokEsliNet("открытии окна")
 		pokazatOkno(adres)
+		podnyatZnachokEsliNet("закрытии окна")
 	}
 }
 
@@ -701,6 +707,19 @@ func zhitZnachkom(papka, putZhurnala string) {
 	if posleSmeny {
 		log.Printf("значок: перезапуск после обновления службы, жду ухода прежнего значка (pid %d)", smenaPID)
 		zhdatSmenu(smenaPID)
+	}
+	// Один значок на сеанс (znachok_odin.go): замок держим всю жизнь
+	// процесса. Занят — значок уже есть (его подняли автозапуск, окно или
+	// установка службы почти одновременно с нами), второй не ставим.
+	srokZamka := time.Duration(0)
+	if posleSmeny {
+		srokZamka = srokZamkaZnachkaPosleSmeny
+	}
+	if !mozhnoStavitZnachok(zanyatMestoZnachka(srokZamka), posleSmeny, oknoTreyaEst()) {
+		log.Printf("значок: в этом сеансе значок уже есть (другой процесс) — второй не ставлю, выхожу")
+		return
+	}
+	if posleSmeny {
 		go ubratHvostPosleSmeny()
 	} else {
 		go ubratHvostProshlogoObnovleniya()
