@@ -290,7 +290,11 @@ func KSverke(papkaYadra string, adresa map[string]string, sroki map[string]time.
 			itog[teg] = adres
 			continue
 		}
-		if time.Since(sved.Nabory[teg].Svereno) > SrokNabora(sroki[teg]) {
+		// Запас в десятую часть срока: часы сверки тикают ровно со сроком
+		// набора, и тик, пришедший на миг раньше двух минут, иначе молчал бы
+		// до следующего — свежесть 2m превращалась в 4 (замер на стенде).
+		srok := SrokNabora(sroki[teg])
+		if time.Since(sved.Nabory[teg].Svereno) > srok-srok/10 {
 			itog[teg] = adres
 		}
 	}

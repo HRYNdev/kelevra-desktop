@@ -306,6 +306,19 @@ func TestKSverkePoSrokuNabora(t *testing.T) {
 	if k["svoi-mimo"] == "" || k["ads"] != "" {
 		t.Fatalf("через 5 минут к сверке %v — ждали только svoi-mimo", k)
 	}
+	// Тик пришёл на секунду раньше двух минут — набор всё равно пора сверить.
+	sved = ChitatSvedeniya(papka)
+	for teg, n := range sved.Nabory {
+		n.Svereno = time.Now().Add(-2*time.Minute + time.Second)
+		sved.Nabory[teg] = n
+	}
+	if err := zapisatSvedeniya(papka, sved); err != nil {
+		t.Fatal(err)
+	}
+	k = KSverke(papka, adresa, sroki)
+	if k["svoi-mimo"] == "" || k["ads"] != "" {
+		t.Fatalf("через 5 минут к сверке %v — ждали только svoi-mimo", k)
+	}
 	// Другой ключ устройства — другой адрес: сверять сразу.
 	adresa["ads"] = r.adres("/ads.srs") + "?drugoy"
 	if KSverke(papka, adresa, sroki)["ads"] == "" {
