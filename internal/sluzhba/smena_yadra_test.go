@@ -21,6 +21,7 @@ import (
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpis"
+	"github.com/HRYNdev/kelevra-desktop/internal/pult"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
@@ -28,6 +29,12 @@ import (
 // а в подменном списке сборок лежит подписанная core-v2-1 с ядром "novoe".
 // Сборка уже отложена фоновой сверкой.
 func stendZamenyYadra(t *testing.T) *Sluzhba {
+	t.Helper()
+	return stendZamenyYadraS(t, false)
+}
+
+// stendZamenyYadraS — то же, но сборка в списке может быть пробной (prerelease).
+func stendZamenyYadraS(t *testing.T, probnaya bool) *Sluzhba {
 	t.Helper()
 	s := stendSPravami(t)
 	if err := os.WriteFile(s.Yadro.Bin, []byte("staroe"), 0o755); err != nil {
@@ -54,8 +61,8 @@ func stendZamenyYadra(t *testing.T) *Sluzhba {
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/spisok":
-			fmt.Fprintf(w, `[{"tag_name":"core-v2-1","assets":[{"name":%q,"browser_download_url":"%s/a"},{"name":%q,"browser_download_url":"%s/s"}]}]`,
-				yadro.ImyaArhiva(), srv.URL, yadro.ImyaArhiva()+".sig", srv.URL)
+			fmt.Fprintf(w, `[{"tag_name":"core-v2-1","prerelease":%t,"assets":[{"name":%q,"browser_download_url":"%s/a"},{"name":%q,"browser_download_url":"%s/s"}]}]`,
+				probnaya, yadro.ImyaArhiva(), srv.URL, yadro.ImyaArhiva()+".sig", srv.URL)
 		case "/a":
 			w.Write(arhiv)
 		case "/s":
@@ -64,7 +71,8 @@ func stendZamenyYadra(t *testing.T) *Sluzhba {
 	}))
 	t.Cleanup(srv.Close)
 	s.Yadro.Spisok = srv.URL + "/spisok"
-	if err := s.prigotovitYadroRaz(context.Background()); err != nil {
+	// Пробную сборку без ключа сверка не видит и жалуется: для стенда это ожидаемо.
+	if err := s.prigotovitYadroRaz(context.Background()); err != nil && !probnaya {
 		t.Fatalf("сверка ядра: %v", err)
 	}
 	return s
@@ -366,5 +374,43 @@ func TestOtkatBezPodyomaPosleOtklyuchit(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.Yadro.Papka, "novoe.zip")); err != nil {
 		t.Fatal("сборка отвергнута, хотя на прежнем ядре связь не проверялась")
+	}
+}
+
+// Пробная сборка ядра без ключа пульта не ставится; с ключом yadro.probnye=true
+// от пульта сверка её откладывает, и подключение ставит.
+func TestProbnoeYadroTolkoPoKlyuchuPulta(t *testing.T) {
+	t.Setenv("KELEVRA_YADRO_PROBNYE", "")
+	s := stendZamenyYadraS(t, true)
+	s.zapustitYadro = func(ctx context.Context) error { return nil }
+	if s.bratProbnyeYadra() {
+		t.Fatal("без ключа пульта пробные ядра включены")
+	}
+	if err := s.PodnyatZashchitu(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := chtoVYadre(t, s); got != "staroe" {
+		t.Fatalf("пробное ядро поставилось без ключа пульта: %q", got)
+	}
+	// Пульт без файла на диске (KELEVRA_DIR стенда не трогаем): ключ мозга пробный.
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	st := &stendPulta{priv: priv, p: pult.Zagruzit("", reestrDesktop(), umeyuDesktop)}
+	st.p.Klyuchi = []ed25519.PublicKey{priv.Public().(ed25519.PublicKey)}
+	s.pult = st.p
+	if _, err := st.p.Prinyat(st.blok(t, dannyePulta(1, "dev-1", map[string]any{"yadro.probnye": true})), "dev-1"); err != nil {
+		t.Fatalf("пульт не принял ключ: %v", err)
+	}
+	if !s.bratProbnyeYadra() {
+		t.Fatal("ключ пульта не включил пробные ядра")
+	}
+	_ = s.Yadro.Ostanovit()
+	if err := s.prigotovitYadroRaz(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PodnyatZashchitu(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := chtoVYadre(t, s); got != "novoe" {
+		t.Fatalf("с ключом пульта пробное ядро не поставилось: %q", got)
 	}
 }

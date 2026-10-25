@@ -40,6 +40,17 @@ func novoeYadro() *yadro.Yadro {
 	}
 }
 
+// klyuchProbnyeYadra — ключ пульта: брать пробные (prerelease) сборки ядра.
+// Так ядро выпускается кольцом: пробная сборка уходит только тем устройствам,
+// которым пульт включил ключ. Значение читается на каждой сверке.
+const klyuchProbnyeYadra = "yadro.probnye"
+
+// bratProbnyeYadra — брать ли пробные сборки ядра: переменная стенда
+// KELEVRA_YADRO_PROBNYE=1 или ключ пульта. Без пульта и без переменной — нет.
+func (s *Sluzhba) bratProbnyeYadra() bool {
+	return os.Getenv("KELEVRA_YADRO_PROBNYE") == "1" || s.pult.FlagIli(klyuchProbnyeYadra, false)
+}
+
 // SveryatYadro — фоновая сверка стоящего ядра со свежей сборкой. Первая
 // попытка сразу при запуске (кроме стендов с KELEVRA_BEZ_OBNOVLENIYA=1),
 // дальше раз в period; сетевой отказ повторяется сам (fonovoeDelo).
@@ -57,6 +68,7 @@ func (s *Sluzhba) prigotovitYadroRaz(ctx context.Context) error {
 	}
 	ctx, otmena := context.WithTimeout(ctx, srokPodgotovkiYadra)
 	defer otmena()
+	s.Yadro.BratProbnye = s.bratProbnyeYadra()
 	itog, err := s.Yadro.Prigotovit(ctx, s.klientSeti(srokPodgotovkiYadra))
 	if err != nil {
 		if errors.Is(err, yadro.ErrNetYadra) {
