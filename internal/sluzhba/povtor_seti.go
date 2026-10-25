@@ -250,6 +250,9 @@ type fonovoeDelo struct {
 	// сверяется после каждого тика, новый вступает со следующего цикла. nil —
 	// период постоянный.
 	periodSeychas func() time.Duration
+	// pinok — внеочередной заход по сигналу (не дожидаясь тика): сначала
+	// пересчёт периода, потом попытка. nil — только тики.
+	pinok <-chan struct{}
 
 	// Подмены для проверок; nil — настоящие часы и случайность.
 	tiki    <-chan time.Time
@@ -334,6 +337,10 @@ func (d fonovoeDelo) krutit(ctx context.Context) {
 			smenitPeriod()
 		case <-povtor:
 			povtor = nil
+			popytka(false)
+		case <-d.pinok:
+			smenitPeriod()
+			stupen, povtor = 0, nil
 			popytka(false)
 		}
 	}

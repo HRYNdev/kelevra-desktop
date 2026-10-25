@@ -237,3 +237,35 @@ func TestSvoiNaboryPodhvatyvayutsyaNaHodu(t *testing.T) {
 		t.Fatalf("часы сверки идут раз в %s, а свои наборы просят 2m", s.shagSverki(ShagSverkiPravil))
 	}
 }
+
+// Профиль сменился и принёс новые наборы — часы сверки заходят сразу, не
+// дожидаясь получасового тика: иначе свои наборы (2m) впервые скачались бы
+// только через полчаса после того, как сервер начал их выдавать.
+func TestNovyeNaboryVProfilePinayutSverku(t *testing.T) {
+	v := novayaVydachaNaborov(t)
+	s := gotovStendLestnicy(t)
+	select {
+	case <-s.pinokSverki:
+	default:
+	}
+	syroy, err := os.ReadFile("../konfig/testdata/profil_telefona.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SohranitProfil(syroy); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-s.pinokSverki:
+		t.Fatal("тот же профиль пнул сверку — наборы не менялись")
+	default:
+	}
+	if err := s.SohranitProfil(profilSoSvoimiNaborami(t, v.server.URL)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-s.pinokSverki:
+	default:
+		t.Fatal("в профиле появились свои наборы, а сверку не позвали — ждать бы ей получасового тика")
+	}
+}

@@ -260,6 +260,11 @@ type Sluzhba struct {
 	// мёртвая вторая дверь иначе писала бы одну и ту же строку 720 раз в сутки.
 	proshlyyOtkazPravil string
 	kogdaOtkazPravil    time.Time
+	// pinokSverki — профиль сменился: часам сверки правил пора зайти сразу
+	// и пересчитать период (в новом профиле могли появиться свои наборы с
+	// интервалом 2m, а прежний тик шёл раз в полчаса). Буфер 1: лишние
+	// сигналы, пока заход не начат, сливаются в один.
+	pinokSverki chan struct{}
 	// podyomIdet — прямо сейчас работает PodnyatZashchitu.
 	//
 	// Заведено 08.09 по замеру с живой машины. Хронология оттуда: полный
@@ -473,6 +478,7 @@ func Novaya() (*Sluzhba, error) {
 		klyuch:             sluchaynyy(),
 		avtorezhimDnsAdres: os.Getenv("KELEVRA_AVTOREZHIM_DNS"),
 		avtorezhimShlyuz:   os.Getenv("KELEVRA_AVTOREZHIM_SHLYUZ"),
+		pinokSverki:        make(chan struct{}, 1),
 	}
 	// Паспорт назначаем ПОСЛЕ сборки: он читает саму службу (режим, права,
 	// возраст профиля), поэтому раньше её существования не собирается.
@@ -570,8 +576,12 @@ func (s *Sluzhba) SohranitProfil(syroy []byte) error {
 		return err
 	}
 	// В профиле ключи узлов: в общей папке он закрыт от пользователей ПК.
+	staryeNabory := naboryProfilya()
 	if err := hranenie.ZapisatZakryto(hranenie.PutProfilya(), syroy); err != nil {
 		return err
+	}
+	if naboryProfilya() != staryeNabory {
+		s.pnutSverku()
 	}
 	return s.PerestroitKonfig()
 }
@@ -3505,6 +3515,38 @@ func (s *Sluzhba) shagSverki(zadan time.Duration) time.Duration {
 	return shag
 }
 
+// pnutSverku — попросить часы сверки зайти сейчас, не дожидаясь тика.
+func (s *Sluzhba) pnutSverku() {
+	if s.pinokSverki == nil {
+		return
+	}
+	select {
+	case s.pinokSverki <- struct{}{}:
+	default:
+	}
+}
+
+// naboryProfilya — отпечаток удалённых наборов профиля на диске (тег, адрес,
+// интервал): сменился — сверке есть что делать сразу.
+func naboryProfilya() string {
+	syroy, err := os.ReadFile(hranenie.PutProfilya())
+	if err != nil {
+		return ""
+	}
+	adresa := konfig.AdresaPravil(syroy)
+	intervaly := konfig.IntervalyPravil(syroy)
+	tegi := make([]string, 0, len(adresa))
+	for teg := range adresa {
+		tegi = append(tegi, teg)
+	}
+	sort.Strings(tegi)
+	var b strings.Builder
+	for _, teg := range tegi {
+		fmt.Fprintf(&b, "%s %s %s|", teg, adresa[teg], intervaly[teg])
+	}
+	return b.String()
+}
+
 // minShagSverki — чаще не сверяем, что бы ни просил профиль.
 var minShagSverki = time.Minute
 
@@ -3535,6 +3577,7 @@ func (s *Sluzhba) SveryatPravila(ctx context.Context, shag time.Duration) {
 	}
 	d := s.delo("сверка правил", period(), sverit)
 	d.periodSeychas = period
+	d.pinok = s.pinokSverki
 	d.srazu = true
 	d.krutit(ctx)
 }
