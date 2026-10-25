@@ -28,8 +28,10 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/pravila"
 	"github.com/HRYNdev/kelevra-desktop/internal/zapasnoy"
 )
 
@@ -175,11 +177,16 @@ type Vybor struct {
 	// type:"remote" переписывается в {type:"local", path:<из карты>} —
 	// route.final не трогается, потому что разбор по доменам/подсетям остаётся.
 	//
-	// Строгость: применяется ТОЛЬКО целиком. Если хотя бы для одного remote-
-	// тега профиля пути в карте нет, Prigotovit НЕ трогает профиль и
-	// возвращает ошибку — иначе ядро упадёт на первом же правиле, ссылающемся
-	// на исчезнувший rule_set. Вызывающий в этом случае уходит на прежнюю
-	// деградацию (BezSetevyhPravil).
+	// По частям (с 0.6.93): переписываются только теги, для которых в карте
+	// есть путь, остальные остаются remote — их ядро качает само. Раньше
+	// карта применялась только целиком, и одного недостающего тега хватало,
+	// чтобы человек остался без правил вовсе; со своими наборами (svoi-*),
+	// которых во встроенном комплекте нет, так выходило бы каждый раз.
+	// Закрыть все теги, когда качать ядру нельзя, — забота вызывающего
+	// (internal/pravila.Podobrat с комплектом).
+	//
+	// Вид файла — по расширению пути: .json — format:"source", прочее —
+	// format:"binary" (internal/pravila.FormatPoPuti).
 	//
 	// Вместе с BezSetevyhPravil взводиться не должны: если оба, комплект
 	// главнее (см. Prigotovit) — он не жертвует разбором трафика, а BezSetevyhPravil жертвует.
@@ -757,13 +764,13 @@ func ubratSetevyePravila(d map[string]any) error {
 }
 
 // primenitPravilaIzKomplekta — тело Vybor.PravilaIzKomplekta (см. комментарий
-// поля): переписывает каждый route.rule_set с type:"remote" на локальный
-// файл из встроенного комплекта, ничего больше не трогая — теги (а значит и
-// ссылки на них в route.rules/dns.rules, и route.final) остаются прежними.
+// поля): переписывает route.rule_set с type:"remote" на локальный файл из
+// карты, ничего больше не трогая — теги (а значит и ссылки на них в
+// route.rules/dns.rules, и route.final) остаются прежними, порядок правил —
+// как прислал сервер.
 //
-// Применяется СТРОГО целиком: сперва проверяем, что путь в komplekt есть для
-// каждого remote-тега, и только потом переписываем — частичная подмена хуже
-// молчания, ядро упадёт на первом же правиле без rule_set.
+// Тег без пути в карте остаётся remote: его ядро скачает само. Ссылка на
+// него при этом цела, так что ядро не падает на «правиле без rule_set».
 func primenitPravilaIzKomplekta(d map[string]any, komplekt map[string]string) error {
 	r, ok := d["route"].(map[string]any)
 	if !ok {
@@ -772,19 +779,6 @@ func primenitPravilaIzKomplekta(d map[string]any, komplekt map[string]string) er
 	spisok, ok := r["rule_set"].([]any)
 	if !ok || len(spisok) == 0 {
 		return fmt.Errorf("в профиле нет route.rule_set — вшитый комплект правил применять не к чему")
-	}
-	for _, rs := range spisok {
-		m, ok := rs.(map[string]any)
-		if !ok {
-			continue
-		}
-		if tip, _ := m["type"].(string); tip != "remote" {
-			continue
-		}
-		teg, _ := m["tag"].(string)
-		if _, est := komplekt[teg]; !est {
-			return fmt.Errorf("во встроенном комплекте нет правила %q — применяю прежнюю деградацию", teg)
-		}
 	}
 	for i, rs := range spisok {
 		m, ok := rs.(map[string]any)
@@ -795,11 +789,15 @@ func primenitPravilaIzKomplekta(d map[string]any, komplekt map[string]string) er
 			continue
 		}
 		teg, _ := m["tag"].(string)
+		put, est := komplekt[teg]
+		if !est || put == "" {
+			continue
+		}
 		spisok[i] = map[string]any{
 			"tag":    teg,
 			"type":   "local",
-			"format": "binary",
-			"path":   komplekt[teg],
+			"format": pravila.FormatPoPuti(put),
+			"path":   put,
 		}
 	}
 	return nil
@@ -1033,6 +1031,63 @@ func zapomnitVybor(d map[string]any) {
 //
 // Берутся только type:"remote": локальные и вшитые качать неоткуда и незачем.
 func AdresaPravil(syroy []byte) map[string]string {
+	itog := map[string]string{}
+	for _, n := range naboryPravil(syroy) {
+		itog[n.teg] = n.adres
+	}
+	if len(itog) == 0 {
+		return nil
+	}
+	return itog
+}
+
+// IntervalyPravil — тег -> update_interval удалённого набора из профиля
+// (сервер просит у своих наборов 2m, у чужих 1h и 1d). Набора без интервала
+// или с непонятным интервалом в карте нет.
+func IntervalyPravil(syroy []byte) map[string]time.Duration {
+	itog := map[string]time.Duration{}
+	for _, n := range naboryPravil(syroy) {
+		if n.interval > 0 {
+			itog[n.teg] = n.interval
+		}
+	}
+	return itog
+}
+
+// RazobratInterval — длительность в записи sing-box: как у Go, плюс «d» —
+// сутки («1d», «1d12h»). Ошибка — ноль.
+func RazobratInterval(s string) time.Duration {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	var dni time.Duration
+	if i := strings.IndexByte(s, 'd'); i > 0 {
+		n, err := strconv.Atoi(s[:i])
+		if err != nil || n < 0 {
+			return 0
+		}
+		dni = time.Duration(n) * 24 * time.Hour
+		s = s[i+1:]
+		if s == "" {
+			return dni
+		}
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return 0
+	}
+	return dni + d
+}
+
+type naborPravil struct {
+	teg, adres string
+	interval   time.Duration
+}
+
+// naboryPravil — удалённые наборы профиля (type:"remote" с тегом и адресом),
+// в порядке профиля.
+func naboryPravil(syroy []byte) []naborPravil {
 	var d map[string]any
 	if err := json.Unmarshal(syroy, &d); err != nil {
 		return nil
@@ -1045,7 +1100,7 @@ func AdresaPravil(syroy []byte) map[string]string {
 	if !ok {
 		return nil
 	}
-	itog := map[string]string{}
+	var itog []naborPravil
 	for _, rs := range spisok {
 		m, ok := rs.(map[string]any)
 		if !ok {
@@ -1056,8 +1111,9 @@ func AdresaPravil(syroy []byte) map[string]string {
 		}
 		teg, _ := m["tag"].(string)
 		adres, _ := m["url"].(string)
+		interval, _ := m["update_interval"].(string)
 		if teg != "" && adres != "" {
-			itog[teg] = adres
+			itog = append(itog, naborPravil{teg: teg, adres: adres, interval: RazobratInterval(interval)})
 		}
 	}
 	return itog

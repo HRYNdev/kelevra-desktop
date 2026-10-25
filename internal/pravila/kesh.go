@@ -78,6 +78,10 @@ type SvedeniyaNabora struct {
 	Izmenen string    `json:"izmenen,omitempty"` // Last-Modified как его прислал сервер
 	Razmer  int64     `json:"razmer,omitempty"`
 	Svereno time.Time `json:"svereno"`
+	// Format — в каком виде набор лежит на диске: FormatBinary (<тег>.srs) или
+	// FormatSource (<тег>.json). Пусто — так писали версии до 0.6.93, у них
+	// были только .srs.
+	Format string `json:"format,omitempty"`
 }
 
 // Svedeniya — сведения обо всём кеше.
@@ -119,9 +123,8 @@ func zapisatSvedeniya(papkaYadra string, s Svedeniya) error {
 // IzKesha — что лежит в кеше прямо сейчас: тег -> путь к файлу.
 //
 // Возвращает ТОЛЬКО полные наборы: если хоть одного тега из nuzhny не
-// хватает, кеш не годится и возвращается nil. Половина правил хуже целого
-// комплекта — ядро с недостающим набором просто не поднимется, а мы об этом
-// узнаем позже всех.
+// хватает, возвращается nil. Подъём ядра этим больше не пользуется (он берёт
+// кеш по частям, см. Podobrat), но «весь ли кеш на месте» нужно Ustarel.
 //
 // Пустой список нужных наборов — это не «кеш подошёл», а «спрашивать было
 // нечего»: профиль не прочитан. Раньше отсюда возвращалась пустая, но не
@@ -130,21 +133,56 @@ func IzKesha(papkaYadra string, nuzhny []string) map[string]string {
 	if len(nuzhny) == 0 {
 		return nil
 	}
-	dir := PutKesha(papkaYadra)
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil
-	}
+	sved := ChitatSvedeniya(papkaYadra)
 	itog := make(map[string]string, len(nuzhny))
 	for _, teg := range nuzhny {
-		put := filepath.Join(abs, teg+".srs")
-		st, err := os.Stat(put)
-		if err != nil || st.Size() == 0 {
+		put := naDiske(papkaYadra, teg, sved)
+		if put == "" {
 			return nil
 		}
 		itog[teg] = put
 	}
 	return itog
+}
+
+// PutVKeshe — где лежит набор teg в кеше, или "" если его там нет.
+func PutVKeshe(papkaYadra, teg string) string {
+	return naDiske(papkaYadra, teg, ChitatSvedeniya(papkaYadra))
+}
+
+// naDiske — путь к набору в кеше с учётом его вида.
+//
+// Вид берётся из сведений: набор мог сменить вид на сервере (.srs на .json),
+// и старый файл другого вида остаётся лежать рядом. Без сведений (кеш прошлых
+// версий или заготовка своего набора) — что есть на диске, .srs первым: до
+// 0.6.93 других не было.
+func naDiske(papkaYadra, teg string, sved Svedeniya) string {
+	dir, err := filepath.Abs(PutKesha(papkaYadra))
+	if err != nil {
+		return ""
+	}
+	if n, est := sved.Nabory[teg]; est && n.Adres != "" {
+		put := filepath.Join(dir, teg+rasshirenie(n.Format))
+		if estFayl(put) {
+			return put
+		}
+		return ""
+	}
+	for _, format := range []string{FormatBinary, FormatSource} {
+		put := filepath.Join(dir, teg+rasshirenie(format))
+		if estFayl(put) {
+			return put
+		}
+	}
+	return ""
+}
+
+// estSvedeniya — сверялся ли набор с сервером по адресу adres. Файл без
+// сведений — заготовка (Podobrat) или кеш другого адреса: его надо скачать,
+// сколько бы лет файлу ни было.
+func estSvedeniya(sved Svedeniya, teg, adres string) bool {
+	n, est := sved.Nabory[teg]
+	return est && n.Adres != "" && n.Adres == adres && !n.Svereno.IsZero()
 }
 
 // Vozrast — сколько прошло с последней УДАЧНОЙ сверки кеша с сервером.
@@ -164,7 +202,11 @@ func Vozrast(papkaYadra string, nuzhny []string) time.Duration {
 			// Про этот набор сведений нет — падаем на время файла: кеш мог
 			// быть собран прошлой версией приложения, и выбрасывать его
 			// из-за отсутствия сведений было бы расточительством.
-			st, err := os.Stat(filepath.Join(PutKesha(papkaYadra), teg+".srs"))
+			put := naDiske(papkaYadra, teg, sved)
+			if put == "" {
+				return 100 * 365 * 24 * time.Hour
+			}
+			st, err := os.Stat(put)
 			if err != nil {
 				return 100 * 365 * 24 * time.Hour
 			}
@@ -201,6 +243,12 @@ type Itog struct {
 	Svereno   int
 	Obnovleno int
 	Otkazy    int
+	// ObnovlenyTegi — какие именно наборы поменялись на диске, по алфавиту.
+	// Нужны службе: набор, который ядро читает прямо из кеша, оно подхватит
+	// само, а взятый из встроенного комплекта ждёт переподключения.
+	ObnovlenyTegi []string
+	// OtkazanoTegi — какие наборы не сверились, по алфавиту.
+	OtkazanoTegi []string
 }
 
 // odnovremenno — сколько наборов качаем разом.
@@ -250,17 +298,19 @@ func Obnovit(ctx context.Context, klient *http.Client, adresa map[string]string,
 				bylo := sved.Nabory[teg]
 				zamok.Unlock()
 
-				stalo, izmenilsya, err := sverit(ctx, klient, adresa[teg], filepath.Join(dir, teg+".srs"), bylo)
+				stalo, izmenilsya, err := sverit(ctx, klient, adresa[teg], dir, teg, bylo)
 
 				zamok.Lock()
 				switch {
 				case err != nil:
 					itog.Otkazy++
+					itog.OtkazanoTegi = append(itog.OtkazanoTegi, teg)
 					posledn = fmt.Errorf("%s: %w", teg, err)
 				default:
 					itog.Svereno++
 					if izmenilsya {
 						itog.Obnovleno++
+						itog.ObnovlenyTegi = append(itog.ObnovlenyTegi, teg)
 					}
 					sved.Nabory[teg] = stalo
 				}
@@ -276,6 +326,8 @@ func Obnovit(ctx context.Context, klient *http.Client, adresa map[string]string,
 	}
 	close(rabota)
 	gruppa.Wait()
+	sort.Strings(itog.ObnovlenyTegi)
+	sort.Strings(itog.OtkazanoTegi)
 
 	if itog.Svereno > 0 {
 		if err := zapisatSvedeniya(papkaYadra, sved); err != nil && posledn == nil {
@@ -293,8 +345,12 @@ func Obnovit(ctx context.Context, klient *http.Client, adresa map[string]string,
 // Условный запрос — весь смысл: с ETag и Last-Modified сервер отвечает 304 без
 // тела, и сверка всех 23 наборов не стоит почти ничего. Файлы раздаёт nginx
 // (KelevraServer/nginx/nginx.conf), оба заголовка он отдаёт сам, а мы их до
-// 09.09 просто выбрасывали и качали мегабайт заново.
-func sverit(ctx context.Context, klient *http.Client, adres, cel string, bylo SvedeniyaNabora) (SvedeniyaNabora, bool, error) {
+// 09.09 просто выбрасывали и качали мегабайт заново. Свои наборы (svoi-*)
+// отдаёт выдача по ключу, тоже с ETag и 304.
+//
+// Вид файла (.srs или .json) решает содержимое, а не адрес: свои наборы
+// приходят в формате source (JSON), чужие — двоичными.
+func sverit(ctx context.Context, klient *http.Client, adres, dir, teg string, bylo SvedeniyaNabora) (SvedeniyaNabora, bool, error) {
 	stalo := SvedeniyaNabora{Adres: adres}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, adres, nil)
 	if err != nil {
@@ -303,7 +359,8 @@ func sverit(ctx context.Context, klient *http.Client, adres, cel string, bylo Sv
 	// Условия ставим, только если файл на диске ЦЕЛ и взят с ТОГО ЖЕ адреса.
 	// Иначе 304 оставит нас с пустотой вместо набора: сервер скажет «не
 	// менялось», а у нас на диске нечего показывать ядру.
-	if bylo.Adres == adres && estFayl(cel) {
+	byloPut := filepath.Join(dir, teg+rasshirenie(bylo.Format))
+	if bylo.Adres == adres && estFayl(byloPut) {
 		if bylo.ETag != "" {
 			req.Header.Set("If-None-Match", bylo.ETag)
 		}
@@ -326,15 +383,16 @@ func sverit(ctx context.Context, klient *http.Client, adres, cel string, bylo Sv
 	if otvet.StatusCode != http.StatusOK {
 		return stalo, false, fmt.Errorf("ответ %d", otvet.StatusCode)
 	}
-	razmer, err := polozhit(otvet.Body, cel)
+	razmer, format, izmenilsya, err := polozhit(otvet.Body, dir, teg)
 	if err != nil {
 		return stalo, false, err
 	}
 	stalo.ETag = otvet.Header.Get("ETag")
 	stalo.Izmenen = otvet.Header.Get("Last-Modified")
 	stalo.Razmer = razmer
+	stalo.Format = format
 	stalo.Svereno = time.Now()
-	return stalo, true, nil
+	return stalo, izmenilsya, nil
 }
 
 func estFayl(put string) bool {
@@ -342,12 +400,19 @@ func estFayl(put string) bool {
 	return err == nil && st.Size() > 0
 }
 
-// polozhit пишет тело в кеш через временный файл. Возвращает размер набора.
-func polozhit(telo io.Reader, cel string) (int64, error) {
-	vremenny := cel + ".kachaem"
+// polozhit пишет тело в кеш через временный файл и переименование. Возвращает
+// размер набора, его вид и то, поменялось ли что-то на диске.
+//
+// Переименование поверх старого файла — не только против оборванной закачки:
+// ядро читает наборы прямо отсюда (type:"local") и следит за файлом, и
+// подменённый целиком файл оно перечитывает на ходу, без перезапуска.
+// Содержимое то же самое (сервер без ETag отдал заново) — файл не трогаем:
+// незачем дёргать ядро.
+func polozhit(telo io.Reader, dir, teg string) (int64, string, bool, error) {
+	vremenny := filepath.Join(dir, teg+".kachaem")
 	f, err := os.Create(vremenny)
 	if err != nil {
-		return 0, err
+		return 0, "", false, err
 	}
 	razmer, err := io.Copy(f, telo)
 	zakryt := f.Close()
@@ -356,18 +421,46 @@ func polozhit(telo io.Reader, cel string) (int64, error) {
 	}
 	if err != nil {
 		os.Remove(vremenny)
-		return 0, err
+		return 0, "", false, err
 	}
-	// Заголовок SRS — дешёвая проверка, что нам отдали набор правил, а не
+	// Вид набора — дешёвая проверка, что нам отдали набор правил, а не
 	// страницу с ошибкой от чужого прокси или заглушку провайдера.
-	if !pohozheNaSRS(vremenny) {
+	format := UznatFormat(vremenny)
+	if format == "" {
 		os.Remove(vremenny)
-		return 0, fmt.Errorf("файл не похож на набор правил")
+		return 0, "", false, fmt.Errorf("файл не похож на набор правил")
+	}
+	cel := filepath.Join(dir, teg+rasshirenie(format))
+	if odinakovye(vremenny, cel) {
+		os.Remove(vremenny)
+		return razmer, format, false, nil
 	}
 	if err := os.Rename(vremenny, cel); err != nil {
-		return 0, err
+		os.Remove(vremenny)
+		return 0, "", false, err
 	}
-	return razmer, nil
+	return razmer, format, true, nil
+}
+
+// odinakovye — правда, если оба файла есть и совпадают байт в байт.
+func odinakovye(a, b string) bool {
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	sb, err := os.Stat(b)
+	if err != nil || sa.Size() != sb.Size() {
+		return false
+	}
+	ba, err := os.ReadFile(a)
+	if err != nil {
+		return false
+	}
+	bb, err := os.ReadFile(b)
+	if err != nil {
+		return false
+	}
+	return string(ba) == string(bb)
 }
 
 func pohozheNaSRS(put string) bool {
