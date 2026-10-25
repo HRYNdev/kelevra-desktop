@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -346,5 +347,83 @@ func TestIstochnikiNakryvayutZapasnoyPut(t *testing.T) {
 	}
 	if proshlyh != 2 || zapasnyh != 2 {
 		t.Errorf("ротаций %d, запасных %d в %v", proshlyh, zapasnyh, puti)
+	}
+}
+
+// Посылка объявляет себя безопасной для повтора: ключ — отпечаток самого тела
+// (сервер по нему же узнаёт повтор и отвечает «ok», ничего не кладя).
+func TestPosylkaSKlyuchomPovtora(t *testing.T) {
+	papka := t.TempDir()
+	zhurnal := filepath.Join(papka, "kelevra.log")
+	polozhit(t, zhurnal, "запись\n", time.Now())
+	s := podnyatServer(t)
+	o := otpravshchik(t, s, papka, []string{zhurnal})
+	if _, err := o.Otpravit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := s.zagolovki.Get(ZagolovokPovtora)
+	if got == "" || got != KlyuchPovtora(s.telo) {
+		t.Fatalf("%s = %q, ждали отпечаток тела %q", ZagolovokPovtora, got, KlyuchPovtora(s.telo))
+	}
+	if KlyuchPovtora([]byte("a")) == KlyuchPovtora([]byte("b")) {
+		t.Fatal("разные тела дали один ключ")
+	}
+}
+
+// Соединение, умершее в простое (сервер закрыл его, пока оно лежало в пуле),
+// больше не роняет посылку: net/http видит ключ повтора и шлёт её заново на
+// свежем соединении. До 24.10.2026 это был «EOF» и час ожидания.
+func TestMertvoeSoedinenieNeRonyaetPosylku(t *testing.T) {
+	papka := t.TempDir()
+	zhurnal := filepath.Join(papka, "kelevra.log")
+	var mu sync.Mutex
+	naSoedinenii := map[string]int{}
+	prinyato := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		mu.Lock()
+		naSoedinenii[r.RemoteAddr]++
+		n := naSoedinenii[r.RemoteAddr]
+		mu.Unlock()
+		if n == 2 {
+			// второй запрос на том же соединении: оно «умерло» — рвём без ответа
+			c, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				c.Close()
+			}
+			return
+		}
+		mu.Lock()
+		prinyato++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"bytes":1}`)
+	}))
+	t.Cleanup(srv.Close)
+	tr := &http.Transport{}
+	t.Cleanup(tr.CloseIdleConnections)
+	o := &Otpravshchik{
+		Adres:    srv.URL + "/logs",
+		DeviceID: "0123456789abcdef",
+		Versiya:  "0.6.30",
+		Puti:     []string{zhurnal},
+		PutMetok: filepath.Join(papka, "otpravka_zhurnalov.json"),
+		HTTP:     &http.Client{Transport: tr, Timeout: 10 * time.Second},
+	}
+	polozhit(t, zhurnal, "первая\n", time.Now().Add(-time.Minute))
+	if _, err := o.Otpravit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	polozhit(t, zhurnal, "первая\nвторая\n", time.Now())
+	if _, err := o.Otpravit(context.Background()); err != nil {
+		t.Fatalf("посылка на умершем соединении должна была уйти повтором: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if prinyato != 2 {
+		t.Fatalf("принято посылок %d, ждали 2", prinyato)
+	}
+	if len(naSoedinenii) < 2 {
+		t.Fatalf("повтор не открыл свежего соединения: %v", naSoedinenii)
 	}
 }

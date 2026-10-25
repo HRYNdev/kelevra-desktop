@@ -518,3 +518,30 @@ func setevoy(err error) bool {
 	var op *net.OpError
 	return errors.Is(err, io.EOF) || errors.As(err, &op)
 }
+
+// POST с ключом повтора (Idempotency-Key) оборвался ПОСЛЕ того, как ушёл
+// (у /logs так рвётся «bad record MAC»/«EOF» посреди тела) — повторяем через
+// туннель с тем же телом: сервер узнаёт повтор сам. Без ключа — как раньше.
+func TestPostSKlyuchomPovtoraIdyotTunnelem(t *testing.T) {
+	zhivoy, telo := novyyZhivoy(t)
+	tun := novyySocks5(t, zhivoy.Listener.Addr().String(), "p")
+	p := &Put{Tunnel: func() *url.URL { return tun.url() }, Zhurnal: func(string, ...any) {}}
+	rv := novyyRvushchiy(t, true) // дочитал запрос и оборвал: POST «ушёл»
+
+	req, err := http.NewRequest(http.MethodPost, "http://"+rv.adres()+"/logs", strings.NewReader("zhurnal-telo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Idempotency-Key", "0123abcd")
+	otvet, err := p.Klient(10 * time.Second).Do(req)
+	if err != nil {
+		t.Fatalf("POST с ключом повтора должен был пройти туннелем: %v", err)
+	}
+	prochest(t, otvet)
+	if got, _ := telo.Load().(string); got != "zhurnal-telo" {
+		t.Fatalf("тело через туннель %q", got)
+	}
+	if tun.podklyuch.Load() != 1 {
+		t.Fatalf("через туннель подключений %d, ждал 1", tun.podklyuch.Load())
+	}
+}
