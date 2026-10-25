@@ -3638,7 +3638,7 @@ func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) error {
 			}
 			return err // ни один набор не дошёл — сети нет; строку пишет повтор
 		}
-		stroka :=fmt.Sprintf("правила сверены не полностью: %d из %d, обновлено %d, не сверились %s (%v)",
+		stroka := fmt.Sprintf("правила сверены не полностью: %d из %d, обновлено %d, не сверились %s (%v)",
 			itog.Svereno, len(kSverke), itog.Obnovleno, strings.Join(itog.OtkazanoTegi, ", "), err)
 		s.zamok.Lock()
 		povtor := stroka == s.proshlyyOtkazPravil && time.Since(s.kogdaOtkazPravil) < time.Hour
