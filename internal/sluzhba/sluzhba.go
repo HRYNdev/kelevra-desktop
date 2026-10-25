@@ -246,10 +246,20 @@ type Sluzhba struct {
 	// первым же опросом состояния (см. Sostoyanie): один раз, не навсегда.
 	posleObnovleniya string
 	// svezhihPravil — сколько наборов правил обновилось на диске и ждёт
-	// применения. Ядро читает наборы только при старте, поэтому свежие файлы
-	// вступают в силу при следующем подъёме связи, а не сразу. Держим число,
-	// чтобы это было видно и в окне, и в журнале, а не молчаливо копилось.
+	// применения. Набор, который ядро читает прямо из кеша, оно перечитывает
+	// само на ходу; ждут следующего подъёма только те, что сейчас взяты из
+	// встроенного комплекта или заглушки. Держим число, чтобы это было видно
+	// и в окне, и в журнале, а не молчаливо копилось.
 	svezhihPravil int
+	// pravilaVRabote — тег -> файл, из которого работающее ядро читает набор
+	// (то, что ушло в конфиг при последнем удачном подъёме или приёме ядра).
+	// По нему сверка решает, подхватит ли ядро обновлённый набор само.
+	pravilaVRabote map[string]string
+	// proshlyyOtkazPravil, kogdaOtkazPravil — последняя строка о неполной
+	// сверке и когда она была: свои наборы сверяются раз в две минуты, и
+	// мёртвая вторая дверь иначе писала бы одну и ту же строку 720 раз в сутки.
+	proshlyyOtkazPravil string
+	kogdaOtkazPravil    time.Time
 	// podyomIdet — прямо сейчас работает PodnyatZashchitu.
 	//
 	// Заведено 08.09 по замеру с живой машины. Хронология оттуда: полный
@@ -2724,11 +2734,25 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 	if err != nil && strings.Contains(err.Error(), "initialize rule-set") {
 		log.Printf("источник правил маршрутизации недоступен, пробую встроенный комплект правил (умная маршрутизация сохранится)")
 		podnyalsyaKomplektom := false
-		if komplekt, kErr := pravila.Razlozhit(filepath.Join(hranenie.PapkaYadra(), "pravila")); kErr != nil {
+		papkaKomplekta := filepath.Join(hranenie.PapkaYadra(), "pravila")
+		if komplekt, kErr := pravila.Razlozhit(papkaKomplekta); kErr != nil {
 			log.Printf("не разложил встроенный комплект правил: %v", kErr)
 		} else {
+			// По частям: что уже есть в кеше — из кеша (свежее комплекта),
+			// чего нет — из комплекта; своих наборов (svoi-*) в комплекте нет
+			// никогда — заготовка; чужого нет нигде — пустая заглушка. Раньше
+			// одного недостающего тега хватало, чтобы комплект отвергался
+			// целиком и человек оставался без связи.
+			podbor, pErr := pravila.Podobrat(hranenie.PapkaYadra(), s.tegiPravil(), komplekt, papkaKomplekta)
+			if pErr != nil {
+				log.Printf("подбор правил по частям: %v", pErr)
+			}
+			if len(podbor.Puti) == 0 {
+				podbor.Puti = komplekt
+			}
+			log.Printf("правила для повтора: %s", opisatPodbor(podbor))
 			vyborKomplekt := vybor
-			vyborKomplekt.PravilaIzKomplekta = komplekt
+			vyborKomplekt.PravilaIzKomplekta = podbor.Puti
 			vyborKomplekt.PravilaKomplektData = pravila.Data()
 			if e := s.perestroit(vyborKomplekt); e != nil {
 				log.Printf("встроенный комплект правил не применился к профилю: %v", e)
@@ -2765,6 +2789,7 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		err = otkazPodyoma{OshibkaTunnelNePodnyalsya, err}
 	}
 	if err == nil {
+		s.zapomnitPravilaVRabote(vybor.PravilaIzKomplekta)
 		// След туннеля на диске: жёсткую смерть процесса не переживёт ни один
 		// defer, и следующий запуск должен УВИДЕТЬ, что туннель поднимали мы, и
 		// проверить приборно, не остался ли висеть адаптер (internal/tunnel).
@@ -3454,10 +3479,34 @@ func (s *Sluzhba) tegiPravil() []string {
 
 // ShagSverkiPravil — как часто служба сверяет наборы правил с сервером.
 //
-// Полчаса, а решает всё равно pravila.Ustarel (час): тик чаще срока нужен,
-// чтобы час не превращался в два из-за того, что первый тик пришёл на минуту
-// раньше срока и промолчал.
+// Полчаса, а решает всё равно срок каждого набора (pravila.KSverke, час у
+// чужих): тик чаще срока нужен, чтобы час не превращался в два из-за того,
+// что первый тик пришёл на минуту раньше срока и промолчал. Если в профиле
+// есть набор с интервалом короче (свои наборы svoi-* — 2m), тик идёт с его
+// интервалом (shagSverki).
 var ShagSverkiPravil = 30 * time.Minute
+
+// shagSverki — период часов сверки: заданный (пульт или ShagSverkiPravil),
+// но не реже самого короткого интервала наборов в профиле.
+func (s *Sluzhba) shagSverki(zadan time.Duration) time.Duration {
+	shag := zadan
+	syroy, err := os.ReadFile(hranenie.PutProfilya())
+	if err != nil {
+		return shag
+	}
+	for _, interval := range konfig.IntervalyPravil(syroy) {
+		if srok := pravila.SrokNabora(interval); srok < shag {
+			shag = srok
+		}
+	}
+	if shag < minShagSverki {
+		shag = minShagSverki
+	}
+	return shag
+}
+
+// minShagSverki — чаще не сверяем, что бы ни просил профиль.
+var minShagSverki = time.Minute
 
 // SveryatPravila — часы обновления правил, живут столько же, сколько служба.
 //
@@ -3481,8 +3530,11 @@ func (s *Sluzhba) SveryatPravila(ctx context.Context, shag time.Duration) {
 		}
 		return s.ObnovitKeshPravil(ctx)
 	}
-	d := s.delo("сверка правил", s.pult.Dlitelnost("pravila.sverka_min", time.Minute, shag), sverit)
-	d.periodSeychas = func() time.Duration { return s.pult.Dlitelnost("pravila.sverka_min", time.Minute, shag) }
+	period := func() time.Duration {
+		return s.shagSverki(s.pult.Dlitelnost("pravila.sverka_min", time.Minute, shag))
+	}
+	d := s.delo("сверка правил", period(), sverit)
+	d.periodSeychas = period
 	d.srazu = true
 	d.krutit(ctx)
 }
@@ -3509,39 +3561,105 @@ func (s *Sluzhba) ObnovitKeshPravil(ctx context.Context) error {
 	for teg := range adresa {
 		tegi = append(tegi, teg)
 	}
-	vozrast := pravila.Vozrast(hranenie.PapkaYadra(), tegi)
-	if !pravila.Ustarel(hranenie.PapkaYadra(), tegi) {
+	sroki := konfig.IntervalyPravil(syroy)
+	papka := hranenie.PapkaYadra()
+	kSverke := pravila.KSverke(papka, adresa, sroki)
+	if len(kSverke) == 0 {
 		return nil
 	}
+	// Только ли свои частые наборы (svoi-*, раз в 2 минуты) пора сверить.
+	// Тогда «ничего не менялось» в журнал не пишем: это 720 строк в сутки
+	// ни о чём. Час чужих наборов, как и прежде, оставляет строку.
+	tolkoChastye := true
+	for teg := range kSverke {
+		if pravila.SrokNabora(sroki[teg]) >= pravila.SrokSvezhesti || pravila.PutVKeshe(papka, teg) == "" {
+			tolkoChastye = false
+			break
+		}
+	}
+	vozrast := pravila.Vozrast(papka, tegi)
 	// Возраст прошлой сверки — в строке итога, а не отдельной строкой «сверяю…»
 	// до похода в сеть: при сетевом отказе та строка повторялась бы на каждом
 	// повторе рядом со строкой самого повтора.
-	itog, err := pravila.Obnovit(ctx, s.klientSeti(2*time.Minute), adresa, hranenie.PapkaYadra())
+	itog, err := pravila.Obnovit(ctx, s.klientSeti(2*time.Minute), kSverke, papka)
+	if itog.Obnovleno > 0 {
+		s.primenitObnovlennye(papka, itog)
+	}
 	if err != nil {
 		if setevoyOtkaz(err) && itog.Svereno == 0 {
+			if tolkoChastye {
+				// Сети нет, а сверить хотели только свои наборы: следующий
+				// тик через пару минут и есть повтор. Строка «сеть не
+				// ответила» каждые две минуты у машины без сети — шум.
+				return nil
+			}
 			return err // ни один набор не дошёл — сети нет; строку пишет повтор
 		}
-		log.Printf("правила сверены не полностью: %d из %d, обновлено %d, отказов %d (%v), прошлая сверка %s назад — на старте возьмётся то, что есть",
-			itog.Svereno, len(adresa), itog.Obnovleno, itog.Otkazy, err, okruglit(vozrast))
+		stroka :=fmt.Sprintf("правила сверены не полностью: %d из %d, обновлено %d, не сверились %s (%v)",
+			itog.Svereno, len(kSverke), itog.Obnovleno, strings.Join(itog.OtkazanoTegi, ", "), err)
+		s.zamok.Lock()
+		povtor := stroka == s.proshlyyOtkazPravil && time.Since(s.kogdaOtkazPravil) < time.Hour
+		if !povtor {
+			s.proshlyyOtkazPravil, s.kogdaOtkazPravil = stroka, time.Now()
+		}
+		s.zamok.Unlock()
+		if !povtor {
+			log.Printf("%s — на старте возьмётся то, что есть", stroka)
+		}
+		if itog.Svereno > 0 && tolkoChastye {
+			// Часть дошла, а частый тик (2 минуты) и так повторит отказавшие:
+			// лестница повторов поверх него — лишние строки и запросы.
+			return nil
+		}
 		return err
 	}
+	s.zamok.Lock()
+	s.proshlyyOtkazPravil = ""
+	s.zamok.Unlock()
 	if itog.Obnovleno == 0 {
-		log.Printf("правила сверены: %d наборов, на сервере ничего не менялось (прошлая сверка %s назад)", itog.Svereno, okruglit(vozrast))
+		if !tolkoChastye {
+			log.Printf("правила сверены: %d наборов, на сервере ничего не менялось (прошлая сверка %s назад)", itog.Svereno, okruglit(vozrast))
+		}
 		return nil
 	}
-	// Ядро читает наборы только при старте: свежие файлы на диске попадут в
-	// работу при следующем подъёме связи. Говорим об этом прямо, чтобы
-	// «обновлено 3» из журнала не читалось как «уже действует».
-	log.Printf("правила сверены: %d наборов, обновилось %d — в работу пойдут при следующем подключении (прошлая сверка %s назад)", itog.Svereno, itog.Obnovleno, okruglit(vozrast))
-	s.zapomnitSvezhiePravila(itog.Obnovleno)
 	return nil
 }
 
-// zapomnitSvezhiePravila запоминает, что на диске появились новые наборы.
+// primenitObnovlennye — что делать с наборами, которые сверка обновила на диске.
 //
-// В работу они пойдут при следующем подъёме связи: ядро читает наборы только
-// при старте. Число нужно, чтобы человек видел в окне, что правила свежие и
-// ждут, а не гадал, обновляются ли они вообще.
+// Набор, который работающее ядро читает прямо из этого файла кеша, ядро
+// перечитает само (следит за файлом): ни переподключения, ни строки «ждут»
+// он не требует. Остальные (взяты из встроенного комплекта или заглушки, или
+// ядро сейчас качает их само) пойдут в работу при следующем подъёме связи —
+// их число видно в окне.
+func (s *Sluzhba) primenitObnovlennye(papka string, itog pravila.Itog) {
+	s.zamok.Lock()
+	vRabote := s.pravilaVRabote
+	s.zamok.Unlock()
+	var naHodu, zhdut []string
+	for _, teg := range itog.ObnovlenyTegi {
+		put := pravila.PutVKeshe(papka, teg)
+		if put != "" && vRabote[teg] != "" && strings.EqualFold(filepath.Clean(vRabote[teg]), filepath.Clean(put)) {
+			naHodu = append(naHodu, teg)
+		} else {
+			zhdut = append(zhdut, teg)
+		}
+	}
+	if len(naHodu) > 0 {
+		log.Printf("правила обновлены: %s — ядро перечитает их само, без переподключения", strings.Join(naHodu, ", "))
+	}
+	if len(zhdut) > 0 {
+		log.Printf("правила обновлены: %s — в работу пойдут при следующем подключении", strings.Join(zhdut, ", "))
+		s.zapomnitSvezhiePravila(len(zhdut))
+	}
+}
+
+// zapomnitSvezhiePravila запоминает, что на диске появились новые наборы,
+// которые работающее ядро само не подхватит.
+//
+// В работу они пойдут при следующем подъёме связи. Число нужно, чтобы
+// человек видел в окне, что правила свежие и ждут, а не гадал, обновляются
+// ли они вообще.
 func (s *Sluzhba) zapomnitSvezhiePravila(skolko int) {
 	s.zamok.Lock()
 	s.svezhihPravil += skolko

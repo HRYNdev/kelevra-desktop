@@ -1,6 +1,8 @@
 package konfig
 
 import (
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -105,18 +107,67 @@ func TestZametkaKomplektaChuzhoyFormatDatyNeTeryaetsya(t *testing.T) {
 	}
 }
 
-// Строгость: комплект применяется ТОЛЬКО целиком — если хотя бы для одного
-// тега профиля пути в карте нет, Prigotovit обязан вернуть ошибку, а не
-// подменить часть правил, оставив ядро падать на недостающем rule_set.
-func TestPravilaIzKomplektaNepolnyyKomplektEtoOshibka(t *testing.T) {
+// По частям (0.6.93): тег без пути в карте остаётся remote — его ядро качает
+// само, — а остальные переходят на local. Раньше одного недостающего тега
+// хватало, чтобы Prigotovit отказал целиком и человек остался без правил;
+// со своими наборами (svoi-*), которых во встроенном комплекте нет, так
+// выходило бы на каждом подъёме.
+func TestPravilaIzKomplektaPoChastyam(t *testing.T) {
 	komplekt, err := pravila.Razlozhit(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	delete(komplekt, "ads")
-	if _, _, err := Prigotovit(profil(t), Vybor{PravilaIzKomplekta: komplekt}); err == nil {
-		t.Fatal("неполный комплект (не хватает тега ads) должен быть ошибкой, а не частичной подменой")
+	gotovyy, _, err := Prigotovit(profil(t), Vybor{PravilaIzKomplekta: komplekt})
+	if err != nil {
+		t.Fatalf("неполная карта наборов должна применяться по частям, а не отказом: %v", err)
 	}
+	r := razobrat(t, gotovyy)["route"].(map[string]any)
+	for _, rs := range r["rule_set"].([]any) {
+		m := rs.(map[string]any)
+		switch m["tag"] {
+		case "ads":
+			if m["type"] != "remote" || m["url"] == nil {
+				t.Fatalf("набор ads без пути в карте должен остаться remote со своим адресом, а он %v", m)
+			}
+		default:
+			if m["type"] != "local" {
+				t.Fatalf("набор %v с путём в карте остался %v", m["tag"], m["type"])
+			}
+		}
+	}
+}
+
+// Свой набор (svoi-*) лежит JSON-файлом: local-запись обязана сказать ядру
+// format:"source", иначе оно попробует читать JSON как двоичный набор и не
+// поднимется.
+func TestPravilaIzKeshaJsonEtoSource(t *testing.T) {
+	d := razobrat(t, profil(t))
+	r := d["route"].(map[string]any)
+	r["rule_set"] = append(r["rule_set"].([]any), map[string]any{
+		"tag": "svoi-tunnel", "type": "remote", "format": "source",
+		"url": "https://dver.example/u/klyuch/svoi-tunnel", "update_interval": "2m",
+	})
+	syroy, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := filepath.Join(t.TempDir(), "svoi-tunnel.json")
+	gotovyy, _, err := Prigotovit(syroy, Vybor{PravilaIzKomplekta: map[string]string{"svoi-tunnel": put}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rs := range razobrat(t, gotovyy)["route"].(map[string]any)["rule_set"].([]any) {
+		m := rs.(map[string]any)
+		if m["tag"] != "svoi-tunnel" {
+			continue
+		}
+		if m["type"] != "local" || m["format"] != "source" || m["path"] != put {
+			t.Fatalf("свой набор из кеша описан неверно: %v", m)
+		}
+		return
+	}
+	t.Fatal("свой набор пропал из route.rule_set")
 }
 
 // PravilaIzKomplekta главнее BezSetevyhPravil: если взведены оба, ядро

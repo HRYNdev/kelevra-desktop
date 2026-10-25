@@ -2,8 +2,10 @@ package sluzhba
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
@@ -79,6 +81,11 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 	itog := s.Yadro.Prinyat(p, s.otpechatokZhelaemogoKonfiga())
 	switch {
 	case itog.Prinyato:
+		// Принятое ядро работает ровно по желаемому конфигу (иначе его бы не
+		// приняли), значит и наборы читает из тех же файлов.
+		var zhelaemyy konfig.Vybor
+		s.dobavitPravilaIzKesha(&zhelaemyy, false)
+		s.zapomnitPravilaVRabote(zhelaemyy.PravilaIzKomplekta)
 		// Метку туннеля перезаписываем СВОИМ номером процесса: она отвечает
 		// на вопрос «чья это связь», и оставить в ней номер умершей копии
 		// значит соврать следующему запуску, который по ней решает, сирота
@@ -307,19 +314,71 @@ func (s *Sluzhba) dobavitPravilaIzKesha(vybor *konfig.Vybor, vsluh bool) {
 		}
 		return
 	}
-	kesh := pravila.IzKesha(hranenie.PapkaYadra(), s.tegiPravil())
-	if kesh == nil {
+	// По частям (0.6.93): что есть в кеше — с диска, своих наборов (svoi-*)
+	// ещё нет — заготовка в кеше (сверка положит настоящий набор, ядро
+	// подхватит на ходу), чужого нет — его качает ядро, как до кеша. Раньше
+	// кеш брался только целиком, а JSON-наборы в него не ложились вовсе:
+	// со своими наборами в профиле он не годился бы никогда.
+	tegi := s.tegiPravil()
+	podbor, err := pravila.Podobrat(hranenie.PapkaYadra(), tegi, nil, "")
+	if err != nil && vsluh {
+		log.Printf("подбор правил с диска: %v", err)
+	}
+	if len(podbor.Puti) == 0 {
 		return
 	}
-	vybor.PravilaIzKomplekta = kesh
+	vybor.PravilaIzKomplekta = podbor.Puti
 	vybor.PravilaKomplektData = "" // не комплект, а свежие с диска — заметку не показываем
 	if !vsluh {
 		return
 	}
-	log.Printf("правила беру из кеша на диске (%d наборов, последняя сверка с сервером %s назад) — ядру не придётся качать их на старте",
-		len(kesh), okruglit(pravila.Vozrast(hranenie.PapkaYadra(), s.tegiPravil())))
+	vozrast := ""
+	if len(podbor.IzKesha) > 0 {
+		vozrast = fmt.Sprintf("; последняя сверка с сервером %s назад", okruglit(pravila.Vozrast(hranenie.PapkaYadra(), podbor.IzKesha)))
+	}
+	hvost := "ядру на старте качать нечего"
+	if len(podbor.Seti) > 0 {
+		hvost = "остальное ядро качает само"
+	}
+	log.Printf("правила беру с диска (%s%s) — %s", opisatPodbor(podbor), vozrast, hvost)
 	s.zamok.Lock()
 	s.svezhihPravil = 0 // применили: то, что лежало на диске, теперь в работе
+	s.zamok.Unlock()
+}
+
+// opisatPodbor — откуда взяты наборы, для журнала: «из кеша 23, заготовок 4».
+func opisatPodbor(p pravila.Podbor) string {
+	var chasti []string
+	dobavit := func(imya string, tegi []string, pokazat bool) {
+		if len(tegi) == 0 {
+			return
+		}
+		if pokazat {
+			chasti = append(chasti, fmt.Sprintf("%s %d (%s)", imya, len(tegi), strings.Join(tegi, ", ")))
+			return
+		}
+		chasti = append(chasti, fmt.Sprintf("%s %d", imya, len(tegi)))
+	}
+	dobavit("из кеша", p.IzKesha, false)
+	dobavit("из комплекта", p.IzKomplekta, false)
+	dobavit("заготовок своих", p.Zagotovki, true)
+	dobavit("пустых", p.Pustye, true)
+	dobavit("качает ядро", p.Seti, true)
+	if len(chasti) == 0 {
+		return "наборов нет"
+	}
+	return strings.Join(chasti, ", ")
+}
+
+// zapomnitPravilaVRabote запоминает, из каких файлов читает наборы
+// работающее ядро (копия карты: вызывающий свою может менять).
+func (s *Sluzhba) zapomnitPravilaVRabote(puti map[string]string) {
+	kopiya := make(map[string]string, len(puti))
+	for teg, put := range puti {
+		kopiya[teg] = put
+	}
+	s.zamok.Lock()
+	s.pravilaVRabote = kopiya
 	s.zamok.Unlock()
 }
 
