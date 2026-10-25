@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -223,9 +224,15 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 		y.zamok.Unlock()
 		return err
 	}
-	cmd.Stdout, cmd.Stderr = zhurnalYadra, zhurnalYadra
+	// Вывод ядра идёт не прямо в файл, а через фильтр (filtr.go): он вырезает
+	// шум «http2: response body closed» (handoff 23.10, ~1000 строк в час) и
+	// пишет вместо него редкий итог, остальное — как есть и в том же порядке.
+	pr, pw := io.Pipe()
+	cmd.Stdout, cmd.Stderr = pw, pw
 	spryatatOkno(cmd) // на Windows у ядра не должно мигать чёрное окно
 	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
 		zhurnalYadra.Close()
 		y.zamok.Unlock()
 		log.Printf("ядро не запустилось: %v", err)
@@ -238,8 +245,17 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 	umer := y.umer
 	y.zamok.Unlock()
 
+	filtrGotov := make(chan struct{})
+	go func() {
+		filtrLogYadra(pr, zhurnalYadra, time.Hour)
+		close(filtrGotov)
+	}()
+
 	go func() {
 		_ = cmd.Wait()
+		pw.Close()   // ядро умерло — фильтр дочитает хвост пайпа и завершится
+		<-filtrGotov // дождаться, чтобы итог «пропущено N» успел попасть в файл
+		pr.Close()
 		zhurnalYadra.Close()
 		y.zamok.Lock()
 		if y.derzh == svoy { // не мы его остановили — значит упал
