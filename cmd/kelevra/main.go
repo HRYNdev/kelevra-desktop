@@ -1010,6 +1010,9 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	go s.SleditZaPultom(ctx)
 	go s.SleditZaSvodkoy(ctx)
 	go s.SleditZaDolgimOprosom(ctx)
+	// Вход домой: открытый ключ устройства мозгу (пока не принят) и проба
+	// связи с домом, пока ядро работает с эндпоинтом «Дом».
+	go s.SleditZaDomom(ctx, sluzhba.ShagSlezhkiZaDomom)
 
 	// Авторежим по умолчанию выключен (см. hranenie.Nastroyki.Avtorezhim) —
 	// заводим служителя, только если человек сам его включил в прошлый раз.

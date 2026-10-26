@@ -64,6 +64,8 @@
     user-select:none;
   }
   .mono { font-family:ui-monospace, Consolas, monospace; }
+  /* Отпечаток ключа дома — крупно: владелец переписывает 8 знаков в панель. */
+  .otpechatok-doma { display:block; font-size:22px; font-weight:600; letter-spacing:.08em; margin-top:4px; }
 
   /* Шапка приклеена сверху, кнопка действия — снизу, а всё, что между ними,
      прокручивается. Раньше страница просто росла вниз, и на окне 420x660
@@ -1184,6 +1186,14 @@
            поэтому осталась на главном экране (жалоба 28.08: настройки
            переехали вниз главного экрана). -->
       <div class="beda" id="zametka-avtorezhim"></div>
+
+      <!-- Вход домой: «Домашняя сеть: подключено / нет соединения / ожидает подтверждения / ключ не совпадает»
+           (dom_stroka, sluzhba/dom.go). Только состояние, без пояснений;
+           нет входа домой или он сейчас не нужен — строки нет. -->
+      <div class="beda" id="stroka-doma"></div>
+      <!-- Отпечаток своего ключа дома (dom_klyuch): «Отпечаток ключа: AB12 CD34 EF56 GH78» крупно (владелец вводит 8 знаков в панели),
+           тот же вид, что у кнопки «Подтвердить ключ» в панели. -->
+      <div class="beda" id="klyuch-doma">Отпечаток ключа: <span class="mono otpechatok-doma" id="klyuch-doma-otpechatok"></span></div>
     </div>
 
     <!-- Шторка выбора выхода — эталон телефона: HomeScreen.kt 374-443
@@ -2419,6 +2429,12 @@ async function obnovit() {
     zametkaAvtorezhim.className = "beda";
     zametkaAvtorezhim.textContent = "";
   }
+  const strokaDoma = $("stroka-doma");
+  strokaDoma.textContent = s.dom_stroka || "";
+  strokaDoma.className = !s.dom_stroka ? "beda"
+    : (s.dom_stroka === "Домашняя сеть: нет соединения" || s.dom_stroka === "Домашняя сеть: ключ не совпадает") ? "beda vnimanie vidno" : "beda spokoyno vidno";
+  $("klyuch-doma-otpechatok").textContent = s.dom_klyuch || "";
+  $("klyuch-doma").className = s.dom_klyuch ? "beda spokoyno vidno" : "beda";
 
   let beda = s.beda || "", spokoyno = false;
   if (s.kachaem_yadro) { beda = "Загружается рабочий файл."; spokoyno = true; }

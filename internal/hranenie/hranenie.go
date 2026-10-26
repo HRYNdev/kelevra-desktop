@@ -182,6 +182,10 @@ type Nastroyki struct {
 	// Dveri — адреса выдачи, которые сервер назвал в /info (dveri): по ним идёт
 	// вход по коду. Пусто — двери «из коробки» (podpiska.Dveri).
 	Dveri []string `json:"dveri,omitempty"`
+	// Slot — слот устройства, который назвала дверь при входе по коду
+	// (POST /k/<код>/ustroystvo). Нужен входу домой (internal/dom). Пусто —
+	// вошли до этого поля или старым путём.
+	Slot string `json:"slot,omitempty"`
 	// ObyavlennoeObnovlenie — версия, про которую фоновая проверка уже
 	// показала пузырь в трее (internal/sluzhba.ProveritObnovlenieFonom).
 	// На диске, а не только в памяти процесса: копия висит в трее неделями и
@@ -389,8 +393,20 @@ func Zagruzit() (*Nastroyki, error) {
 // не работают: всё, что им нужно, они берут у службы по её адресу
 // (/api/sostoyanie и соседи).
 func lichnyeFayly() []string {
-	return []string{putNastroek(), PutProfilya(), PutSekretaClash(), PutPulta(), PutSvodki()}
+	return []string{putNastroek(), PutProfilya(), PutSekretaClash(), PutPulta(), PutSvodki(), PutKlyuchaDoma(), PutBlokaDoma(), PutPamyatiDoma(), PutPamyatiDoma() + ".zapas"}
 }
+
+// PutKlyuchaDoma — ключ WireGuard этого устройства для входа домой
+// (internal/dom): закрытая половина живёт только здесь.
+func PutKlyuchaDoma() string { return filepath.Join(Papka(), "dom_klyuch.json") }
+
+// PutBlokaDoma — последний проверенный блок dom из /info (с подписью):
+// без мозга вход домой живёт по нему.
+func PutBlokaDoma() string { return filepath.Join(Papka(), "dom_blok.json") }
+
+// PutPamyatiDoma — наибольшая принятая версия блока dom и «вход домой
+// включался»; не стирается при снятии блока.
+func PutPamyatiDoma() string { return filepath.Join(Papka(), "dom_pamyat.json") }
 
 // PutPulta — принятый пульт с сервера (internal/pult): настройки, испытание,
 // выполненные команды. Слой 2 договора: переживает перезапуск и старт без сети.
