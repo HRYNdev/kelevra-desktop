@@ -105,6 +105,8 @@ type Kartina struct {
 	DomBeda string `json:"dom_beda,omitempty"`
 	// DomZakryt — входа домой нет, сети и имена дома закрыты (reject).
 	DomZakryt bool `json:"dom_zakryt,omitempty"`
+	// DomMost — через какие выходы идёт мост «Дом» (порталы или «Соединение»).
+	DomMost string `json:"dom_most,omitempty"`
 	// TunTeg — тег входа tun: правила дома действуют только для него.
 	TunTeg string `json:"tun_teg,omitempty"`
 	// SvoyaSetVyrezana — что из маршрутов tun профиля задевало свою подсеть
@@ -420,7 +422,9 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// раньше правила локальной сети и hijack-dns (их вставляют шаги выше, и
 	// soglasovatFakeip ставит hijack-dns в самое начало, если его не было).
 	if v.Dom != nil {
-		if beda := dobavitDom(d, *v.Dom, k.TunTeg); beda != "" {
+		beda, most := dobavitDom(d, *v.Dom, k.TunTeg)
+		k.DomMost = most
+		if beda != "" {
 			k.DomBeda = beda
 			// Дом включался, но не вписался: закрыто по умолчанию — адреса и
 			// имена дома не уходят ни в туннель, ни напрямую.
@@ -923,7 +927,8 @@ func tunnelnyyVyhod(d map[string]any) string {
 				selector = teg
 			}
 		case "urltest":
-			if urltest == "" {
+			// Группа моста «Дом» — не туннель для всего трафика.
+			if urltest == "" && teg != TegMostaDoma {
 				urltest = teg
 			}
 		case "direct", "block", "dns":

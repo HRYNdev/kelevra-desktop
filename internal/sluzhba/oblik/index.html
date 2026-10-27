@@ -64,8 +64,8 @@
     user-select:none;
   }
   .mono { font-family:ui-monospace, Consolas, monospace; }
-  /* Отпечаток ключа дома — крупно: владелец переписывает 8 знаков в панель. */
-  .otpechatok-doma { display:block; font-size:22px; font-weight:600; letter-spacing:.08em; margin-top:4px; }
+  /* Отпечаток ключа дома (шторка «Подписка»): владелец переписывает 16 знаков в панель. */
+  .ryad-znachenie.otpechatok-doma { font-size:18px; font-weight:600; letter-spacing:.08em; }
 
   /* Шапка приклеена сверху, кнопка действия — снизу, а всё, что между ними,
      прокручивается. Раньше страница просто росла вниз, и на окне 420x660
@@ -1191,9 +1191,7 @@
            (dom_stroka, sluzhba/dom.go). Только состояние, без пояснений;
            нет входа домой или он сейчас не нужен — строки нет. -->
       <div class="beda" id="stroka-doma"></div>
-      <!-- Отпечаток своего ключа дома (dom_klyuch): «Отпечаток ключа: AB12 CD34 EF56 GH78» крупно (владелец вводит 8 знаков в панели),
-           тот же вид, что у кнопки «Подтвердить ключ» в панели. -->
-      <div class="beda" id="klyuch-doma">Отпечаток ключа: <span class="mono otpechatok-doma" id="klyuch-doma-otpechatok"></span></div>
+      <!-- Отпечаток ключа дома с 27.10 — в шторке «Подписка» (#podp-karta-klyuch-doma). -->
     </div>
 
     <!-- Шторка выбора выхода — эталон телефона: HomeScreen.kt 374-443
@@ -1261,6 +1259,16 @@
           </div>
         </div>
         <div class="podskazka-pod-kartoy" id="podp-podskazka" hidden>имя устройства на сервере</div>
+
+        <!-- Отпечаток своего ключа дома (dom_klyuch, 16 знаков группами по 4): его владелец
+             вводит в панели у «Подтвердить ключ». Слова владельца 26.10: «отпечаток ключа сто
+             проц перенести нужно в подписку». Нет ключа — карточки нет. -->
+        <div class="karta karta-nastroyki" id="podp-karta-klyuch-doma" hidden>
+          <div class="ryad-svedeniya nastroyki-ryad">
+            <span class="ryad-metka">Ключ дома</span>
+            <span class="ryad-znachenie mono otpechatok-doma" id="klyuch-doma-otpechatok"></span>
+          </div>
+        </div>
 
         <div class="zagolovok-bloka" id="podp-zag-ustroystv" hidden>Устройства</div>
         <div class="karta karta-nastroyki" id="podp-karta-ustroystv" hidden></div>
@@ -1652,13 +1660,10 @@ function zametkaAvtorezhima(s) {
     // включение начинается с нажатия, не раньше.
     return "Домашняя сеть: обход блокировок выполняет роутер, VPN не требуется.";
   }
-  if (s.avtorezhim_obstanovka === "вне дома" && s.sost === "rabotaet") {
-    // Короткая нейтральная строка, без «VPN не нужен» (тот текст — только
-    // для «дома», см. ветку выше). Без «Защиту» в начале — s.zametka
-    // (ZametkaVes и соседи) уже сказала словом «защищено» через круг, а тут
-    // дописывается только причина.
-    return "Сеть не распознана как домашняя, подключение выполнено автоматически.";
-  }
+  // «Вне дома» при поднятой связи заметки нет: надпись «Сеть не распознана
+  // как домашняя, подключение выполнено автоматически.» убрана словами
+  // владельца 26.10 («надпись над ней точно нахуй ваще убрать»); круг уже
+  // говорит «Подключено».
   return null; // переходные сочетания (например, «дома» с ещё не опущенной
                // защитой) заметку не трогают — ниже ничего не сказано зря.
 }
@@ -2329,10 +2334,8 @@ async function obnovit() {
   // же про то, ЧТО защищено, а защиты в этот момент нет вовсе. «Вне дома»
   // её не отменяет: там s.sost === "rabotaet", защита правда поднята тем
   // видом, который s.zametka описывает, — туда только дописываем причину.
-  const podmena = !!avtoZametka && s.avtorezhim_obstanovka !== "вне дома";
-  let zametkaTekst = !avtoZametka ? (s.zametka || "")
-      : s.avtorezhim_obstanovka === "вне дома" ? (s.zametka ? s.zametka + " " : "") + avtoZametka
-      : avtoZametka;
+  const podmena = !!avtoZametka;
+  let zametkaTekst = avtoZametka || s.zametka || "";
   // Без прав — одна строка, официальным тоном (sluzhba.OshibkaNetPrav).
   if (netPrav) zametkaTekst = TEKST_NET_PRAV;
   zametka.textContent = zametkaTekst;
@@ -2422,7 +2425,10 @@ async function obnovit() {
   // дважды написано, что вы дома и обход работает. Поэтому строка
   // остаётся только там, где большая заметка молчит (например «дома» при
   // поднятой защите или «вне дома» без неё) — иначе обстановка сказана дважды.
-  if (s.avtorezhim_vklyuchen && s.avtorezhim_obstanovka && !zametkaAvtorezhima(s)) {
+  // «Вне дома» при поднятой связи — тоже молчим: эту строку и заменяла убранная
+  // 26.10 надпись, и возвращать её вместо надписи незачем.
+  const vneDomaPodnyato = s.avtorezhim_obstanovka === "вне дома" && s.sost === "rabotaet";
+  if (s.avtorezhim_vklyuchen && s.avtorezhim_obstanovka && !zametkaAvtorezhima(s) && !vneDomaPodnyato) {
     zametkaAvtorezhim.textContent = "сейчас: " + s.avtorezhim_obstanovka;
     zametkaAvtorezhim.className = "beda spokoyno vidno";
   } else {
@@ -2434,7 +2440,7 @@ async function obnovit() {
   strokaDoma.className = !s.dom_stroka ? "beda"
     : (s.dom_stroka === "Домашняя сеть: нет соединения" || s.dom_stroka === "Домашняя сеть: ключ не совпадает") ? "beda vnimanie vidno" : "beda spokoyno vidno";
   $("klyuch-doma-otpechatok").textContent = s.dom_klyuch || "";
-  $("klyuch-doma").className = s.dom_klyuch ? "beda spokoyno vidno" : "beda";
+  $("podp-karta-klyuch-doma").hidden = !s.dom_klyuch;
 
   let beda = s.beda || "", spokoyno = false;
   if (s.kachaem_yadro) { beda = "Загружается рабочий файл."; spokoyno = true; }

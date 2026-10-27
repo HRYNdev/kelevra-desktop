@@ -71,7 +71,25 @@ type Blok struct {
 	// Otozvan — подписанный отзыв ключа Pub: устройство рождает новый ключ.
 	// Голый ответ двери «otozvan» ключ не перерождает — его может подделать VPS.
 	Otozvan bool `json:"otozvan,omitempty"`
+	// Portaly — входы VPS, где стоит портал моста домой: только через них
+	// UDP на мост доходит до дома. Клиент ведёт «Дом» через свои выходы на
+	// эти входы, а не через выбор человека для интернета. Нет поля (старый
+	// мозг) — мост идёт через «Соединение», как раньше.
+	Portaly []Portal `json:"portaly,omitempty"`
 }
+
+// Portal — вход VPS с порталом моста: узел (для журнала), адрес и порт
+// входа, как они стоят у выхода VLESS в профиле (server, server_port).
+type Portal struct {
+	Uzel   string `json:"uzel"`
+	Server string `json:"server"`
+	Port   int    `json:"port"`
+}
+
+// MaksPortalov — больше входов с порталом в блоке не бывает.
+const MaksPortalov = 16
+
+var serverPortala = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]{1,253}$`)
 
 // MostHostPort — мост раздельно.
 func (b *Blok) MostHostPort() (string, int) {
@@ -257,6 +275,16 @@ func (b *Blok) proverit() error {
 	}
 	if b.Versiya < 0 {
 		return &Otkaz{"versiya"}
+	}
+	if len(b.Portaly) > MaksPortalov {
+		return &Otkaz{"portaly"}
+	}
+	for i, p := range b.Portaly {
+		p.Server = strings.TrimSpace(p.Server)
+		if !serverPortala.MatchString(p.Server) || p.Port <= 0 || p.Port > 65535 || len(p.Uzel) > 64 {
+			return &Otkaz{"portaly"}
+		}
+		b.Portaly[i] = p
 	}
 	return nil
 }
@@ -586,5 +614,13 @@ func (b *Blok) String() string {
 	if b == nil {
 		return "нет"
 	}
-	return fmt.Sprintf("%s, мост %s, версия %d", b.Adres, b.Most, b.Versiya)
+	s := fmt.Sprintf("%s, мост %s, версия %d", b.Adres, b.Most, b.Versiya)
+	if len(b.Portaly) > 0 {
+		var p []string
+		for _, x := range b.Portaly {
+			p = append(p, x.Uzel+" "+net.JoinHostPort(x.Server, strconv.Itoa(x.Port)))
+		}
+		s += ", порталы " + strings.Join(p, ", ")
+	}
+	return s
 }

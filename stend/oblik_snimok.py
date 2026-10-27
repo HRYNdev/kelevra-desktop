@@ -217,10 +217,10 @@ SCENY = {
     "3_podnimaem": dict(BAZA, sost="podnimaem"),
     "4_rabotaet": dict(BAZA, sost="rabotaet", pid="8124",
                        rezhim="tunnel", vniz_bayt=418_365_440, vverh_bayt=21_495_808,
-                       zametka=ZAMETKI["ZametkaVes"]),
+                       zametka=""),
     "14_polnaya_zashchita": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                  vniz_bayt=1_073_741_824, vverh_bayt=52_428_800,
-                                 zametka=ZAMETKI["ZametkaVes"]),
+                                 zametka=""),
     # 17.10: службы Windows нет, человек отказал в запросе прав. Неполного
     # режима больше нет: круг «Не подключено», одна строка «нужны права» и
     # кнопка «Дать права» (решение владельца: «нет никаких неполных режимов»).
@@ -292,9 +292,9 @@ SCENY = {
     # читаемым: 420 px не растянешь.
     "16_dlinnoe_imya": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                             imya="Константин Афанасьевич (семейный)",
-                            zametka=ZAMETKI["ZametkaVes"]),
+                            zametka=""),
     "17_srok_na_ishode": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
-                              do_unix=DO_SKORO, zametka=ZAMETKI["ZametkaVes"]),
+                              do_unix=DO_SKORO, zametka=""),
     # Авторежим (internal/avtorezhim) опускает и поднимает защиту сам, а круг
     # с подзаголовком об этом ничего не знают — «отключено» / «трафик идёт
     # напрямую» выглядит ровно как поломка. Три сцены — по три исхода
@@ -308,7 +308,7 @@ SCENY = {
     "19_avtorezhim_vne_doma": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                    vniz_bayt=204_800_000, vverh_bayt=9_961_472,
                                    avtorezhim_vklyuchen=True, avtorezhim_obstanovka="вне дома",
-                                   zametka=ZAMETKI["ZametkaVes"]),
+                                   zametka=""),
     "20_avtorezhim_neizvestno": dict(BAZA, sost="stoit", avtorezhim_vklyuchen=True,
                                      avtorezhim_obstanovka="неизвестно"),
     # 22.08: /api/sostoyanie отдавало k.Zametka из последней сборки конфига
@@ -324,7 +324,7 @@ SCENY = {
     # классов .uzel .signal стоят на экране разом, и щуп геометрии
     # (proverit_gradacii_signala) может их сравнить.
     "24_uzly_vse_gradacii": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
-                                 zametka=ZAMETKI["ZametkaVes"], uzly=UZLY_VSE_GRADACII),
+                                 zametka="", uzly=UZLY_VSE_GRADACII),
     # 29.08: полоса режима и список узлов переехали с главного экрана в
     # шторку (.shtorka-fon), открывающуюся кликом по карточке «Выход» —
     # без своей сцены снимок никогда её не откроет, и новый экран не увидит
@@ -334,13 +334,13 @@ SCENY = {
     # режиме выбор узла сделан криво — рамки одной было мало).
     "25_shtorka_ruchnoy": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                                vniz_bayt=418_365_440, vverh_bayt=21_495_808,
-                               zametka=ZAMETKI["ZametkaVes"]),
+                               zametka=""),
     # Авторежим: та же площадка, но ни один узел не смеет нести подсветку —
     # эталон телефона, HomeScreen.kt 424 (selected = !auto.auto && ch.selected).
     "26_shtorka_avto": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
                             vniz_bayt=204_800_000, vverh_bayt=9_961_472,
                             avtorezhim_vklyuchen=True, avtorezhim_obstanovka="вне дома",
-                            zametka=ZAMETKI["ZametkaVes"]),
+                            zametka=""),
 }
 
 SCENY.update({
@@ -374,6 +374,25 @@ SCENY.update({
     # стоит «Панель сети», как на телефоне. Со списком устройств и без него.
     "34_podpiska_panel": dict(BAZA, panel=True, ustroystva=USTROYSTVA_TRI),
     "35_podpiska_panel_bez_ustroystv": dict(BAZA, panel=True),
+})
+
+# 27.10: вход домой. Отпечаток ключа «Дома» (dom_klyuch, 16 знаков группами
+# по 4) живёт в шторке «Подписка», а не на главном экране; надписи над ним
+# («Любая программа идёт через Kelevra. Сеть не распознана как домашняя…»)
+# на главном экране нет (слова владельца 26.10). Две сцены: главный экран в
+# том же положении, где это увидели (связь поднята авторежимом вне дома,
+# ключ ждёт подтверждения), и шторка подписки с отпечатком.
+DOM_KLYUCH = "AB12 CD34 EF56 GH78"
+SCENY.update({
+    "40_dom_glavnyy": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                           vniz_bayt=204_800_000, vverh_bayt=9_961_472,
+                           avtorezhim_vklyuchen=True, avtorezhim_obstanovka="вне дома",
+                           zametka="",
+                           dom_stroka="Домашняя сеть: ожидает подтверждения", dom_klyuch=DOM_KLYUCH),
+    "41_dom_podpiska": dict(BAZA, sost="rabotaet", pid="8124", rezhim="tunnel",
+                            avtorezhim_vklyuchen=True, avtorezhim_obstanovka="вне дома",
+                            zametka="", ustroystva=USTROYSTVA_ODNO,
+                            dom_stroka="Домашняя сеть: ожидает подтверждения", dom_klyuch=DOM_KLYUCH),
 })
 
 # 27.08: сцена 24 несла rezhim="proksi" и при этом заметку ПОЛНОГО режима —
@@ -419,7 +438,7 @@ NASTROYKI_SCENY = {"8_avtozapusk_vykl", "9_avtozapusk_vkl", "10_avtozapusk_ustar
 PODPISKA_SCENY = {"27_podpiska", "28_podpiska_pauza", "29_podpiska_staryy_server",
                   "30_podpiska_molchit", "31_podpiska_dlinnye_imena",
                   "32_podpiska_ustroystva", "33_podpiska_odno_ustroystvo",
-                  "34_podpiska_panel", "35_podpiska_panel_bez_ustroystv"}
+                  "34_podpiska_panel", "35_podpiska_panel_bez_ustroystv", "41_dom_podpiska"}
 
 # Шторка выбора выхода (29.08, см. комментарий у сцен 25/26 выше) закрыта по
 # умолчанию — снимок без клика по карточке «Выход» показал бы главный экран,
@@ -678,18 +697,51 @@ ZHDEM_V_OKNE = {
 
 # Заметка авторежима (id="zametka" — тот же блок, что несёт ZAMETKI выше)
 # обязана назвать ПРИЧИНУ, а не молчать так же, как при поломке или ручном
-# выключении. «19» держит две подстроки разом: доказывает, что новый текст
-# не стирает старую заметку режима защиты («не ломай существующий текст»).
+# выключении. Подстроки — нынешние слова окна (zametkaAvtorezhima).
+# «19» (вне дома, связь поднята) с 27.10 — в NET_V_ZAMETKE ниже: там заметки нет.
 ZHDEM_AVTOREZHIM = {
-    "18_avtorezhim_doma": ["обход блокировок уже делает роутер", "VPN не нужен"],
-    # 24.08: заметка перестала начинаться с «Защищён весь компьютер»/«Защиту
-    # включил авторежим» — то же слово уже стоит в круге над ней (жалоба:
-    # слово «защита» второй раз режет глаз; konfig.go: ZametkaVes). Проверяем ту
-    # же пару фактов (что защищено ЦЕЛИКОМ + что причина — авторежим) новыми
-    # словами, а не дословно старую строку — иначе щуп красил бы саму правку.
-    "19_avtorezhim_vne_doma": ["Любая программа идёт через Kelevra", "Включил авторежим"],
-    "20_avtorezhim_neizvestno": ["ещё смотрит, что это за сеть"],
+    "18_avtorezhim_doma": ["обход блокировок выполняет роутер", "VPN не требуется"],
+    "20_avtorezhim_neizvestno": ["Идёт определение типа сети"],
 }
+
+# 27.10: «Любая программа идёт через Kelevra. Сеть не распознана как домашняя,
+# подключение выполнено автоматически.» владелец убрал 26.10 («надпись над
+# ней точно нахуй ваще убрать»). Служба обычную заметку больше не отдаёт
+# (sluzhba.obyomZashchity), окно не пишет «вне дома»; сцены выше несут
+# zametka="" — ровно то, что теперь отдаёт /api/sostoyanie.
+NET_V_ZAMETKE = {
+    "19_avtorezhim_vne_doma": ["Любая программа идёт через Kelevra", "Сеть не распознана"],
+    "40_dom_glavnyy": ["Любая программа идёт через Kelevra", "Сеть не распознана"],
+}
+
+
+def proverit_net_v_zametke(str_, imya_sceny, kuski):
+    tekst = str_.evaluate("() => document.getElementById('zametka').textContent") or ""
+    return [f"{imya_sceny}: в заметке «{kusok}» — надпись убрана 26.10 (в блоке: «{tekst}»)"
+            for kusok in kuski if kusok in tekst]
+
+
+def proverit_klyuch_doma(str_, imya_sceny, sost, v_shtorke):
+    """Отпечаток ключа дома — в шторке «Подписка», на главном экране его нет."""
+    klyuch = sost.get("dom_klyuch") or ""
+    if not klyuch:
+        return []
+    vid = str_.evaluate("""() => {
+      const el = document.getElementById("klyuch-doma-otpechatok");
+      const r = el ? el.getBoundingClientRect() : null;
+      const shtorka = document.getElementById("shtorka-podpiska-fon");
+      return {tekst: el ? el.textContent : "", vidno: !!(r && r.width > 0 && r.height > 0),
+              vShtorke: !!(el && shtorka && shtorka.contains(el)),
+              glavnyy: (document.getElementById("tab-set") || document.body).innerText};
+    }""")
+    bedy = []
+    if klyuch in vid["glavnyy"]:
+        bedy.append(f"{imya_sceny}: отпечаток ключа дома на главном экране — его место в шторке «Подписка»")
+    if not vid["vShtorke"]:
+        bedy.append(f"{imya_sceny}: отпечаток ключа дома не в шторке «Подписка»")
+    if v_shtorke and (not vid["vidno"] or vid["tekst"] != klyuch):
+        bedy.append(f"{imya_sceny}: в шторке «Подписка» отпечаток не виден или не тот: «{vid['tekst']}»")
+    return bedy
 
 
 # 22.08: заметка про ОБЪЁМ защиты («Защищены только браузеры», «Защищён весь
@@ -1092,6 +1144,8 @@ def proverit_pokrytie():
     na_snimkah = {s.get("zametka", "") for s in SCENY.values()}
     bedy = []
     for imya, tekst in ZAMETKI.items():
+        if imya == "ZametkaVes":   # в окно не идёт с 27.10 (sluzhba.obyomZashchity)
+            continue
         obrazec = tekst.split("%s")[0].strip()
         if not any(obrazec and obrazec in z for z in na_snimkah):
             bedy.append(f"покрытие: {imya} («{tekst[:44]}…») не показана ни в одной сцене — "
@@ -1786,6 +1840,9 @@ def snyat():
                     bedy += proverit_okno_bedy(str_, imya, ZHDEM_V_OKNE[imya])
                 if imya in ZHDEM_AVTOREZHIM:
                     bedy += proverit_avtorezhim(str_, imya, ZHDEM_AVTOREZHIM[imya])
+                if imya in NET_V_ZAMETKE:
+                    bedy += proverit_net_v_zametke(str_, imya, NET_V_ZAMETKE[imya])
+                bedy += proverit_klyuch_doma(str_, imya, sost, imya in PODPISKA_SCENY)
                 if sost.get("sost") != "rabotaet":
                     bedy += proverit_net_zametki_obema(str_, imya)
                 if imya in PODPISKA_SCENY:

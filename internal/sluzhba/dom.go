@@ -143,7 +143,16 @@ func (s *Sluzhba) domDlyaSborki() *konfig.Dom {
 		DNS:             b.DNS,
 		Zona:            b.Zona,
 		MTU:             b.Mtu(),
+		Portaly:         portalyDlyaKonfiga(b.Portaly),
 	}
+}
+
+func portalyDlyaKonfiga(p []dom.Portal) []konfig.PortalDoma {
+	var itog []konfig.PortalDoma
+	for _, x := range p {
+		itog = append(itog, konfig.PortalDoma{Uzel: x.Uzel, Server: x.Server, Port: x.Port})
+	}
+	return itog
 }
 
 // domZakryt — «закрыто по умолчанию» (договор, «Безопасность» п.5): вход

@@ -1898,8 +1898,13 @@ type ustroystvoOkna struct {
 // заполняется при сборке конфига и переживает опускание защиты молча — без
 // этого условия окно продолжало бы говорить про связь, которой в этот момент
 // нет вовсе (регрессия 22.08, TestSostoyanieNeNesetZametkuKogdaZashchitaOpushchena).
+//
+// Обычная заметка «весь трафик» (konfig.ZametkaVes) в окно не идёт: круг уже
+// говорит «Подключено · весь трафик», а надпись над строками дома владелец
+// убрал 26.10 («надпись над ней точно нахуй ваще убрать»). Остальные заметки
+// (правила не загружены, встроенные правила) — состояние, они остаются.
 func obyomZashchity(sost string, k konfig.Kartina) string {
-	if sost != string(yadro.Rabotaet) {
+	if sost != string(yadro.Rabotaet) || k.Zametka == konfig.ZametkaVes {
 		return ""
 	}
 	return k.Zametka

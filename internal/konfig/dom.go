@@ -32,6 +32,11 @@ import (
 // выходов ядра, поэтому по-русски, как «Соединение».
 const TegDoma = "Дом"
 
+// TegMostaDoma — группа выходов, через которую идёт мост «Дом», когда
+// порталов в профиле больше одного: urltest между ними, сам по себе, без
+// связи с выбором человека в «Соединении». В окне её нет (yadro.Gruppy).
+const TegMostaDoma = "Дом · мост"
+
 // TegDnsDoma — тег DNS-сервера дома.
 const TegDnsDoma = "dns-dom"
 
@@ -50,6 +55,17 @@ type Dom struct {
 	DNS             string   // «100.77.0.1»
 	Zona            string   // «dom»
 	MTU             int      // 1280
+	// Portaly — входы VPS с порталом моста (блок dom, поле portaly). Пусто —
+	// мост идёт через «Соединение», как до появления поля.
+	Portaly []PortalDoma
+}
+
+// PortalDoma — вход VPS с порталом: выход профиля VLESS с этими server и
+// server_port ведёт ровно в него.
+type PortalDoma struct {
+	Uzel   string // для журнала
+	Server string
+	Port   int
 }
 
 func (dm Dom) goden() bool {
@@ -58,21 +74,22 @@ func (dm Dom) goden() bool {
 }
 
 // dobavitDom вписывает вход домой. Возвращает пусто, если вписал, иначе —
-// почему нет (для журнала); конфиг в этом случае не тронут.
-func dobavitDom(d map[string]any, dm Dom, tunTeg string) string {
+// почему нет (для журнала); конфиг в этом случае не тронут. most — через что
+// пошёл мост (для журнала).
+func dobavitDom(d map[string]any, dm Dom, tunTeg string) (beda, most string) {
 	if !dm.goden() {
-		return "блок неполон"
+		return "блок неполон", ""
 	}
-	if tegZanyat(d, TegDoma) {
-		return "тег «" + TegDoma + "» в профиле уже занят"
-	}
-	detour := tegSoedineniya(d)
-	if detour == "" {
-		return "в профиле нет туннельного выхода для моста"
+	if tegZanyat(d, TegDoma) || tegZanyat(d, TegMostaDoma) {
+		return "тег «" + TegDoma + "» в профиле уже занят", ""
 	}
 	r, ok := d["route"].(map[string]any)
 	if !ok {
-		return "в профиле нет route"
+		return "в профиле нет route", ""
+	}
+	detour, most := vyhodMosta(d, dm.Portaly)
+	if detour == "" {
+		return "в профиле нет туннельного выхода для моста", ""
 	}
 
 	mtu := dm.MTU
@@ -123,7 +140,60 @@ func dobavitDom(d map[string]any, dm Dom, tunTeg string) string {
 	r["rules"] = obnovlennye
 
 	dobavitDnsDoma(d, dm, tunTeg)
-	return ""
+	return "", most
+}
+
+// vyhodMosta — через что пустить UDP моста. Блок назвал входы с порталом —
+// выходы профиля VLESS ровно на эти server:port (порядок блока, без
+// повторов): один — прямо в него, несколько — группа TegMostaDoma (urltest,
+// живой выбор, с выбором человека для интернета не связан). Ни одного
+// такого выхода в профиле нет, или блок их не назвал (старый мозг), — мост
+// через «Соединение», как раньше. Возвращает тег и строку для журнала.
+func vyhodMosta(d map[string]any, portaly []PortalDoma) (string, string) {
+	vyhody, _ := d["outbounds"].([]any)
+	var tegi []string
+	byl := map[string]bool{}
+	for _, p := range portaly {
+		for _, v := range vyhody {
+			vh, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			tip, _ := vh["type"].(string)
+			teg, _ := vh["tag"].(string)
+			server, _ := vh["server"].(string)
+			port, _ := vh["server_port"].(float64)
+			if tip != "vless" || teg == "" || byl[teg] || int(port) != p.Port ||
+				!strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(server), "."), strings.TrimSuffix(p.Server, ".")) {
+				continue
+			}
+			byl[teg] = true
+			tegi = append(tegi, teg)
+		}
+	}
+	switch {
+	case len(tegi) == 1:
+		return tegi[0], "портал: " + tegi[0]
+	case len(tegi) > 1:
+		d["outbounds"] = append(vyhody, map[string]any{
+			"type":      "urltest",
+			"tag":       TegMostaDoma,
+			"outbounds": strokiVSpisokAny(tegi),
+			"url":       "https://www.gstatic.com/generate_204",
+			"interval":  "1m",
+			"tolerance": 300,
+			// Сменился выход — сокет моста закрывается, WireGuard
+			// переоткрывает его уже через новый (transport/wireguard,
+			// ClientBind.connect).
+			"interrupt_exist_connections": true,
+		})
+		return TegMostaDoma, "порталы: " + strings.Join(tegi, ", ")
+	}
+	t := tegSoedineniya(d)
+	if len(portaly) > 0 {
+		return t, "входов с порталом в профиле нет, мост через " + t
+	}
+	return t, "мост через " + t
 }
 
 // dobavitDnsDoma — сервер дома и правило зоны первым в dns.rules (раньше
@@ -375,7 +445,7 @@ func ssylaetsyaNaDom(v any) bool {
 		return true
 	}
 	s := string(b)
-	return strings.Contains(s, `"`+TegDoma+`"`) || strings.Contains(s, TegDnsDoma) ||
+	return strings.Contains(s, `"`+TegDoma+`"`) || strings.Contains(s, TegDnsDoma) || strings.Contains(s, TegMostaDoma) ||
 		strings.Contains(s, "100.77.")
 }
 
@@ -404,7 +474,7 @@ func vyrezatChuzhoyDom(d map[string]any) {
 		ostalis := make([]any, 0, len(o))
 		for _, v := range o {
 			if vh, ok := v.(map[string]any); ok {
-				if t, _ := vh["tag"].(string); t == TegDoma {
+				if t, _ := vh["tag"].(string); t == TegDoma || t == TegMostaDoma {
 					udalennye[t] = true
 					continue
 				}
@@ -416,9 +486,9 @@ func vyrezatChuzhoyDom(d map[string]any) {
 		for _, v := range ostalis {
 			if vh, ok := v.(map[string]any); ok {
 				if l, ok := vh["outbounds"].([]any); ok {
-					vh["outbounds"] = otfiltrovat(l, func(x any) bool { t, _ := x.(string); return t == TegDoma })
+					vh["outbounds"] = otfiltrovat(l, func(x any) bool { t, _ := x.(string); return t == TegDoma || t == TegMostaDoma })
 				}
-				if t, _ := vh["default"].(string); t == TegDoma {
+				if t, _ := vh["default"].(string); t == TegDoma || t == TegMostaDoma {
 					delete(vh, "default")
 				}
 			}

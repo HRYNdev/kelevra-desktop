@@ -20,7 +20,7 @@ func TestObyomZashchityTablitsa(t *testing.T) {
 		zametka string
 		zachem  string
 	}{
-		{"туннель поднят", string(yadro.Rabotaet), konfig.ZametkaVes, "заметка обязана дойти до окна"},
+		{"туннель поднят", string(yadro.Rabotaet), "", "обычная заметка «весь трафик» в окно не идёт (26.10)"},
 		{"защита опущена", string(yadro.Stoit), "", "у опущенной связи нечего описывать"},
 		{"ядро сломалось", string(yadro.Slomalos), "", "заметка поверх беды сказала бы, что что-то работает"},
 		{"ядро поднимается", string(yadro.Podnimaem), "", "пока ядро не ответило, говорить рано"},
@@ -31,6 +31,14 @@ func TestObyomZashchityTablitsa(t *testing.T) {
 				t.Fatalf("заметка = %q, ждали %q — %s", got, s.zametka, s.zachem)
 			}
 		})
+	}
+}
+
+// Заметка о состоянии правил — не обычная, она до окна доходит.
+func TestObyomZashchityPravilaDohodyat(t *testing.T) {
+	k := konfig.Kartina{Rezhim: konfig.Tunnel, Zametka: konfig.ZametkaBezSetevyhPravil}
+	if got := obyomZashchity(string(yadro.Rabotaet), k); got != konfig.ZametkaBezSetevyhPravil {
+		t.Fatalf("заметка = %q, ждали %q", got, konfig.ZametkaBezSetevyhPravil)
 	}
 }
 
