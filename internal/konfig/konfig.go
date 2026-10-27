@@ -99,6 +99,19 @@ type Kartina struct {
 	// уводил. Ради журнала: «missing fakeip record» без этой строки не с чем
 	// сверить.
 	FakeipBylo string `json:"fakeip_bylo,omitempty"`
+	// Dom — в конфиге есть вход домой (эндпоинт «Дом», dom.go).
+	Dom bool `json:"dom,omitempty"`
+	// DomBeda — блок дома был, но вписан не целиком или не вписан; почему.
+	DomBeda string `json:"dom_beda,omitempty"`
+	// DomZakryt — входа домой нет, сети и имена дома закрыты (reject).
+	DomZakryt bool `json:"dom_zakryt,omitempty"`
+	// DomMost — через какие выходы идёт мост «Дом» (порталы или «Соединение»).
+	DomMost string `json:"dom_most,omitempty"`
+	// TunTeg — тег входа tun: правила дома действуют только для него.
+	TunTeg string `json:"tun_teg,omitempty"`
+	// SvoyaSetVyrezana — что из маршрутов tun профиля задевало свою подсеть
+	// 100.77.0.0/16 и было вырезано или дополнено (dom.go, ochistitSvoyuSet).
+	SvoyaSetVyrezana []string `json:"svoya_set_vyrezana,omitempty"`
 }
 
 // ClashPoUmolchaniyu — адрес, если профиль про Clash API молчит.
@@ -206,6 +219,13 @@ type Vybor struct {
 	// VhodSluzhby — вход для запросов самой службы через туннель (запасной
 	// путь, internal/zapasnoy). nil — входа нет, поведение прежнее.
 	VhodSluzhby *VhodSluzhby
+	// Dom — вход домой (dom.go): эндпоинт WireGuard «Дом», правило сетей
+	// дома и DNS зоны. nil — входа домой нет, конфиг прежний.
+	Dom *Dom
+	// DomZakryt — вход домой на устройстве уже бывал: без вписанного Dom
+	// своя подсеть и зона dom закрываются (reject), а не уходят в обычный
+	// туннель (dom.go, zakrytDom). false — конфиг прежний.
+	DomZakryt bool
 }
 
 // VhodSluzhby — локальный вход ядра, через который служба повторяет свои
@@ -243,17 +263,24 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 
 	var ostavshiesya []any
 	var udalennyeTegi []string
+	var staryyTegTuna string
 	for _, v := range vhody {
 		vh, ok := v.(map[string]any)
 		if !ok {
-			ostavshiesya = append(ostavshiesya, v)
+			// Не объект во входах — выброс (договор, «Безопасность» п.15).
 			continue
 		}
 		tip, _ := vh["type"].(string)
 		teg, _ := vh["tag"].(string)
 		switch tip {
 		case "tun":
+			if k.EstTunnel {
+				// Ровно один tun: лишние выбрасываем вместе с правилами по их тегу.
+				udalennyeTegi = append(udalennyeTegi, teg)
+				continue
+			}
 			k.EstTunnel = true
+			staryyTegTuna = teg
 			for _, p := range androidPolyaTun {
 				delete(vh, p)
 			}
@@ -265,6 +292,8 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 			// на стенде 31.08 с поднятым туннелем пропала локальная сеть (см.
 			// internal/konfig/lokalnaya_set.go).
 			nastroitTunPodLokalnuyuSet(vh)
+			// Своя подсеть дома обязана входить в tun (dom.go).
+			k.SvoyaSetVyrezana = append(k.SvoyaSetVyrezana, ochistitSvoyuSet(vh)...)
 			// Размер пакета — в картину: по нему разбирают жалобы на
 			// скорость, а до 09.09 его не было видно нигде (см. MtuTun).
 			switch m := vh["mtu"].(type) {
@@ -299,16 +328,42 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 			// Нет двери — нечему висеть.
 			udalennyeTegi = append(udalennyeTegi, teg)
 			continue
+		default:
+			// Белый список входов (договор «вход домой», «Безопасность» п.10):
+			// остаётся только tun, служебный вход клиент ставит сам
+			// (dobavitVhodSluzhby). Любой другой вход из профиля — shadowsocks,
+			// direct на 0.0.0.0 и прочие — открыл бы машину (и сети дома за
+			// эндпоинтом «Дом») тому, кто подменит профиль.
+			udalennyeTegi = append(udalennyeTegi, teg)
+			continue
+		}
+		if tip == "tun" {
+			// Тег ставит клиент сам: от тега из профиля правила дома не зависят.
+			vh["tag"] = TegTuna
+			k.TunTeg = TegTuna
 		}
 		ostavshiesya = append(ostavshiesya, vh)
 	}
 	if !k.EstTunnel {
 		return nil, k, OshibkaBezTunnelya
 	}
+	vyrezatReverse(d)
+	vyrezatChuzhoyDom(d)
+	if staryyTegTuna != "" && staryyTegTuna != TegTuna {
+		pereimenovatVhod(d, staryyTegTuna, TegTuna)
+	}
 	k.Rezhim = Tunnel
 	k.Zametka = ZametkaVes
 
 	d["inbounds"] = ostavshiesya
+	// Тег, который клиент дал своему tun, чужому удалённому входу не принадлежит.
+	var k2 []string
+	for _, t := range udalennyeTegi {
+		if t != TegTuna {
+			k2 = append(k2, t)
+		}
+	}
+	udalennyeTegi = k2
 	if len(udalennyeTegi) > 0 {
 		pochistitPravila(d, udalennyeTegi)
 	}
@@ -363,6 +418,27 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// сервер fakeip пережил согласование. Разбор — dns.go, DiapazonFakeipKlienta.
 	k.FakeipBylo = razvestiFakeipSRouterom(d)
 	okrepitPryamoyResolverVTunnele(d)
+	// Вход домой — после всех правок правил и DNS: его правило обязано стоять
+	// раньше правила локальной сети и hijack-dns (их вставляют шаги выше, и
+	// soglasovatFakeip ставит hijack-dns в самое начало, если его не было).
+	if v.Dom != nil {
+		beda, most := dobavitDom(d, *v.Dom, k.TunTeg)
+		k.DomMost = most
+		if beda != "" {
+			k.DomBeda = beda
+			// Дом включался, но не вписался: закрыто по умолчанию — адреса и
+			// имена дома не уходят ни в туннель, ни напрямую.
+			k.DomZakryt = zakrytDom(d, k.TunTeg)
+		} else {
+			k.Dom = true
+			if zadetye := SetiDomaVIsklyucheniyah(d, v.Dom.Seti); len(zadetye) > 0 {
+				k.DomBeda = "сети дома в исключениях туннеля: " + strings.Join(zadetye, ", ")
+			}
+		}
+	}
+	if !k.Dom && !k.DomZakryt && v.DomZakryt {
+		k.DomZakryt = zakrytDom(d, k.TunTeg)
+	}
 	vpisatSekretClash(d, v.ClashSekret)
 	k.ClashAdres, k.ClashSekret = clash(d)
 	zapomnitVybor(d)
@@ -851,7 +927,8 @@ func tunnelnyyVyhod(d map[string]any) string {
 				selector = teg
 			}
 		case "urltest":
-			if urltest == "" {
+			// Группа моста «Дом» — не туннель для всего трафика.
+			if urltest == "" && teg != TegMostaDoma {
 				urltest = teg
 			}
 		case "direct", "block", "dns":

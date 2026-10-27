@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/HRYNdev/kelevra-desktop/internal/konfig"
 )
 
 // Uzel — один вариант внутри группы.
@@ -69,6 +71,9 @@ func (y *Yadro) Gruppy() ([]Gruppa, error) {
 			continue
 		}
 		if imya == "GLOBAL" { // служебная группа самого Clash API, человеку она не нужна
+			continue
+		}
+		if imya == konfig.TegMostaDoma { // мост «Дом» выбирает сам, человеку переключать нечего
 			continue
 		}
 		// Группа, которой правит автоматика и в которой один-единственный
@@ -232,6 +237,9 @@ func GruppyStatik(syroyKonfig []byte, vybor map[string]string) ([]Gruppa, error)
 	for _, o := range d.Outbounds {
 		sam := strings.EqualFold(o.Type, "urltest")
 		if !strings.EqualFold(o.Type, "selector") && !sam {
+			continue
+		}
+		if o.Tag == konfig.TegMostaDoma {
 			continue
 		}
 		// Та же оговорка, что и в Gruppy(): группа-автоматика с единственным

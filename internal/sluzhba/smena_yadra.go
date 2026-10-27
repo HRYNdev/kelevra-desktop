@@ -187,6 +187,8 @@ func (s *Sluzhba) chisloOtklyucheniy() uint64 {
 // нового ядра (Otkatit) или отпустить без решения (Otpustit) — при чужой
 // ошибке, отмене или «Отключить».
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
+	// Правило NRPT для имён дома — по итогу подъёма (dom.go, soglasovatNrpt).
+	defer s.soglasovatNrpt()
 	pokolenie := s.pokolenieAvtorezhima()
 	otklyucheniy := s.chisloOtklyucheniy()
 	// Замок замены: с пробой он держится до её исхода (все прочие подъёмы

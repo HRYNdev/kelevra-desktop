@@ -430,6 +430,9 @@ type Sluzhba struct {
 	// oshibkaTihoy — чем кончилась последняя тихая установка (nil — встала или
 	// не пробовали): квитанция команды proverit_obnovlenie. Под zamok.
 	oshibkaTihoy error
+	// dom — вход домой (dom.go). nil — служба собрана мимо Novaya (проверки):
+	// конфиг без входа домой, как до него.
+	dom *domSluzhby
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -489,6 +492,8 @@ func Novaya() (*Sluzhba, error) {
 	s.Podpiska.HTTP = s.klientSeti(20 * time.Second)
 	// Пульт с диска (слой 2), сводка /info с диска, заголовки X-Pult и X-Sostoyanie.
 	s.nachatPult()
+	// Вход домой: ключ устройства и последний проверенный блок с диска.
+	s.nachatDom()
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
@@ -507,6 +512,12 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	if dop.VhodSluzhby == nil {
 		dop.VhodSluzhby = vhodSluzhbyDlyaSborki()
 	}
+	if dop.Dom == nil {
+		dop.Dom = s.domDlyaSborki()
+	}
+	if dop.Dom == nil && !dop.DomZakryt {
+		dop.DomZakryt = s.domZakryt()
+	}
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
 		return err
@@ -522,6 +533,9 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	s.zamok.Lock()
 	s.kartina = k
 	s.zamok.Unlock()
+	if len(k.SvoyaSetVyrezana) > 0 {
+		log.Printf("маршруты туннеля из профиля задевали сеть дома 100.77.0.0/16 — исправлено: %s", strings.Join(k.SvoyaSetVyrezana, "; "))
+	}
 	// Размер пакета и источник правил — в ту же строку, где режим и права.
 	//
 	// Без них журнал десктопа за 08.09 не отвечал ни на один вопрос дня:
@@ -1850,6 +1864,14 @@ type otvetSostoyaniya struct {
 	// Ustroystva — весь список машин под этим кодом доступа, для шторки
 	// подписки. Пусто у старого сервера и до первого удачного ответа.
 	Ustroystva []ustroystvoOkna `json:"ustroystva,omitempty"`
+	// DomStroka — вход домой одной строкой для окна: «Домашняя сеть:
+	// подключено / нет соединения / ожидает подтверждения / ключ не совпадает» (dom.go, domStroka). Пусто —
+	// входа домой нет или сейчас он не нужен (ядро стоит, например дома).
+	DomStroka string `json:"dom_stroka,omitempty"`
+	// DomKlyuch — отпечаток своего открытого ключа WireGuard («AB12 CD34 EF56 GH78»,
+	// dom.Otpechatok), пока ключ ждёт подтверждения и после: владелец сети
+	// сверяет его глазами с панелью. Пусто — ключ серверу ещё не дошёл.
+	DomKlyuch string `json:"dom_klyuch,omitempty"`
 }
 
 // ustroystvoOkna — одно устройство глазами окна. Отдельный тип от
@@ -1876,8 +1898,13 @@ type ustroystvoOkna struct {
 // заполняется при сборке конфига и переживает опускание защиты молча — без
 // этого условия окно продолжало бы говорить про связь, которой в этот момент
 // нет вовсе (регрессия 22.08, TestSostoyanieNeNesetZametkuKogdaZashchitaOpushchena).
+//
+// Обычная заметка «весь трафик» (konfig.ZametkaVes) в окно не идёт: круг уже
+// говорит «Подключено · весь трафик», а надпись над строками дома владелец
+// убрал 26.10 («надпись над ней точно нахуй ваще убрать»). Остальные заметки
+// (правила не загружены, встроенные правила) — состояние, они остаются.
 func obyomZashchity(sost string, k konfig.Kartina) string {
-	if sost != string(yadro.Rabotaet) {
+	if sost != string(yadro.Rabotaet) || k.Zametka == konfig.ZametkaVes {
 		return ""
 	}
 	return k.Zametka
@@ -2086,6 +2113,10 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	o.AvtorezhimPolozhenie = polozhenieAvtorezhima(o.AvtorezhimVklyuchen, o.AvtorezhimRuchnoy, o.AvtorezhimObstanovka, o.Sost, o.AvtorezhimSlepPrichina)
 	o.VyhodAvto, o.VyhodImya = vyhodDlyaOkna(s.Nastroyki.Uzly)
 	o.ZhurnalyOtpravkaKogda = s.Nastroyki.KogdaOtpravlyaliZhurnaly()
+	o.DomStroka = s.domStroka()
+	if s.dom != nil {
+		o.DomKlyuch = s.dom.klyuch.OtpechatokPrinyatogo()
+	}
 	otdat(w, o, nil)
 }
 
@@ -2420,12 +2451,13 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 	// Ввод — либо готовая ссылка на подписку (https://<дверь>/k/<код> или /u/<ключ>), либо
 	// код: тогда вход по дверям, как на телефоне (своя сеть выдаёт этой машине свой ключ).
 	adres, hvost, ssylka := podpiska.RazobratSsylku(kod)
+	slot := ""
 	if ssylka {
 		kod = hvost
 	} else {
 		kod = podpiska.ChistyyKod(kod)
 		var err error
-		adres, err = s.Podpiska.Voyti(ctx, kod, s.dveri())
+		adres, slot, err = s.Podpiska.VoytiSoSlotom(ctx, kod, s.dveri())
 		if err != nil {
 			log.Printf("вход по коду не удался: %s", podpiska.SkrytKod(err.Error()))
 			otdat(w, nil, err)
@@ -2445,6 +2477,7 @@ func (s *Sluzhba) kod(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Nastroyki.Kod = kod
 	s.Nastroyki.Podpiska = adres
+	s.Nastroyki.Slot = slot
 	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 		otdat(w, nil, err)
 		return
@@ -3108,6 +3141,8 @@ func (s *Sluzhba) Podklyuchit(ctx context.Context) error {
 // чужой прокси уборка не трогает.
 func (s *Sluzhba) OpustitZashchitu() error {
 	err := s.Yadro.Ostanovit()
+	// Связи нет — правило NRPT для имён дома снимается (dom.go).
+	s.soglasovatNrpt()
 	s.zapomnitOtkaz(nil)
 	s.snyatProksi()
 	// След туннеля снимаем тем же безусловным движением и по той же причине:
@@ -3179,17 +3214,26 @@ func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 // Замер 02.09.2026 на сервере: с боевого ПК за всю историю ноль запросов
 // /info при семи выдачах конфига — ровно эта дыра.
 func (s *Sluzhba) ObnovitSvedeniya(ctx context.Context) {
-	if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
-		return
-	}
-	sv, err := s.vzyatSvedeniya(ctx)
-	if err != nil {
+	if err := s.obnovitSvedeniyaRaz(ctx); err != nil {
 		// Молчим не полностью: без этой строки непонятно, врёт ли окно про
 		// «Пока неизвестно» или сервер правда недоступен.
 		log.Printf("сведения о подписке не обновились: %v", err)
-		return
+	}
+}
+
+// obnovitSvedeniyaRaz — то же самое, что ObnovitSvedeniya, но отдаёт ошибку
+// наружу: нужно obnovitSvedeniyaPriStarte (povtor_seti.go), чтобы решить,
+// сетевой ли это отказ и стоит ли повторять.
+func (s *Sluzhba) obnovitSvedeniyaRaz(ctx context.Context) error {
+	if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
+		return nil
+	}
+	sv, err := s.vzyatSvedeniya(ctx)
+	if err != nil {
+		return err
 	}
 	s.prinyatSvedeniya(ctx, sv)
+	return nil
 }
 
 // prinyatSvedeniya — свежая сводка: в окно, двери, просьба журнала, пульт.
@@ -3218,7 +3262,14 @@ func (s *Sluzhba) prinyatSvedeniya(ctx context.Context, sv *podpiska.Svedeniya) 
 func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 	// Сведения о подписке — сразу, не дожидаясь первого тика: он придёт через
 	// 15 минут, а карточка «Подписка» видна человеку с первой секунды.
-	s.ObnovitSvedeniya(ctx)
+	//
+	// Разбор 26.10.2026 (ноут Вовы): первый запрос без Wi-Fi/DNS падал с «no
+	// such host» и дальше молчал до первого тика обновления профиля (от
+	// получаса) — ноут держал пульт 27 и не видел новую версию час и больше.
+	// obnovitSvedeniyaPriStarte повторяет сетевой отказ той же лестницей, что
+	// профиль и правила (povtor_seti.go), и останавливается, как только
+	// сводка принята.
+	s.obnovitSvedeniyaPriStarte(ctx)
 
 	shag := s.periodProfilya()
 	// Сетевой отказ повторяется сам, тик после сна сперва ждёт сеть

@@ -170,6 +170,8 @@ func (s *Sluzhba) nachatPult() {
 
 // prinyatSvodku — свежая сводка /info: на диск и пульт из неё.
 func (s *Sluzhba) prinyatSvodku(sv *podpiska.Svedeniya) {
+	// Вход домой — своя подпись, свой кеш (dom.go); от пульта не зависит.
+	s.prinyatDom(sv)
 	if s.pult == nil || sv == nil {
 		return
 	}
@@ -519,6 +521,7 @@ func (s *Sluzhba) Diagnostika() string {
 	s.zamok.Unlock()
 	dob("pult", fmt.Sprintf("versiya:%d ispytanie:%v", s.pult.Versiya(), s.pult.IspytanieIdet()))
 	dob("adres", adresDlyaZhurnala(s.Nastroyki.Podpiska))
+	dob("dom", s.domDlyaDiagnostiki())
 	return strings.Join(chasti, "; ")
 }
 

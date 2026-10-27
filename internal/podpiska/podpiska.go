@@ -323,12 +323,20 @@ func srokIli(d, poUmolchaniyu time.Duration) time.Duration {
 // сроки выше: недоступная дверь стоит до SrokSoedineniyaVhoda, весь проход — не дольше
 // SrokPervogoProhoda.
 func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string, error) {
+	adres, _, err := k.VoytiSoSlotom(ctx, kod, dveri)
+	return adres, err
+}
+
+// VoytiSoSlotom — то же, что Voyti, и слот устройства, который назвала дверь
+// своей сети ("" — вошли старым путём или дверь слота не назвала). Слот нужен
+// входу домой: POST /k/<код>/dom/klyuch {"slot", "pub"}.
+func (k *Klient) VoytiSoSlotom(ctx context.Context, kod string, dveri []string) (string, string, error) {
 	kod = ChistyyKod(kod)
 	if kod == "" {
-		return "", fmt.Errorf("пустой код доступа")
+		return "", "", fmt.Errorf("пустой код доступа")
 	}
 	if !kodDopustim.MatchString(kod) {
-		return "", fmt.Errorf("Код доступа содержит недопустимые символы")
+		return "", "", fmt.Errorf("Код доступа содержит недопустимые символы")
 	}
 	var posledn error
 	neTolko404 := false
@@ -348,7 +356,7 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 		status, o, err := k.vhodUstroystva(ctx1, k.shema(), dver, kod)
 		if err != nil {
 			if status < 0 {
-				return "", err
+				return "", "", err
 			}
 			posledn, neTolko404 = err, true
 			molchali = append(molchali, dver)
@@ -357,14 +365,14 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 		switch {
 		case status == http.StatusOK:
 			if k.adresKlyuchaGoden(o.Profil) {
-				return strings.TrimSuffix(o.Profil, "/"), nil
+				return strings.TrimSuffix(o.Profil, "/"), strings.TrimSpace(o.Slot), nil
 			}
 			// 200 без адреса /u/<ключ> — сбой двери, а не вход: такой адрес не сохраняем.
 			posledn, neTolko404 = fmt.Errorf("дверь %s не выдала адрес устройства", dver), true
 		case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
 			stariePuti = append(stariePuti, dver)
 		case o.Tekst != "":
-			return "", &OshibkaVhoda{Tekst: o.Tekst}
+			return "", "", &OshibkaVhoda{Tekst: o.Tekst}
 		default:
 			posledn, neTolko404 = fmt.Errorf("дверь %s ответила %d", dver, status), true
 		}
@@ -378,7 +386,7 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 		// Входа устройства тут нет, код ему незнаком или дверь не ответила — спросим старым путём.
 		_, adres, err := k.konfigNaDveri(ctx, dver, kod)
 		if err == nil {
-			return adres, nil
+			return adres, "", nil
 		}
 		var nezn *OshibkaKoda
 		if !errors.As(err, &nezn) {
@@ -387,12 +395,12 @@ func (k *Klient) Voyti(ctx context.Context, kod string, dveri []string) (string,
 		posledn = err
 	}
 	if posledn == nil {
-		return "", fmt.Errorf("нет ни одной двери")
+		return "", "", fmt.Errorf("нет ни одной двери")
 	}
 	if !neTolko404 {
-		return "", &OshibkaKoda{Kod: http.StatusNotFound}
+		return "", "", &OshibkaKoda{Kod: http.StatusNotFound}
 	}
-	return "", posledn
+	return "", "", posledn
 }
 
 // vhodUstroystva — POST /k/<код>/ustroystvo на одной двери (вход устройства
@@ -550,6 +558,9 @@ type Svedeniya struct {
 	Panel bool `json:"panel,omitempty"`
 	// Pult — блок пульта (internal/pult) как пришёл; проверяет и разбирает служба.
 	Pult json.RawMessage `json:"pult,omitempty"`
+	// Dom — блок входа домой (internal/dom) как пришёл; подпись проверяет
+	// служба. Нет поля — мозг дом этому устройству не даёт.
+	Dom json.RawMessage `json:"dom,omitempty"`
 	// Syroe — тело ответа целиком: служба хранит его на диске (hranenie.PutSvodki).
 	Syroe []byte `json:"-"`
 	// ETag — заголовок ETag ответа как есть ("" — сервер не прислал). Лёгкий
@@ -643,6 +654,9 @@ func (u Ustroystvo) VpervyeUnix() int64   { return vremyaISO(u.Vpervye) }
 // единственное поле name.
 type Imenovannyy struct {
 	Imya string `json:"name"`
+	// Slot — слот этой машины (только у device): по нему вход домой сверяет
+	// адресата блока dom, когда слот при входе по коду не запомнен.
+	Slot string `json:"slot,omitempty"`
 }
 
 // ImyaCheloveka и ImyaUstroystva читают имена, не разыменовывая nil: полей

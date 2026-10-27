@@ -395,7 +395,7 @@ func (s *Sluzhba) otpechatokZhelaemogoKonfiga() string {
 	if err != nil {
 		return ""
 	}
-	vybor := konfig.Vybor{ClashSekret: sekretClash()}
+	vybor := konfig.Vybor{ClashSekret: sekretClash(), Dom: s.domDlyaSborki(), DomZakryt: s.domZakryt()}
 	s.dobavitPravilaIzKesha(&vybor, false)
 	gotovyy, _, err := konfig.Prigotovit(syroy, vybor)
 	if err != nil {
