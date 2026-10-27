@@ -310,8 +310,9 @@ func (s *Sluzhba) SleditZaDomom(ctx context.Context, shag time.Duration) {
 // потолок 15 минут. Принятый ключ без блока dom переспрашиваем раз в
 // periodSverkiKlyucha. Сводка /info ради входа домой: пока ключ ждёт
 // подтверждения — раз в periodZhdetPodtverzh (блок приезжает через минуту
-// после «Подтвердить»); пока блок действует — раз в periodSledaZaBlokom
-// (отзыв или смена блока доезжают за минуты, а не за час). Один запрос на шаг.
+// после «Подтвердить»); пока блок действует или ключ принят, а «Дом»
+// выключен (DomVyklyuchen) — раз в periodSledaZaBlokom (отзыв, смена блока
+// или включение «Дома» доезжают за минуты, а не за час). Один запрос на шаг.
 const (
 	potolokOtpravkiKlyucha  = 15 * time.Minute
 	periodSverkiKlyucha     = time.Hour
@@ -345,6 +346,11 @@ func (s *Sluzhba) sprositSvodkuDlyaDoma(ctx context.Context) {
 		period = periodSledaZaBlokom
 	case d.klyuch.ZhdetPodtverzhdeniya():
 		period = periodZhdetPodtverzh
+	case d.klyuch.DomVyklyuchen():
+		// Ключ принят, а «Дом» этому устройству выключен: владелец включит
+		// его в любую минуту, и это не должно ждать periodSverkiKlyucha
+		// (час) — следим тем же темпом, что за действующим блоком.
+		period = periodSledaZaBlokom
 	default:
 		return
 	}

@@ -623,3 +623,38 @@ func TestDomRaspisanie(t *testing.T) {
 		t.Fatalf("следующий запрос через %v, ждали ~5 мин", d)
 	}
 }
+
+// Гейт на баг с ноута Вовы 26.10.2026: ключ принят сервером, а «Дом» этому
+// устройству выключен (Flag=-1) — ZhdetPodtverzhdeniya() лжёт «false», и
+// sprositSvodkuDlyaDoma молча уходила в default-ветку (ничего не спрашивает),
+// пока владелец сети не включит доступ: тогда включение доезжало только
+// через periodSverkiKlyucha (час), через повторную отправку ключа. Сводку
+// нужно спрашивать раз в periodSledaZaBlokom, как при действующем блоке.
+func TestDomRaspisanieDomVyklyuchenSprashivaetSvodku(t *testing.T) {
+	s, _ := stendDoma(t)
+	vyzovov := 0
+	s.dom.svodka = func(context.Context) { vyzovov++ }
+	ctx := context.Background()
+
+	k, _ := s.dom.klyuch.Klyuch()
+	s.dom.klyuch.Otmetit(k.Pub, dom.SostPodtverzhden, -1) // ключ принят, «Дом» выключен
+
+	if s.dom.klyuch.ZhdetPodtverzhdeniya() {
+		t.Fatal("при выключенном «Доме» ZhdetPodtverzhdeniya обязана быть false")
+	}
+	if !s.dom.klyuch.DomVyklyuchen() {
+		t.Fatal("DomVyklyuchen не узнал выключенный флаг")
+	}
+
+	s.sprositSvodkuDlyaDoma(ctx)
+	if vyzovov != 1 {
+		t.Fatalf("при выключенном «Доме»: %d запросов сводки, ждали 1 — включение доедет только через час", vyzovov)
+	}
+	s.sprositSvodkuDlyaDoma(ctx)
+	if vyzovov != 1 {
+		t.Fatalf("второй запрос подряд раньше срока: %d", vyzovov)
+	}
+	if d := time.Until(s.dom.kogdaSvodka); d > periodSledaZaBlokom || d < periodSledaZaBlokom-5*time.Second {
+		t.Fatalf("следующий запрос через %v, ждали ~5 мин", d)
+	}
+}

@@ -346,6 +346,39 @@ func (d fonovoeDelo) krutit(ctx context.Context) {
 	}
 }
 
+// obnovitSvedeniyaPriStarte — первая сводка подписки при запуске службы.
+//
+// Отдельным одноразовым повтором, а не фоновым делом (fonovoeDelo): фоновое
+// дело крутится вечно по своему тику, а тут нужно ровно противоположное —
+// добиться ПЕРВОГО успеха как можно скорее и дальше молчать, не заводя
+// второй периодический опрос рядом с тем, что и так даёт obnovitProfilRaz на
+// каждом тике. Лестница пауз и разбор ошибок — те же stupeniPovtora и
+// setevoyOtkaz, что у фоновых дел.
+func (s *Sluzhba) obnovitSvedeniyaPriStarte(ctx context.Context) {
+	s.obnovitSvedeniyaPriStarteStend(ctx, time.After, rand.Float64)
+}
+
+func (s *Sluzhba) obnovitSvedeniyaPriStarteStend(ctx context.Context, posle func(time.Duration) <-chan time.Time, sluchay func() float64) {
+	stupen := 0
+	for {
+		err := s.obnovitSvedeniyaRaz(ctx)
+		if err == nil || ctx.Err() != nil || !setevoyOtkaz(err) {
+			if err != nil {
+				log.Printf("сведения о подписке не обновились: %v", err)
+			}
+			return
+		}
+		pauza := pauzaPovtora(stupen, sluchay())
+		stupen++
+		log.Printf("сводка подписки при старте: сеть не ответила (%s), повтор через %s", korotkoOSeti(err), okruglit(pauza))
+		select {
+		case <-ctx.Done():
+			return
+		case <-posle(pauza):
+		}
+	}
+}
+
 // delo собирает фоновое дело с ожиданием сети на настоящих (или стендовых)
 // признаках этой службы.
 func (s *Sluzhba) delo(imya string, period time.Duration, sdelat func(context.Context) error) fonovoeDelo {

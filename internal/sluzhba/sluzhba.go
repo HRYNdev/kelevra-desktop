@@ -3209,17 +3209,26 @@ func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 // Замер 02.09.2026 на сервере: с боевого ПК за всю историю ноль запросов
 // /info при семи выдачах конфига — ровно эта дыра.
 func (s *Sluzhba) ObnovitSvedeniya(ctx context.Context) {
-	if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
-		return
-	}
-	sv, err := s.vzyatSvedeniya(ctx)
-	if err != nil {
+	if err := s.obnovitSvedeniyaRaz(ctx); err != nil {
 		// Молчим не полностью: без этой строки непонятно, врёт ли окно про
 		// «Пока неизвестно» или сервер правда недоступен.
 		log.Printf("сведения о подписке не обновились: %v", err)
-		return
+	}
+}
+
+// obnovitSvedeniyaRaz — то же самое, что ObnovitSvedeniya, но отдаёт ошибку
+// наружу: нужно obnovitSvedeniyaPriStarte (povtor_seti.go), чтобы решить,
+// сетевой ли это отказ и стоит ли повторять.
+func (s *Sluzhba) obnovitSvedeniyaRaz(ctx context.Context) error {
+	if s.Nastroyki.Kod == "" && s.Nastroyki.Podpiska == "" {
+		return nil
+	}
+	sv, err := s.vzyatSvedeniya(ctx)
+	if err != nil {
+		return err
 	}
 	s.prinyatSvedeniya(ctx, sv)
+	return nil
 }
 
 // prinyatSvedeniya — свежая сводка: в окно, двери, просьба журнала, пульт.
@@ -3248,7 +3257,14 @@ func (s *Sluzhba) prinyatSvedeniya(ctx context.Context, sv *podpiska.Svedeniya) 
 func (s *Sluzhba) ObnovlyatProfil(ctx context.Context) {
 	// Сведения о подписке — сразу, не дожидаясь первого тика: он придёт через
 	// 15 минут, а карточка «Подписка» видна человеку с первой секунды.
-	s.ObnovitSvedeniya(ctx)
+	//
+	// Разбор 26.10.2026 (ноут Вовы): первый запрос без Wi-Fi/DNS падал с «no
+	// such host» и дальше молчал до первого тика обновления профиля (от
+	// получаса) — ноут держал пульт 27 и не видел новую версию час и больше.
+	// obnovitSvedeniyaPriStarte повторяет сетевой отказ той же лестницей, что
+	// профиль и правила (povtor_seti.go), и останавливается, как только
+	// сводка принята.
+	s.obnovitSvedeniyaPriStarte(ctx)
 
 	shag := s.periodProfilya()
 	// Сетевой отказ повторяется сам, тик после сна сперва ждёт сеть

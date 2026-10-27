@@ -264,6 +264,18 @@ func (h *Hranilishche) ZhdetPodtverzhdeniya() bool {
 	return h.k != nil && h.z.Otpravlen == h.k.Pub && h.z.Sostoyanie == SostZhdet && h.z.Flag >= 0
 }
 
+// DomVyklyuchen — сервер ключ принял, а «Дом» этому устройству выключен
+// (Flag<0): владелец сети может включить его в любую минуту, и это не то же
+// самое, что «ждёт подтверждения» (ZhdetPodtverzhdeniya — false, Sostoyanie
+// тут обычно podtverzhden). Без отдельного признака узнать о включении
+// доводилось только раз в periodSverkiKlyucha (час) — через повторную
+// отправку того же ключа.
+func (h *Hranilishche) DomVyklyuchen() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.k != nil && h.z.Otpravlen == h.k.Pub && h.z.Flag < 0
+}
+
 // Otpechatok — отпечаток открытого ключа для сверки глазами: первые 16 знаков
 // base64, четырьмя группами по 4 («AB12 CD34 EF56 GH78»). Тот же вид у мозга
 // и в панели у кнопки «Подтвердить ключ» (договор, «Безопасность» п.4).
