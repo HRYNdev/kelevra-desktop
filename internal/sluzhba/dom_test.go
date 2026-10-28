@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -263,7 +264,7 @@ func TestProbaDns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pc.Close()
-	chuzhoyID := false
+	var chuzhoyID atomic.Bool
 	go func() {
 		buf := make([]byte, 512)
 		for {
@@ -274,7 +275,7 @@ func TestProbaDns(t *testing.T) {
 			otvet := append([]byte(nil), buf[:n]...)
 			otvet[2] |= 0x80
 			otvet[3] = 0x83 // NXDOMAIN — тоже ответ дома
-			if chuzhoyID {
+			if chuzhoyID.Load() {
 				otvet[0] ^= 0xff
 			}
 			pc.WriteTo(otvet, a)
@@ -285,7 +286,7 @@ func TestProbaDns(t *testing.T) {
 	if err := probaDns(ctx, pc.LocalAddr().String(), "dom"); err != nil {
 		t.Fatalf("ответ дома не засчитан: %v", err)
 	}
-	chuzhoyID = true
+	chuzhoyID.Store(true)
 	ctx2, otmena2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer otmena2()
 	if err := probaDns(ctx2, pc.LocalAddr().String(), "dom"); err == nil {
