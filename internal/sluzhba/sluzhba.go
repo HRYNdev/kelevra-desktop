@@ -2009,7 +2009,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 	s.zamok.Lock()
 	o.KachaemBin = s.kachaemBin
 	if s.svedeniya != nil {
-		o.Imya, o.DoUnix = s.svedeniya.Imya, s.svedeniya.Do
+		o.Imya, o.DoUnix = s.svedeniya.Imya, int64(s.svedeniya.Do)
 		o.ChelovekImya, o.UstroystvoImya = s.svedeniya.ImyaCheloveka(), s.svedeniya.ImyaUstroystva()
 		o.PodpiskaEst = true
 		o.Panel = s.svedeniya.Panel
