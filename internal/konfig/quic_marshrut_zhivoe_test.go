@@ -51,6 +51,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -248,14 +249,34 @@ func bezPravilaUdp443(t *testing.T, gotovyy []byte) []byte {
 // zapustitYadro поднимает `sing-box run -c путь` и ждёт, пока mixed-порт
 // начнёт принимать TCP (это и есть готовность инбаунда — sing-box сам
 // логирует старт, но polling порта надёжнее парсинга цветного лога).
-func zapustitYadro(t *testing.T, bin, konfigPut string, mixedPort int) (*exec.Cmd, *bytes.Buffer) {
+// zhurnalYadra — лог ядра под замком: exec.Cmd пишет в него из своей
+// горутины, пока ядро живо, а щупы читают String() не дожидаясь остановки.
+// Голый bytes.Buffer давал гонку под go test -race (28.10, три теста).
+type zhurnalYadra struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (z *zhurnalYadra) Write(p []byte) (int, error) {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return z.b.Write(p)
+}
+
+func (z *zhurnalYadra) String() string {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return z.b.String()
+}
+
+func zapustitYadro(t *testing.T, bin, konfigPut string, mixedPort int) (*exec.Cmd, *zhurnalYadra) {
 	t.Helper()
 	cmd := exec.Command(bin, "run", "-c", konfigPut)
 	// Рабочая папка — та же, где лежит конфиг (внутри t.TempDir), а не
 	// internal/konfig: ядро само пишет рядом cache.db, и без этого файл
 	// оседал мусором в репозитории (найдено 30.08, см. cleanup ниже).
 	cmd.Dir = filepath.Dir(konfigPut)
-	var log bytes.Buffer
+	var log zhurnalYadra
 	cmd.Stdout = &log
 	cmd.Stderr = &log
 	if err := cmd.Start(); err != nil {
