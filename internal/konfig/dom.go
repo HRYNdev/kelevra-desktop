@@ -302,6 +302,26 @@ func ochistitSvoyuSet(vh map[string]any) []string {
 	return sdelano
 }
 
+// MostDomaIzKonfiga — через какой выход идёт мост «Дом» (detour эндпоинта
+// TegDoma) в готовом конфиге ядра; пусто — входа домой в конфиге нет.
+func MostDomaIzKonfiga(syroy []byte) string {
+	var d struct {
+		Endpoints []struct {
+			Tag    string `json:"tag"`
+			Detour string `json:"detour"`
+		} `json:"endpoints"`
+	}
+	if json.Unmarshal(syroy, &d) != nil {
+		return ""
+	}
+	for _, e := range d.Endpoints {
+		if e.Tag == TegDoma {
+			return e.Detour
+		}
+	}
+	return ""
+}
+
 // bezPodseti — p без s (p пересекается с s): если p внутри s — пусто; если
 // p шире — соседние блоки по пути от p к s.
 func bezPodseti(p, s netip.Prefix) []string {

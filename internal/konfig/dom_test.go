@@ -150,6 +150,28 @@ func TestDomEndpoint(t *testing.T) {
 	}
 }
 
+// MostDomaIzKonfiga отдаёт detour эндпоинта «Дом» готового конфига; без
+// входа домой — пусто.
+func TestMostDomaIzKonfiga(t *testing.T) {
+	gotovyy, _, err := Prigotovit(profilTelefona(t), Vybor{Dom: probnyyDom()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := MostDomaIzKonfiga(gotovyy); got != "Соединение" {
+		t.Fatalf("мост %q, ждали «Соединение»", got)
+	}
+	bez, _, err := Prigotovit(profilTelefona(t), Vybor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := MostDomaIzKonfiga(bez); got != "" {
+		t.Fatalf("без входа домой мост %q", got)
+	}
+	if got := MostDomaIzKonfiga([]byte("не json")); got != "" {
+		t.Fatalf("из мусора мост %q", got)
+	}
+}
+
 // Правило дома — раньше hijack-dns, частных сетей, локальной сети, среза QUIC
 // и rule_set; перед ним только снифф (и правило входа службы — оно по своему
 // входу и сетей дома не касается).
