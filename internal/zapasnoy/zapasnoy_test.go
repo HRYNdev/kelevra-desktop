@@ -513,10 +513,16 @@ func TestAdresVhodaIUbratVhod(t *testing.T) {
 	}
 }
 
-// setevoy — обрыв соединения: EOF или (на Windows) сброс, *net.OpError.
+// setevoy — обрыв соединения: EOF, (на Windows) сброс, *net.OpError — или
+// «http: server closed idle connection». Последнюю net/http отдаёт вместо EOF,
+// когда сервер закрыл свежее соединение раньше, чем транспорт успел записать
+// запрос (гонка readLoop и writeLoop; на CI с Windows ловится изредка). Это тот
+// же обрыв, только неэкспортируемая ошибка errServerClosedIdle — разобрать её
+// можно лишь по тексту.
 func setevoy(err error) bool {
 	var op *net.OpError
-	return errors.Is(err, io.EOF) || errors.As(err, &op)
+	return errors.Is(err, io.EOF) || errors.As(err, &op) ||
+		strings.Contains(err.Error(), "server closed idle connection")
 }
 
 // POST с ключом повтора (Idempotency-Key) оборвался ПОСЛЕ того, как ушёл
