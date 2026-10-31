@@ -215,3 +215,31 @@ func TestZaprosShlyotTegYadra(t *testing.T) {
 		t.Fatalf("User-Agent без тега ядра: %q", ua)
 	}
 }
+
+// Сервер шлёт срок датой строкой (бета одноклассников, журнал 14-2 25.10) —
+// сводка не должна падать целиком; null, число и мусор тоже не роняют.
+func TestSrokPodpiski(t *testing.T) {
+	sluchai := []struct {
+		telo string
+		est  bool
+	}{
+		{`{"name":"kirill","expires":"2026-11-22","reply":"ok"}`, true},
+		{`{"name":"kirill","expires":"2026-11-22T00:00:00+05:00","reply":"ok"}`, true},
+		{`{"name":"kirill","expires":1795294800,"reply":"ok"}`, true},
+		{`{"name":"kirill","expires":null,"reply":"ok"}`, false},
+		{`{"name":"kirill","reply":"ok"}`, false},
+		{`{"name":"kirill","expires":"skoro","reply":"ok"}`, false},
+	}
+	for _, c := range sluchai {
+		s, err := RazobratSvedeniya([]byte(c.telo))
+		if err != nil {
+			t.Fatalf("%s: %v", c.telo, err)
+		}
+		if s.Otvet != "ok" || s.Imya != "kirill" {
+			t.Fatalf("%s: потеряны поля сводки: %+v", c.telo, s)
+		}
+		if (s.Do != 0) != c.est {
+			t.Fatalf("%s: срок %d, ожидался есть=%v", c.telo, s.Do, c.est)
+		}
+	}
+}

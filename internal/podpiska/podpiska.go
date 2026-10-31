@@ -524,7 +524,7 @@ func KlyuchUstroystva(adres string) string {
 type Svedeniya struct {
 	Imya      string `json:"name"`
 	Aktivna   bool   `json:"active"`
-	Do        int64  `json:"expires"`
+	Do        Srok   `json:"expires"`
 	LimitBayt int64  `json:"limit_bytes"`
 	SyedenoB  int64  `json:"used_bytes"`
 	Otvet     string `json:"reply"`
@@ -566,6 +566,36 @@ type Svedeniya struct {
 	// ETag — заголовок ETag ответа как есть ("" — сервер не прислал). Лёгкий
 	// опрос повторяет его дословно в If-None-Match (договор PULT, «Провод»).
 	ETag string `json:"-"`
+}
+
+// Srok — срок подписки в секундах Unix, 0 — без срока.
+//
+// Сервер шлёт его датой строкой ("2026-11-22") или null, а не числом: у семьи
+// срока нет и приходил null, поэтому int64 годами не ломался. У беты
+// одноклассников срок есть — и вся сводка падала «cannot unmarshal string»
+// (журнал 14-2, 25.10), вместе с ней терялись reply, send_log_now и пульт.
+// Число тоже принимаем: так сводка лежит на диске у прошлых версий. Непонятный
+// срок — «без срока», а не ошибка: из-за одной даты сводку больше не теряем.
+type Srok int64
+
+func (s *Srok) UnmarshalJSON(b []byte) error {
+	*s = 0
+	t := strings.TrimSpace(string(b))
+	if n, err := strconv.ParseInt(t, 10, 64); err == nil {
+		*s = Srok(n)
+		return nil
+	}
+	var stroka string
+	if json.Unmarshal(b, &stroka) != nil {
+		return nil
+	}
+	for _, f := range []string{"2006-01-02", time.RFC3339} {
+		if d, err := time.ParseInLocation(f, stroka, time.Local); err == nil {
+			*s = Srok(d.Unix())
+			return nil
+		}
+	}
+	return nil
 }
 
 // RazobratSvedeniya — сводка /info из тела ответа (или с диска).
