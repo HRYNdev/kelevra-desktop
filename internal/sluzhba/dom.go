@@ -69,8 +69,22 @@ type domSluzhby struct {
 	proba func(ctx context.Context, server, zona string) error
 	// rabotaetDlyaStenda — подмена «ядро работает» (живого ядра на стенде нет); nil в бою.
 	rabotaetDlyaStenda func() bool
-	// perezapuski — идущие перезапуски ядра после смены блока (ждут проверки).
+	// perezapuski — идущие перезапуски ядра после смены блока и самоизлечения
+	// (ждут проверки).
 	perezapuski sync.WaitGroup
+	// Самоизлечение (lechitDom): neudachPodryad — неудачных проб подряд;
+	// lechim — перезапуск ядра идёт; kogdaLechili — когда начат последний;
+	// pauzaLecheniya — раньше kogdaLechili+pauzaLecheniya следующий не
+	// начинать (0 — сразу по порогу). Удачная проба и сон машины паузу снимают.
+	neudachPodryad int
+	lechim         bool
+	kogdaLechili   time.Time
+	pauzaLecheniya time.Duration
+	// seychas — часы самоизлечения; nil — time.Now. Подмена для проверок.
+	seychas func() time.Time
+	// perezapustit — перезапуск ядра самоизлечения; nil — perezapustitDlyaDoma.
+	// Подмена для проверок.
+	perezapustit func(prichina string, pokolenie uint64)
 }
 
 // nachatDom — ключ, кеш блока, память и NRPT на настоящих путях; зовёт
@@ -266,6 +280,15 @@ func (s *Sluzhba) soglasovatNrpt() {
 // Туннель не поднят (дома, отключено) — ничего: новый конфиг возьмёт
 // следующий подъём. Подъём уже идёт — он сам собирает конфиг с блоком.
 func (s *Sluzhba) perepodnyatDlyaDoma() {
+	s.perezapustitDlyaDoma("вход домой сменился при поднятом туннеле — перезапускаю ядро на новом конфиге", s.pokolenieAvtorezhima())
+}
+
+// perezapustitDlyaDoma — общее тело перезапуска ядра ради входа домой (смена
+// блока, самоизлечение): то же, что «Отключить → Подключить». prichina —
+// строка журнала; pokolenie — решение о связи на момент, когда перезапуск
+// решён: сменилось (человек нажал «Отключить», автомат решил иначе) — ядро
+// не трогается, а погашенное не поднимается.
+func (s *Sluzhba) perezapustitDlyaDoma(prichina string, pokolenie uint64) {
 	if !s.zashchitaPodnyata() {
 		return
 	}
@@ -273,11 +296,14 @@ func (s *Sluzhba) perepodnyatDlyaDoma() {
 	idet := s.podyomIdet
 	s.zamok.Unlock()
 	if idet {
-		log.Printf("дом: связь сейчас поднимается — блок возьмёт этот подъём")
+		log.Printf("дом: связь сейчас поднимается — новое ядро возьмёт этот подъём")
 		return
 	}
-	pokolenie := s.pokolenieAvtorezhima()
-	log.Printf("дом: вход домой сменился при поднятом туннеле — перезапускаю ядро на новом конфиге")
+	if s.pokolenieAvtorezhima() != pokolenie {
+		log.Printf("дом: решение о связи сменилось — ядро не перезапускаю")
+		return
+	}
+	log.Printf("дом: %s", prichina)
 	_ = s.Yadro.Ostanovit()
 	if s.pokolenieAvtorezhima() != pokolenie {
 		log.Printf("дом: пока гасил ядро, решение о связи сменилось — не поднимаю")
@@ -304,10 +330,22 @@ func (s *Sluzhba) SleditZaDomom(ctx context.Context, shag time.Duration) {
 		s.sprositSvodkuDlyaDoma(ctx)
 		s.proveritSvyazDoma(ctx)
 		s.soglasovatNrpt()
+		zhdu := time.Now()
+		var tik time.Time
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case tik = <-t.C:
+		}
+		// Машина спала, пока ждали тика (prosnulsya на отрезке ожидания) —
+		// самоизлечение начинает счёт заново. Тик, выпавший ещё во время
+		// шага, опозданием не считается: шаг сам бывает долгим (сводка,
+		// ключ) как раз при плохой сети.
+		if tik.Before(zhdu) {
+			tik = time.Time{}
+		}
+		if prosnulsya(zhdu, tik, time.Now(), shag) {
+			s.dom.posleSna()
 		}
 	}
 }
@@ -514,7 +552,7 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 	}
 	if b == nil || !vKonfige || !rabotaet {
 		d.mu.Lock()
-		d.svyaz = 0
+		d.svyaz, d.neudachPodryad = 0, 0
 		d.mu.Unlock()
 		return
 	}
@@ -533,10 +571,93 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 	d.mu.Lock()
 	bylo := d.svyaz
 	d.svyaz = itog
+	if itog > 0 {
+		d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili = 0, 0, time.Time{}
+	} else {
+		d.neudachPodryad++
+	}
+	neudach := d.neudachPodryad
 	d.mu.Unlock()
 	if bylo != itog {
 		log.Printf("дом: %s", map[int]string{1: "на связи", -1: "нет связи"}[itog])
 	}
+	if neudach >= porogLecheniyaDoma {
+		s.lechitDom(neudach)
+	}
+}
+
+// Самоизлечение входа домой. После обрыва связи (сон, пропал Wi-Fi)
+// обычный туннель оживает своей очередью узлов, а эндпоинт «Дом» в ядре —
+// нет; лечит его перезапуск ядра (как «Отключить → Подключить»). Порог —
+// неудачных проб подряд (шаг ShagSlezhkiZaDomom: около полутора минут).
+// Первый перезапуск — сразу по порогу, следующие — не раньше паузы с
+// прошлого, пауза растёт по лестнице до часа: умерший узел дома дёргает
+// туннель не чаще раза в час. Удачная проба лестницу сбрасывает.
+const porogLecheniyaDoma = 3
+
+var lesenkaLecheniyaDoma = []time.Duration{10 * time.Minute, 20 * time.Minute, 40 * time.Minute, time.Hour}
+
+// sleduyushchayaPauzaLecheniya — следующая ступень после tekushchaya (0 — первая).
+func sleduyushchayaPauzaLecheniya(tekushchaya time.Duration) time.Duration {
+	for _, p := range lesenkaLecheniyaDoma {
+		if p > tekushchaya {
+			return p
+		}
+	}
+	return lesenkaLecheniyaDoma[len(lesenkaLecheniyaDoma)-1]
+}
+
+// lechitDom — перезапуск ядра самоизлечения, если пора: подъём связи не
+// идёт, прошлый перезапуск закончен и пауза с него вышла. Сам перезапуск — в
+// горутине под perezapuski, тем же путём, что при смене блока
+// (perezapustitDlyaDoma): «Отключить», нажатое после решения, его отменяет.
+func (s *Sluzhba) lechitDom(neudach int) {
+	d := s.dom
+	s.zamok.Lock()
+	idet := s.podyomIdet
+	s.zamok.Unlock()
+	if idet {
+		return
+	}
+	seychas := time.Now
+	if d.seychas != nil {
+		seychas = d.seychas
+	}
+	t := seychas()
+	d.mu.Lock()
+	if d.lechim || d.pauzaLecheniya > 0 && t.Before(d.kogdaLechili.Add(d.pauzaLecheniya)) {
+		d.mu.Unlock()
+		return
+	}
+	d.lechim, d.kogdaLechili = true, t
+	d.pauzaLecheniya = sleduyushchayaPauzaLecheniya(d.pauzaLecheniya)
+	sleduyushchiy := t.Add(d.pauzaLecheniya)
+	perezapustit := d.perezapustit
+	d.mu.Unlock()
+	if perezapustit == nil {
+		perezapustit = s.perezapustitDlyaDoma
+	}
+	prichina := fmt.Sprintf("нет связи (неудачных проб подряд: %d) — перезапускаю ядро, следующий раз не раньше %s",
+		neudach, sleduyushchiy.Format("15:04"))
+	pokolenie := s.pokolenieAvtorezhima()
+	d.perezapuski.Add(1)
+	go func() {
+		defer d.perezapuski.Done()
+		defer func() {
+			d.mu.Lock()
+			d.lechim = false
+			d.mu.Unlock()
+		}()
+		perezapustit(prichina, pokolenie)
+	}()
+}
+
+// posleSna — машина проснулась: сбой до сна не в счёт. Пробы считаются
+// заново, а первый перезапуск после сна не ждёт паузы с прошлого сбоя.
+func (d *domSluzhby) posleSna() {
+	d.mu.Lock()
+	d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili = 0, 0, time.Time{}
+	d.mu.Unlock()
 }
 
 // probaDnsDoma — DNS-запрос к дому (100.77.0.1:53) отсюда, с машины: пакет
