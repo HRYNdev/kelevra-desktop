@@ -666,18 +666,22 @@ type stendLecheniya struct {
 	s           *Sluzhba
 	otvet       error
 	sejchas     time.Time
+	mostZhiv    bool
 	perezapuski []string
+	kogda       []time.Time // когда решён каждый перезапуск (часы стенда)
 }
 
 func novyyStendLecheniya(t *testing.T) *stendLecheniya {
 	t.Helper()
 	s, priv := stendDoma(t)
-	st := &stendLecheniya{s: s, otvet: errors.New("молчит"), sejchas: time.Date(2026, 10, 30, 22, 46, 0, 0, time.UTC)}
+	st := &stendLecheniya{s: s, otvet: errors.New("молчит"), sejchas: time.Date(2026, 10, 30, 22, 46, 0, 0, time.UTC), mostZhiv: true}
 	s.dom.rabotaetDlyaStenda = func() bool { return true }
 	s.dom.proba = func(ctx context.Context, server, zona string) error { return st.otvet }
 	s.dom.seychas = func() time.Time { return st.sejchas }
+	s.dom.most = func(context.Context) (bool, string) { return st.mostZhiv, "Финляндия" }
 	s.dom.perezapustit = func(prichina string, pokolenie uint64) {
 		st.perezapuski = append(st.perezapuski, prichina)
+		st.kogda = append(st.kogda, st.sejchas)
 	}
 	s.prinyatDom(&podpiska.Svedeniya{Dom: blokDoma(t, s, priv, 1, "100.76.0.1:51820")})
 	s.dom.perezapuski.Wait()
@@ -879,6 +883,7 @@ func TestDomSamoizlechenieCherezYadro(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 	s.dom.rabotaetDlyaStenda = func() bool { return true }
 	s.dom.proba = func(context.Context, string, string) error { return errors.New("молчит") }
+	s.dom.most = func(context.Context) (bool, string) { return true, "Соединение" }
 	for i := 0; i < 3; i++ {
 		s.proveritSvyazDoma(context.Background())
 		s.dom.perezapuski.Wait()
@@ -897,5 +902,69 @@ func TestDomSamoizlechenieCherezYadro(t *testing.T) {
 	s.perezapustitDlyaDoma("проверка", staroe)
 	if len(zapuski) != 2 {
 		t.Fatalf("после смены решения о связи ядро поднято: %v", zapuski)
+	}
+}
+
+// shagi — пробы раз в ShagSlezhkiZaDomom с ot до do включительно; mostZhiv(t)
+// — отвечает ли мост в этот момент.
+func (st *stendLecheniya) shagi(ot, do time.Time, mostZhiv func(time.Time) bool) {
+	for t := ot; !t.After(do); t = t.Add(ShagSlezhkiZaDomom) {
+		st.sejchas = t
+		st.mostZhiv = mostZhiv(t)
+		st.proba()
+	}
+}
+
+// Хронология сбоя 30.10: «Дом» молчит с 22:45, сети нет вовсе (мост не
+// отвечает) до 23:19:42. Пока сети нет — ни одного перезапуска и лестница не
+// тратится, в журнале одна строка; первая проба после возврата сети (23:20)
+// перезапускает ядро сразу, а не через час.
+func TestDomSamoizlechenieKhronologiya3010(t *testing.T) {
+	st := novyyStendLecheniya(t)
+	zhurnal := &syncBuffer{}
+	log.SetOutput(zhurnal)
+	defer log.SetOutput(os.Stderr)
+	den := func(ch, m, s int) time.Time { return time.Date(2026, 10, 30, ch, m, s, 0, time.UTC) }
+	setVernulas := den(23, 19, 42)
+	st.shagi(den(22, 45, 0), den(23, 29, 30), func(t time.Time) bool { return !t.Before(setVernulas) })
+	if len(st.kogda) != 1 || !st.kogda[0].Equal(den(23, 20, 0)) {
+		t.Fatalf("перезапуски в %v, ждали один в 23:20:00", st.kogda)
+	}
+	if st.s.dom.pauzaLecheniya != 10*time.Minute {
+		t.Fatalf("пауза после перезапуска %v, ждали 10m — лестница тратилась без сети", st.s.dom.pauzaLecheniya)
+	}
+	if n := strings.Count(zhurnal.String(), "не отвечает — ядро не перезапускаю"); n != 1 {
+		t.Fatalf("строк «мост не отвечает» в журнале %d, ждали 1:\n%s", n, zhurnal.String())
+	}
+	if !strings.Contains(zhurnal.String(), "мост «Финляндия» снова отвечает") {
+		t.Fatalf("возврата моста нет в журнале:\n%s", zhurnal.String())
+	}
+}
+
+// Перезапуск был, пауза 10 минут ещё идёт, сеть пропала и вернулась — пауза
+// снята: перезапуск на первой пробе после возврата, а не по старой паузе.
+func TestDomSamoizlechenieMostOzhilSnimaetPauzu(t *testing.T) {
+	st := novyyStendLecheniya(t)
+	den := func(ch, m, s int) time.Time { return time.Date(2026, 10, 30, ch, m, s, 0, time.UTC) }
+	st.shagi(den(22, 43, 0), den(22, 44, 0), func(time.Time) bool { return true })
+	if len(st.kogda) != 1 || !st.kogda[0].Equal(den(22, 44, 0)) {
+		t.Fatalf("первый перезапуск %v, ждали 22:44:00", st.kogda)
+	}
+	st.shagi(den(22, 44, 30), den(22, 50, 0), func(t time.Time) bool { return !t.Before(den(22, 50, 0)) })
+	if len(st.kogda) != 2 || !st.kogda[1].Equal(den(22, 50, 0)) {
+		t.Fatalf("перезапуски %v, ждали второй в 22:50:00 (до 22:54 по старой паузе)", st.kogda)
+	}
+}
+
+// Мост молчит всё время (замер мог ошибиться) — лечение не выключается
+// насовсем: раз в час с начала молчания.
+func TestDomSamoizlechenieMostMolchitChas(t *testing.T) {
+	st := novyyStendLecheniya(t)
+	t0 := time.Date(2026, 10, 30, 22, 45, 0, 0, time.UTC)
+	st.shagi(t0, t0.Add(2*time.Hour+10*time.Minute), func(time.Time) bool { return false })
+	molchit := t0.Add(2 * ShagSlezhkiZaDomom) // третья проба — первое решение
+	ozhidali := []time.Time{molchit.Add(time.Hour), molchit.Add(2 * time.Hour)}
+	if len(st.kogda) != 2 || !st.kogda[0].Equal(ozhidali[0]) || !st.kogda[1].Equal(ozhidali[1]) {
+		t.Fatalf("перезапуски %v, ждали %v", st.kogda, ozhidali)
 	}
 }

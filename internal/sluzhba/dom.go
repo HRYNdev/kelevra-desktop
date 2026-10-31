@@ -85,6 +85,11 @@ type domSluzhby struct {
 	// perezapustit — перезапуск ядра самоизлечения; nil — perezapustitDlyaDoma.
 	// Подмена для проверок.
 	perezapustit func(prichina string, pokolenie uint64)
+	// mostMolchitS — с какого времени выход моста «Дом» не отвечает (сети
+	// нет); нулевое — отвечает или не мерили.
+	mostMolchitS time.Time
+	// most — жив ли выход моста и его тег; nil — mostOtvechaet. Подмена для проверок.
+	most func(ctx context.Context) (zhiv bool, teg string)
 }
 
 // nachatDom — ключ, кеш блока, память и NRPT на настоящих путях; зовёт
@@ -572,7 +577,7 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 	bylo := d.svyaz
 	d.svyaz = itog
 	if itog > 0 {
-		d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili = 0, 0, time.Time{}
+		d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili, d.mostMolchitS = 0, 0, time.Time{}, time.Time{}
 	} else {
 		d.neudachPodryad++
 	}
@@ -582,7 +587,7 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 		log.Printf("дом: %s", map[int]string{1: "на связи", -1: "нет связи"}[itog])
 	}
 	if neudach >= porogLecheniyaDoma {
-		s.lechitDom(neudach)
+		s.lechitDom(ctx, neudach)
 	}
 }
 
@@ -593,9 +598,17 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 // Первый перезапуск — сразу по порогу, следующие — не раньше паузы с
 // прошлого, пауза растёт по лестнице до часа: умерший узел дома дёргает
 // туннель не чаще раза в час. Удачная проба лестницу сбрасывает.
+//
+// Пока не отвечает и сам выход моста (сети нет вовсе), перезапуск
+// бесполезен: не лечим и лестницу не тратим. Мост ожил — лестница с начала,
+// перезапуск на ближайшей неудачной пробе. Молчит мост дольше часа — лечим
+// раз в час всё равно: замер моста мог и ошибиться.
 const porogLecheniyaDoma = 3
 
 var lesenkaLecheniyaDoma = []time.Duration{10 * time.Minute, 20 * time.Minute, 40 * time.Minute, time.Hour}
+
+// potolokLecheniyaDoma — верхняя ступень лестницы.
+var potolokLecheniyaDoma = lesenkaLecheniyaDoma[len(lesenkaLecheniyaDoma)-1]
 
 // sleduyushchayaPauzaLecheniya — следующая ступень после tekushchaya (0 — первая).
 func sleduyushchayaPauzaLecheniya(tekushchaya time.Duration) time.Duration {
@@ -604,14 +617,15 @@ func sleduyushchayaPauzaLecheniya(tekushchaya time.Duration) time.Duration {
 			return p
 		}
 	}
-	return lesenkaLecheniyaDoma[len(lesenkaLecheniyaDoma)-1]
+	return potolokLecheniyaDoma
 }
 
 // lechitDom — перезапуск ядра самоизлечения, если пора: подъём связи не
-// идёт, прошлый перезапуск закончен и пауза с него вышла. Сам перезапуск — в
-// горутине под perezapuski, тем же путём, что при смене блока
-// (perezapustitDlyaDoma): «Отключить», нажатое после решения, его отменяет.
-func (s *Sluzhba) lechitDom(neudach int) {
+// идёт, прошлый перезапуск закончен, выход моста отвечает и пауза с прошлого
+// перезапуска вышла. Сам перезапуск — в горутине под perezapuski, тем же
+// путём, что при смене блока (perezapustitDlyaDoma): «Отключить», нажатое
+// после решения, его отменяет.
+func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 	d := s.dom
 	s.zamok.Lock()
 	idet := s.podyomIdet
@@ -619,13 +633,43 @@ func (s *Sluzhba) lechitDom(neudach int) {
 	if idet {
 		return
 	}
+	d.mu.Lock()
+	lechim := d.lechim
+	most := d.most
+	d.mu.Unlock()
+	if lechim {
+		return
+	}
+	if most == nil {
+		most = s.mostOtvechaet
+	}
+	zhiv, teg := most(ctx)
 	seychas := time.Now
 	if d.seychas != nil {
 		seychas = d.seychas
 	}
 	t := seychas()
 	d.mu.Lock()
-	if d.lechim || d.pauzaLecheniya > 0 && t.Before(d.kogdaLechili.Add(d.pauzaLecheniya)) {
+	zamolchal, ozhil := false, false
+	if !zhiv {
+		if d.mostMolchitS.IsZero() {
+			d.mostMolchitS, zamolchal = t, true
+		}
+		ot := d.mostMolchitS
+		if d.kogdaLechili.After(ot) {
+			ot = d.kogdaLechili
+		}
+		if t.Sub(ot) < potolokLecheniyaDoma {
+			d.mu.Unlock()
+			if zamolchal {
+				log.Printf("дом: нет связи, и мост «%s» не отвечает — ядро не перезапускаю, пока не вернётся сеть", teg)
+			}
+			return
+		}
+	} else if !d.mostMolchitS.IsZero() {
+		d.mostMolchitS, d.pauzaLecheniya, d.kogdaLechili, ozhil = time.Time{}, 0, time.Time{}, true
+	}
+	if d.pauzaLecheniya > 0 && t.Before(d.kogdaLechili.Add(d.pauzaLecheniya)) {
 		d.mu.Unlock()
 		return
 	}
@@ -634,6 +678,9 @@ func (s *Sluzhba) lechitDom(neudach int) {
 	sleduyushchiy := t.Add(d.pauzaLecheniya)
 	perezapustit := d.perezapustit
 	d.mu.Unlock()
+	if ozhil {
+		log.Printf("дом: мост «%s» снова отвечает — перезапуск ядра без паузы", teg)
+	}
 	if perezapustit == nil {
 		perezapustit = s.perezapustitDlyaDoma
 	}
@@ -652,11 +699,37 @@ func (s *Sluzhba) lechitDom(neudach int) {
 	}()
 }
 
+// mostOtvechaet — жив ли выход, через который идёт мост «Дом» (detour
+// эндпоинта в конфиге на диске): замер ядра через этот выход, как у очереди
+// узлов. Не узнать (конфига или эндпоинта нет, Clash API не ответил —
+// ядро могло и зависнуть) — «жив»: тогда решает одна проба дома.
+func (s *Sluzhba) mostOtvechaet(ctx context.Context) (bool, string) {
+	if s.Yadro == nil {
+		return true, ""
+	}
+	syroy, err := os.ReadFile(s.Yadro.PutKonfiga())
+	if err != nil {
+		return true, ""
+	}
+	teg := konfig.MostDomaIzKonfiga(syroy)
+	if teg == "" {
+		return true, ""
+	}
+	zctx, otmena := context.WithTimeout(ctx, 12*time.Second)
+	defer otmena()
+	_, err = s.Yadro.ZameritZa(zctx, teg, 6*time.Second)
+	var mimo *url.Error
+	if err == nil || errors.As(err, &mimo) {
+		return true, teg
+	}
+	return false, teg
+}
+
 // posleSna — машина проснулась: сбой до сна не в счёт. Пробы считаются
 // заново, а первый перезапуск после сна не ждёт паузы с прошлого сбоя.
 func (d *domSluzhby) posleSna() {
 	d.mu.Lock()
-	d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili = 0, 0, time.Time{}
+	d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili, d.mostMolchitS = 0, 0, time.Time{}, time.Time{}
 	d.mu.Unlock()
 }
 
