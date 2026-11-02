@@ -186,7 +186,38 @@ func (s *Sluzhba) chisloOtklyucheniy() uint64 {
 // у неё один из трёх: подтвердить (Zakrepit), откатить за отказ запуска
 // нового ядра (Otkatit) или отпустить без решения (Otpustit) — при чужой
 // ошибке, отмене или «Отключить».
+//
+// Подъёмы и перезапуски ядра идут по одному (zamokPodyoma): кто пришёл вторым,
+// ждёт первого, а не гасит и не поднимает ядро у него под руками.
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
+	pokolenie := s.pokolenieAvtorezhima()
+	otklyucheniy := s.chisloOtklyucheniy()
+	zhdali, err := s.vzyatZamokPodyoma(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.zamokPodyoma.Unlock()
+	if s.pokolenieAvtorezhima() != pokolenie {
+		if s.chisloOtklyucheniy() != otklyucheniy {
+			log.Printf("подъём связи не начат: пока шёл другой подъём, нажато «Отключить»")
+			return OshibkaReshenieSmenilos
+		}
+		log.Printf("подъём связи не начат: пока шёл другой подъём, сменился режим автомата")
+		return OshibkaRezhimSmenilsya
+	}
+	if zhdali && s.zashchitaPodnyata() {
+		// Пока ждали, чужой подъём или перезапуск уже поднял ядро на свежем
+		// конфиге: второе ядро рядом не нужно, а повторный подъём «по
+		// готовому» не дождался бы старта и потерял бы выбор узла.
+		log.Printf("подъём связи: пока ждал очереди, ядро уже поднято другим подъёмом")
+		return nil
+	}
+	return s.podnyatZashchituPodZamkom(ctx)
+}
+
+// podnyatZashchituPodZamkom — тело PodnyatZashchitu; вызывающий держит
+// zamokPodyoma.
+func (s *Sluzhba) podnyatZashchituPodZamkom(ctx context.Context) error {
 	// Правило NRPT для имён дома — по итогу подъёма (dom.go, soglasovatNrpt).
 	defer s.soglasovatNrpt()
 	pokolenie := s.pokolenieAvtorezhima()
@@ -325,6 +356,39 @@ func (s *Sluzhba) vzyatZamokSmeny(ctx context.Context) error {
 		case <-shag.C:
 			if s.zamokSmenyYadra.TryLock() {
 				return nil
+			}
+		}
+	}
+}
+
+// OshibkaPodyomUzheIdet — подъём не дождался очереди: другой подъём или
+// перезапуск ядра не закончился за srokOzhidaniyaPodyoma.
+var OshibkaPodyomUzheIdet = errors.New("Связь уже поднимается. Повторите подключение через минуту.")
+
+// srokOzhidaniyaPodyoma — сколько подъём ждёт очереди zamokPodyoma.
+var srokOzhidaniyaPodyoma = 90 * time.Second
+
+// vzyatZamokPodyoma ждёт очереди на подъём или перезапуск ядра не дольше
+// srokOzhidaniyaPodyoma и не дольше ctx. zhdali — очередь пришлось ждать.
+func (s *Sluzhba) vzyatZamokPodyoma(ctx context.Context) (zhdali bool, err error) {
+	if s.zamokPodyoma.TryLock() {
+		return false, nil
+	}
+	log.Printf("подъём связи ждёт: идёт другой подъём или перезапуск ядра")
+	srok := time.NewTimer(srokOzhidaniyaPodyoma)
+	defer srok.Stop()
+	shag := time.NewTicker(50 * time.Millisecond)
+	defer shag.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return true, fmt.Errorf("подъём связи прерван: %w", ctx.Err())
+		case <-srok.C:
+			log.Printf("подъём связи не начат: другой подъём не закончился за %s", srokOzhidaniyaPodyoma)
+			return true, OshibkaPodyomUzheIdet
+		case <-shag.C:
+			if s.zamokPodyoma.TryLock() {
+				return true, nil
 			}
 		}
 	}

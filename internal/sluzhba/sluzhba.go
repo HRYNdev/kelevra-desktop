@@ -192,6 +192,11 @@ type Sluzhba struct {
 	// zamokSmenyYadra — замена файла ядра (smena_yadra.go) идёт одна за раз:
 	// два одновременных подключения не должны менять файл друг под другом.
 	zamokSmenyYadra sync.Mutex
+	// zamokPodyoma — подъём связи (PodnyatZashchitu) и перезапуск ядра ради
+	// входа домой (perezapustitDlyaDoma) идут по одному: «погасить и поднять»
+	// не должно пересечься с чужим подъёмом. «Отключить» его не берёт —
+	// остановка прерывает подъём намеренно.
+	zamokPodyoma sync.Mutex
 	// zhurnalStarayaPodpis — когда в журнал писали про сборку ядра с
 	// подписью прежнего формата (не чаще раза в сутки).
 	zhurnalStarayaPodpis time.Time
