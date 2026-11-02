@@ -529,6 +529,8 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	if err := s.Yadro.ZapisatKonfig(gotovyy); err != nil {
 		return err
 	}
+	// Выбор пункта, которого в новом конфиге нет (сервер переименовал пункты), — забыт.
+	s.zabytUstarevshiyVybor(gotovyy)
 	s.Yadro.Api, s.Yadro.Sekret = k.ClashAdres, k.ClashSekret
 	s.zamok.Lock()
 	s.kartina = k
@@ -1603,11 +1605,28 @@ func (s *Sluzhba) vybrat(w http.ResponseWriter, r *http.Request) {
 // «выбрал до подключения», что для «выбрал во время работы» (второе тоже
 // стоит запомнить: свежий выбор обязан пережить следующий холодный старт,
 // даже если cache_file ядра почему-то не поднимется).
+//
+// Первый пункт очереди узлов ручным выбором не записывается, а снимает прежний: стоять на
+// первом — это и есть автоматика (как «Автоматически» на телефоне). Записанное имя первого
+// пункта после переименования пунктов сервером превращалось бы в ручной выбор, который
+// держит очередь.
+//
+// Карта заменяется новой, а не правится на месте: её читают без замка окно и очередь.
 func (s *Sluzhba) zapomnitUzel(gruppa, uzel string) {
-	if s.Nastroyki.Uzly == nil {
-		s.Nastroyki.Uzly = map[string]string{}
+	stalo := make(map[string]string, len(s.Nastroyki.Uzly)+1)
+	for g, u := range s.Nastroyki.Uzly {
+		stalo[g] = u
 	}
-	s.Nastroyki.Uzly[gruppa] = uzel
+	if syroy, err := os.ReadFile(s.Yadro.PutKonfiga()); err == nil && pervyyVOcheredi(syroy, gruppa, uzel) {
+		delete(stalo, gruppa)
+		log.Printf("выбран первый узел очереди «%s» — это автоматика, ручным выбором не записываю", uzel)
+	} else {
+		stalo[gruppa] = uzel
+	}
+	if len(stalo) == 0 {
+		stalo = nil
+	}
+	s.Nastroyki.Uzly = stalo
 	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 		log.Printf("не сохранил выбор узла: %v", err)
 	}
@@ -1639,9 +1658,11 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 			o = nil
 			if gruppa, uzly, ok := ochered.IzKonfiga(syroy); ok {
 				pervyy := uzly[0]
+				punkty := punktyGrupp(syroy)[gruppa]
 				o = &ochered.Ochered{Gruppa: gruppa, Uzly: uzly, Ya: yadroDlyaOcheredi{s.Yadro}, Log: log.Printf,
-					// Человек выбрал в окне не первый узел — его выбор, очередь не вмешивается.
-					Ruchnoy: func() bool { v := s.Nastroyki.Uzly[gruppa]; return v != "" && v != pervyy },
+					// Человек выбрал в окне не первый пункт — его выбор, очередь не вмешивается.
+					// Выбор пункта, которого в этом конфиге нет, — не выбор (zabytUstarevshiyVybor).
+					Ruchnoy: func() bool { v := s.Nastroyki.Uzly[gruppa]; return v != "" && v != pervyy && punkty[v] },
 					Porog: func() int {
 						v, _ := s.pult.Celoe("uzel.porog_otkazov")
 						return int(v)
