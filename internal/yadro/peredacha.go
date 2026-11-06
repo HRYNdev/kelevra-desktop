@@ -233,6 +233,21 @@ func PogasitChuzhoe(pid int) {
 	}
 	if err := proc.Kill(); err != nil {
 		log.Printf("не смог погасить ядро без хозяина (pid %d): %v", pid, err)
+		return
+	}
+	// Дождаться выхода: пока процесс жив, жив и его адаптер туннеля с
+	// маршрутами, а новое ядро рядом с ним трафика не получает (06.11: смена
+	// ядра при обновлении — новый tun126 молчал, всё шло напрямую). На Windows
+	// FindProcess держит описатель процесса, Wait ждёт и чужой процесс.
+	gotovo := make(chan struct{})
+	go func() {
+		_, _ = proc.Wait()
+		close(gotovo)
+	}()
+	select {
+	case <-gotovo:
+	case <-time.After(5 * time.Second):
+		log.Printf("ядро pid %d не вышло за 5 с после сигнала — иду дальше", pid)
 	}
 }
 
