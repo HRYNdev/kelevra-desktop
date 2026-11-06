@@ -334,8 +334,9 @@ func (s *Sluzhba) perezapustit(prichina string, pokolenie uint64, zhdat bool) {
 		s.zamokPodyoma.Lock()
 	}
 	defer s.zamokPodyoma.Unlock()
-	// Пока ждали очереди, человек мог отключить связь или она упала сама.
-	if !s.zashchitaPodnyata() {
+	// Пока ждали очереди, человек мог отключить связь или она упала сама;
+	// служба могла начать уход (perehody.go).
+	if s.uhodit.Load() || !s.zashchitaPodnyata() {
 		return
 	}
 	s.zamok.Lock()
@@ -357,18 +358,7 @@ func (s *Sluzhba) perezapustit(prichina string, pokolenie uint64, zhdat bool) {
 	log.Printf("дом: %s", prichina)
 	// От «погасить» до «туннель поднят» трафик мимо туннеля закрыт
 	// (zaslon_perezapuska.go): иначе программы в эти секунды уходят напрямую.
-	s.zakrytMimoTunnelya()
-	_ = s.Yadro.Ostanovit()
-	if s.pokolenieAvtorezhima() != pokolenie {
-		log.Printf("дом: пока гасил ядро, решение о связи сменилось — не поднимаю")
-		s.otkrytMimoTunnelya("решение о связи сменилось, ядро не поднимаю")
-		return
-	}
-	err := s.podnyatZashchituPodZamkom(context.Background())
-	if err != nil {
-		log.Printf("дом: связь после перезапуска ядра не поднялась: %v", err)
-	}
-	s.otkrytMimoTunnelyaPoItogu(err)
+	s.perezapustitPodZamkom(context.Background(), "дом", pokolenie)
 }
 
 // SleditZaDomom — отправка открытого ключа (пока сервер его не принял) и

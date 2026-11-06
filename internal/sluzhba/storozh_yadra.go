@@ -187,8 +187,15 @@ func (s *Sluzhba) zhdatPauzuStorozha(ctx context.Context, pauza time.Duration, o
 				return false
 			}
 			if s.chisloOtklyucheniy() != otkl {
-				// «Отключить» само сняло запрет (OpustitZashchitu).
+				// «Отключить» само сняло запрет (OpustitZashchitu). Но запрет
+				// этой паузы мог встать и ПОСЛЕ него (щель между проверкой
+				// storozhNeNuzhen и zakrytMimoTunnelya): тогда он держал бы
+				// полный запрет до предохранителя (60 с) у человека, который
+				// отключился. Снять ещё раз; без временного запрета — пусто.
 				log.Printf("сторож: нажато «Отключить» — ядро не поднимаю")
+				if zakryto {
+					s.otkrytMimoTunnelya("нажато «Отключить»")
+				}
 				return false
 			}
 			if s.Yadro.Sost() == yadro.Rabotaet {
@@ -213,9 +220,10 @@ func (s *Sluzhba) podnyatStorozhem(ctx context.Context, otkl uint64) (dalshe boo
 	defer s.zamokPodyoma.Unlock()
 	if prichina := s.storozhNeNuzhen(otkl); prichina != "" {
 		log.Printf("сторож: ядро не поднимаю: %s", prichina)
-		if s.chisloOtklyucheniy() == otkl {
-			s.otkrytMimoTunnelya(prichina)
-		}
+		// Временный запрет паузы — снять при любой причине, и при «Отключить»
+		// тоже: под замком переходов чужого временного запрета нет, а свой мог
+		// встать после того, как «Отключить» сняло всё (щель паузы).
+		s.otkrytMimoTunnelya(prichina)
 		return false, nil
 	}
 	if s.zashchitaPodnyata() {

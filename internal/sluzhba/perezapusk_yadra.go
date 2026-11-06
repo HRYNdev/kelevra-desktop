@@ -236,9 +236,10 @@ func (s *Sluzhba) posleNovogoProfilya() {
 }
 
 // perezapustitNaNovom — перезапуск ядра ради нового конфига или нового ядра:
-// проверка конфига ядром, затем как у «Дома» (dom.go perezapustit) — трафик
-// мимо туннеля закрыт, ядро погашено, поднято тем же подъёмом, что у кнопки
-// (с заменой ядра, если новое отложено), запрет снят по итогу.
+// проверка конфига ядром, затем общий перезапуск (perezapustitPodZamkom, им же
+// идёт «Дом») — под общим замком переходов (perehody.go), трафик мимо туннеля
+// закрыт, ядро погашено, поднято тем же подъёмом, что у кнопки (с заменой
+// ядра, если новое отложено), запрет снят по итогу.
 //
 // Занято (идёт подъём или другой перезапуск), связь не поднята, решение о
 // связи сменилось — ничего не делает: sdelano=false, отложенное остаётся до
@@ -256,7 +257,7 @@ func (s *Sluzhba) perezapustitNaNovom(ctx context.Context, prichina string, poko
 	s.zamok.Lock()
 	idet := s.podyomIdet
 	s.zamok.Unlock()
-	if idet || !s.zashchitaPodnyata() || s.pokolenieAvtorezhima() != pokolenie {
+	if s.uhodit.Load() || idet || !s.zashchitaPodnyata() || s.pokolenieAvtorezhima() != pokolenie {
 		return false
 	}
 	telo, err := s.zhelaemyyKonfig()
@@ -266,17 +267,30 @@ func (s *Sluzhba) perezapustitNaNovom(ctx context.Context, prichina string, poko
 		return true
 	}
 	log.Printf("перезапускаю ядро: %s", prichina)
+	s.perezapustitPodZamkom(ctx, "перезапуск ядра", pokolenie)
+	return true
+}
+
+// perezapustitPodZamkom — сам перезапуск ядра службой («Дом», новый конфиг,
+// отложенный): временный полный запрет мимо туннеля поверх постоянного
+// уровня (zaslon_perezapuska.go) → погасить → поднять тем же подъёмом, что у
+// кнопки → запрет по итогу (к уровню политики). Решение о связи сменилось,
+// пока гасили («Отключить», автомат), — не поднимать.
+//
+// Зовущий держит zamokPodyoma (общий замок переходов, perehody.go) и НЕ
+// держит s.zamok и s.avtorezhimZamok: методы запрета берут их сами.
+func (s *Sluzhba) perezapustitPodZamkom(ctx context.Context, kto string, pokolenie uint64) error {
 	s.zakrytMimoTunnelya()
 	_ = s.Yadro.Ostanovit()
 	if s.pokolenieAvtorezhima() != pokolenie {
-		log.Printf("перезапуск ядра: пока гасил, решение о связи сменилось — не поднимаю")
+		log.Printf("%s: пока гасил ядро, решение о связи сменилось — не поднимаю", kto)
 		s.otkrytMimoTunnelya("решение о связи сменилось, ядро не поднимаю")
-		return true
+		return OshibkaReshenieSmenilos
 	}
-	err = s.podnyatZashchituPodZamkom(ctx)
+	err := s.podnyatZashchituPodZamkom(ctx)
 	if err != nil {
-		log.Printf("перезапуск ядра: связь не поднялась: %v", err)
+		log.Printf("%s: связь после перезапуска ядра не поднялась: %v", kto, err)
 	}
 	s.otkrytMimoTunnelyaPoItogu(err)
-	return true
+	return err
 }
