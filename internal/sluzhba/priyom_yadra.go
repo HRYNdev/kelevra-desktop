@@ -438,10 +438,17 @@ func (s *Sluzhba) otpechatokZhelaemogoKonfiga() string {
 // Новое не поднялось — запрет снят, дальше поднимает авторежим, как после
 // любой неудачи подъёма.
 func (s *Sluzhba) smenitYadroPlavno(ctx context.Context, p yadro.Peredacha) {
+	// Смена — переход ядра, как любой другой (perehody.go): «погасить
+	// прежнее — поднять новое» целиком под общим замком.
+	if _, err := s.vzyatZamokPodyoma(ctx); err != nil {
+		log.Printf("ядро прошлой копии живо (pid %d), но конфиг сменился — смену не начал: %v", p.PID, err)
+		return
+	}
+	defer s.zamokPodyoma.Unlock()
 	log.Printf("ядро прошлой копии живо (pid %d), но конфиг сменился — меняю ядро: трафик мимо туннеля закрыт до подъёма нового", p.PID)
 	s.zakrytMimoTunnelya()
 	pogasitChuzhoe(p.PID)
-	err := s.PodnyatZashchitu(ctx)
+	err := s.podnyatZashchituPodZamkom(ctx)
 	s.otkrytMimoTunnelyaPoItogu(err)
 	if err != nil {
 		log.Printf("новое ядро после смены не поднялось (%v) — дальше поднимет авторежим", err)

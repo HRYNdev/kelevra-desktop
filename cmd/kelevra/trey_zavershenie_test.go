@@ -22,7 +22,9 @@ func TestZnachokSnimaetsyaPriZavershenii(t *testing.T) {
 		t.Fatalf("не прочитал main.go: %v", err)
 	}
 
-	re := regexp.MustCompile(`(?s)zhdatSignal\(vyhodIzTreya\)(.*?)_ = s\.Yadro\.Ostanovit\(\)`)
+	// Ядро гасит s.OstanovitYadroPriVyhode() (общий замок переходов,
+	// internal/sluzhba/perehody.go) или, в старом тексте, голый Ostanovit.
+	re := regexp.MustCompile(`(?s)zhdatSignal\(vyhodIzTreya\)(.*?)(?:_ = s\.Yadro\.Ostanovit\(\)|s\.OstanovitYadroPriVyhode\(\))`)
 	m := re.FindSubmatch(src)
 	if m == nil {
 		t.Fatal("не нашёл в main.go участок между zhdatSignal(vyhodIzTreya) и s.Yadro.Ostanovit() — структура main.go изменилась сильнее, чем ждал этот тест")

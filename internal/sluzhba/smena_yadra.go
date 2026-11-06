@@ -190,6 +190,11 @@ func (s *Sluzhba) chisloOtklyucheniy() uint64 {
 // Подъёмы и перезапуски ядра идут по одному (zamokPodyoma): кто пришёл вторым,
 // ждёт первого, а не гасит и не поднимает ядро у него под руками.
 func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
+	// Служба уходит: замок переходов у уходящего навсегда, ждать его незачем.
+	if s.uhodit.Load() {
+		log.Printf("подъём связи не начат: служба уходит")
+		return yadro.ErrOstanovleno
+	}
 	pokolenie := s.pokolenieAvtorezhima()
 	otklyucheniy := s.chisloOtklyucheniy()
 	zhdali, err := s.vzyatZamokPodyoma(ctx)
@@ -218,6 +223,11 @@ func (s *Sluzhba) PodnyatZashchitu(ctx context.Context) error {
 // podnyatZashchituPodZamkom — тело PodnyatZashchitu; вызывающий держит
 // zamokPodyoma.
 func (s *Sluzhba) podnyatZashchituPodZamkom(ctx context.Context) error {
+	// Служба уходит (perehody.go) — новых ядер нет.
+	if s.uhodit.Load() {
+		log.Printf("подъём связи не начат: служба уходит")
+		return yadro.ErrOstanovleno
+	}
 	// Правило NRPT для имён дома — по итогу подъёма (dom.go, soglasovatNrpt).
 	defer s.soglasovatNrpt()
 	pokolenie := s.pokolenieAvtorezhima()

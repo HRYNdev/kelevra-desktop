@@ -964,6 +964,11 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// состояние, и запусти мы приём параллельно, он успел бы увидеть
 	// «ничего не поднято» и поднять второе ядро рядом с живым.
 	s.PrinyatZhivoeYadro(ctx, sledTunnelyaPriStarte)
+	// Сторож ядра: работавшее ядро упало или зависло — поднять снова, под
+	// запретом и с отсечкой частоты, независимо от авторежима
+	// (internal/sluzhba/storozh_yadra.go). Сразу после приёма: принятое ядро
+	// тоже под его присмотром.
+	go s.StorozhYadra(ctx)
 	// Пульс X-Sostoyanie — до первого запроса к выдаче (подключение и
 	// профиль ниже уходят сразу): иначе первый /info едет без пульса, а
 	// следующий запрос бывает через час (internal/sluzhba PervyyPuls).
@@ -1025,6 +1030,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	if s.Nastroyki.Avtorezhim {
 		s.ZapustitAvtorezhim(ctx)
 	}
+	// Без авторежима (ручной режим, автомат выключен пультом) связь на
+	// старте поднимает автоподключение — если человек был подключён до
+	// перезагрузки (internal/sluzhba/avtopodklyuch.go).
+	go s.PodklyuchitPriStarte(ctx)
 
 	log.Printf("служба слушает %s", url)
 	fmt.Println("KELEVRA-SLUZHBA", url)
@@ -1064,7 +1073,11 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// защитой (см. ubratZnachokPriZavershenii в trey_windows.go/other.go).
 	ubratZnachokPriZavershenii()
 
-	_ = s.Yadro.Ostanovit()
+	// Не голый Ostanovit: перезапуск, шедший в эту секунду (самоизлечение
+	// «Дома», сторож), поднял бы ядро уже после ухода службы — сирота с
+	// туннелем без хозяина. Здесь ядро больше не запускается вовсе, идущий
+	// переход обрывается и дожидается (internal/sluzhba/perehody.go).
+	s.OstanovitYadroPriVyhode()
 	if sTreem {
 		// Системный прокси старой версии (прокси-режим до 0.6.77), если он
 		// ещё висит: уборка в сеансе человека. Чужой прокси не трогается.
