@@ -95,6 +95,12 @@ var LokalnyeSeti = []netip.Prefix{
 	netip.MustParsePrefix("fe80::/10"),          // link-local (в том числе NDP)
 	netip.MustParsePrefix("fc00::/7"),           // ULA
 	netip.MustParsePrefix("ff00::/8"),           // мультикаст (NDP, DHCPv6, mDNS)
+	// Чужие оверлейные сети на машине человека: строгий запрет не должен их
+	// рвать. Radmin VPN раздаёт 26.0.0.0/8 (стоит на ПК), Tailscale и прочие
+	// CGNAT-оверлеи — 100.64.0.0/10. Наружу через них Anthropic не достать:
+	// уровень 1 (вес выше) по-прежнему режет адреса Anthropic отовсюду, кроме tun.
+	netip.MustParsePrefix("26.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
 }
 
 func semeystvoSeti(p netip.Prefix) Semeystvo {
