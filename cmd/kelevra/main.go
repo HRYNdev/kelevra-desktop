@@ -105,6 +105,20 @@ func main() {
 		return
 	}
 
+	// --derzhat-zapret: держатель запрета мимо туннеля, пока обновлённая служба
+	// не поставит свой (zapret.go). Ни окна, ни ядра, ни трея.
+	if estArg(argDerzhatZapret) {
+		derzhatZapret(papka)
+		return
+	}
+
+	// --snyat-zapret: аварийный выход руками — снять запрет мимо туннеля
+	// (zapret.go). От администратора.
+	if estArg(argSnyatZapret) {
+		snyatZapretAvariyno(papka)
+		return
+	}
+
 	// --postavit-sluzhbu: эта копия поднята через UAC ровно ради одного дела —
 	// завести общую папку, перенести данные и зарегистрировать службу. Сделала
 	// и ушла; ни окна, ни ядра, ни трея тут не бывает.
