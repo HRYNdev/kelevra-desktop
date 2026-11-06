@@ -48,3 +48,20 @@ func putObrazaProcessa(pid int) (string, bool) {
 	}
 	return put, true
 }
+
+// processZhiv — жив ли процесс pid (см. одноимённую для Windows). Код выхода
+// чужого процесса здесь не узнать: -1. Нулевой сигнал: ESRCH — процесса нет,
+// EPERM — есть, но не наш (жив).
+func processZhiv(pid int) (zhiv bool, kod int, znaem bool) {
+	if pid <= 0 {
+		return false, -1, true
+	}
+	err := syscall.Kill(pid, 0)
+	switch err {
+	case nil, syscall.EPERM:
+		return true, 0, true
+	case syscall.ESRCH:
+		return false, -1, true
+	}
+	return false, -1, false
+}

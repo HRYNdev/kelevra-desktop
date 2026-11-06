@@ -57,8 +57,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -115,6 +117,12 @@ var (
 )
 
 func main() {
+	// Режим сторожа (internal/yadro, internal/sluzhba: проверки слежки за
+	// ядром) — по переменным окружения, маркеры стендов не участвуют.
+	if rezhim := os.Getenv("LZHE_REZHIM"); rezhim != "" {
+		storozh(rezhim)
+		return
+	}
 	if _, err := os.Stat(markerTiho); err == nil {
 		fmt.Fprintln(os.Stderr, "лже-ядро: тихий успех — стартую с первой попытки, реестра не касаюсь")
 		sluzhit()
@@ -131,6 +139,60 @@ func main() {
 
 	fmt.Fprintln(os.Stderr, "лже-ядро: попытка 2, поднимаю Clash API на "+clashAdres)
 	sluzhit()
+}
+
+// storozh — лже-ядро для проверок слежки за работающим ядром (сторож):
+//
+//	LZHE_ADRES    — где поднять Clash API (/version), по умолчанию clashAdres;
+//	LZHE_STROKA   — строка, которую ядро пишет в свой журнал (stderr) на старте;
+//	LZHE_POSLE_MS — сколько миллисекунд работать нормально до поломки;
+//	LZHE_KOD      — код выхода в режиме «padenie» (по умолчанию 3).
+//
+// Режимы (LZHE_REZHIM):
+//
+//	rabota  — работать, пока не убьют;
+//	padenie — через LZHE_POSLE_MS написать FATAL-строку и выйти с LZHE_KOD;
+//	zavis   — через LZHE_POSLE_MS перестать отвечать на Clash API (порт закрыт),
+//	          а процесс оставить живым: так выглядит зависшее ядро.
+func storozh(rezhim string) {
+	adres := os.Getenv("LZHE_ADRES")
+	if adres == "" {
+		adres = clashAdres
+	}
+	if s := os.Getenv("LZHE_STROKA"); s != "" {
+		fmt.Fprintln(os.Stderr, s)
+	}
+	posle, _ := strconv.Atoi(os.Getenv("LZHE_POSLE_MS"))
+	kod := 3
+	if k, err := strconv.Atoi(os.Getenv("LZHE_KOD")); err == nil {
+		kod = k
+	}
+	l, err := net.Listen("tcp", adres)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "FATAL лже-ядро: не поднял Clash API:", err)
+		os.Exit(1)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"version":"lzhe-storozh"}`)
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(l) }()
+	switch rezhim {
+	case "padenie":
+		time.Sleep(time.Duration(posle) * time.Millisecond)
+		fmt.Fprintf(os.Stderr, "FATAL[0000] лже-ядро: падаю с кодом %d\n", kod)
+		os.Exit(kod)
+	case "zavis":
+		time.Sleep(time.Duration(posle) * time.Millisecond)
+		fmt.Fprintln(os.Stderr, "лже-ядро: зависаю — Clash API молчит, процесс жив")
+		_ = srv.Close()
+	}
+	// Не select{}: без живых горутин рантайм счёл бы это тупиком и вышел.
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 // sluzhit поднимает то единственное, по чему приложение считает ядро живым, —
