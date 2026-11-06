@@ -87,6 +87,25 @@ jobs:
           cache-dependency-path: core/go.sum
           check-latest: true
 
+      # Правка 8 патча (живость канала: сторож ClientBind + сроки XHTTP).
+      # Тесты лежат в дереве как *_test.go (apply.py копирует tests/v_derevo/**),
+      # в бинарь не входят. Теги — те же, что у сборки, чтобы собирался тот же код.
+      - name: Тесты правки 8 (живость канала)
+        working-directory: core
+        run: |
+          go test -count=1 -race -timeout 5m \
+            -tags "with_utls,with_quic,with_gvisor,with_clash_api,with_wireguard" \
+            -run Kelevra ./transport/wireguard/ ./transport/v2rayxhttp/
+
+      - name: Есть ли в ядре сторож линии «Дома»
+        run: |
+          if grep -q 'kelevraStorozh' core/transport/wireguard/client_bind.go && test -f core/transport/wireguard/kelevra_client_bind_storozh.go; then
+            echo "сторож ClientBind (правка 8): есть"
+          else
+            echo "::error::сторож ClientBind: НЕТ (патч $PATCH_REF без правки 8)"
+            exit 1
+          fi
+
       - name: Сборка под Windows
         working-directory: core
         run: |
