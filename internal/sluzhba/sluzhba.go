@@ -2880,6 +2880,7 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		tunImya := s.kartina.TunImya
 		s.zamok.Unlock()
 		zakrepitTunnel(tunImya)
+		s.otmetitPodyomYadra()
 		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
 		// применяем прямо сейчас.
 		s.primenitSohranennyeUzly()
