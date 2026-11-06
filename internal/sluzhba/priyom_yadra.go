@@ -288,7 +288,12 @@ func (s *Sluzhba) podnyatSvyazPosleSmenyVersii(ctx context.Context, adapter stri
 	}
 	log.Printf("версия сменилась, а прошлая копия держала туннель (адаптер %q) и записки не оставила — "+
 		"поднимаю связь обратно сам", adapter)
-	if err := s.PodnyatZashchitu(ctx); err != nil {
+	// Туннеля сейчас нет, а человек его держал: до подъёма трафик мимо
+	// туннеля закрыт (zaslon_perezapuska.go).
+	s.zakrytMimoTunnelya()
+	err := s.PodnyatZashchitu(ctx)
+	s.otkrytMimoTunnelyaPoItogu(err)
+	if err != nil {
 		log.Printf("связь после смены версии не поднялась: %v", err)
 		return
 	}

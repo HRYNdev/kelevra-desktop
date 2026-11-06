@@ -86,6 +86,13 @@ func TestDomBezBlokaKonfigKakRanshe(t *testing.T) {
 			t.Fatalf("дом не вписан: %+v", ks)
 		}
 		delete(s, "endpoints")
+		var vyhody []any
+		for _, o := range s["outbounds"].([]any) {
+			if t := o.(map[string]any)["tag"]; t != TegShchelchkaDoma && t != TegZaglushkiDoma {
+				vyhody = append(vyhody, o)
+			}
+		}
+		s["outbounds"] = vyhody
 		r := s["route"].(map[string]any)
 		var pravila []any
 		for _, p := range r["rules"].([]any) {
@@ -127,7 +134,10 @@ func TestDomEndpoint(t *testing.T) {
 	e := eps[0].(map[string]any)
 	ozh := map[string]any{
 		"type": "wireguard", "tag": "Дом", "mtu": float64(1280), "address": []any{"100.77.0.5/32"},
-		"private_key": probnyyDom().PrivatnyyKlyuch, "detour": "Соединение",
+		"private_key": probnyyDom().PrivatnyyKlyuch, "detour": TegShchelchkaDoma,
+	}
+	if got := vyhodZaShchelchkom(t, d); got != "Соединение" {
+		t.Errorf("за щелчком %q, ждали «Соединение»", got)
 	}
 	for k, v := range ozh {
 		if !reflect.DeepEqual(e[k], v) {
@@ -158,7 +168,24 @@ func TestMostDomaIzKonfiga(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := MostDomaIzKonfiga(gotovyy); got != "Соединение" {
-		t.Fatalf("мост %q, ждали «Соединение»", got)
+		t.Fatalf("мост %q, ждали «Соединение» (выход за щелчком, не сам селектор)", got)
+	}
+	if m := RazobratMostDoma(gotovyy); m != (MostDoma{Vyhod: "Соединение", Selektor: TegShchelchkaDoma, Zaglushka: TegZaglushkiDoma}) {
+		t.Fatalf("мост из конфига: %+v", m)
+	}
+	// Конфиг прежней версии (detour эндпоинта — сразу выход): щёлкать нечем,
+	// мерить — сам detour.
+	staryy := []byte(`{"endpoints":[{"type":"wireguard","tag":"Дом","detour":"Финляндия"}],"outbounds":[{"type":"vless","tag":"Финляндия"}]}`)
+	if m := RazobratMostDoma(staryy); m != (MostDoma{Vyhod: "Финляндия"}) {
+		t.Fatalf("старый конфиг: %+v", m)
+	}
+	// Селектор щелчка стоит не на default: мерить всё равно выход, не заглушку.
+	// И заглушка без default — выход первый не-block.
+	bezDefault := []byte(`{"endpoints":[{"type":"wireguard","tag":"Дом","detour":"` + TegShchelchkaDoma + `"}],"outbounds":[
+		{"type":"vless","tag":"Финляндия"},{"type":"block","tag":"` + TegZaglushkiDoma + `"},
+		{"type":"selector","tag":"` + TegShchelchkaDoma + `","outbounds":["` + TegZaglushkiDoma + `","Финляндия"]}]}`)
+	if m := RazobratMostDoma(bezDefault); m.Vyhod != "Финляндия" || m.Zaglushka != TegZaglushkiDoma {
+		t.Fatalf("без default: %+v", m)
 	}
 	bez, _, err := Prigotovit(profilTelefona(t), Vybor{})
 	if err != nil {

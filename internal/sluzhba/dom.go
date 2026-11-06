@@ -73,13 +73,22 @@ type domSluzhby struct {
 	// (ждут проверки).
 	perezapuski sync.WaitGroup
 	// Самоизлечение (lechitDom): neudachPodryad — неудачных проб подряд;
-	// lechim — перезапуск ядра идёт; kogdaLechili — когда начат последний;
-	// pauzaLecheniya — раньше kogdaLechili+pauzaLecheniya следующий не
-	// начинать (0 — сразу по порогу). Удачная проба и сон машины паузу снимают.
+	// lechim — щелчок моста или перезапуск ядра идёт; kogdaLechili — когда
+	// начато последнее лечение; pauzaLecheniya — раньше
+	// kogdaLechili+pauzaLecheniya следующее не начинать (0 — сразу по порогу).
+	// Удачная проба и сон машины паузу снимают.
 	neudachPodryad int
 	lechim         bool
 	kogdaLechili   time.Time
 	pauzaLecheniya time.Duration
+	// Щелчок моста (shchelknutMost) — первый шаг лечения, до перезапуска
+	// ядра. shchelknuliV — когда щёлкнули и ждём пробы (нулевое — не ждём);
+	// neudachPosleShchelchka — неудачных проб с тех пор.
+	shchelknuliV           time.Time
+	neudachPosleShchelchka int
+	// pult — Clash API ядра для щелчка и сверки моста; nil — s.Yadro.
+	// Подмена для проверок.
+	pult pultMosta
 	// seychas — часы самоизлечения; nil — time.Now. Подмена для проверок.
 	seychas func() time.Time
 	// perezapustit — перезапуск ядра самоизлечения; nil — perezapustitDlyaDoma.
@@ -336,14 +345,20 @@ func (s *Sluzhba) perezapustit(prichina string, pokolenie uint64, zhdat bool) {
 		return
 	}
 	log.Printf("дом: %s", prichina)
+	// От «погасить» до «туннель поднят» трафик мимо туннеля закрыт
+	// (zaslon_perezapuska.go): иначе программы в эти секунды уходят напрямую.
+	s.zakrytMimoTunnelya()
 	_ = s.Yadro.Ostanovit()
 	if s.pokolenieAvtorezhima() != pokolenie {
 		log.Printf("дом: пока гасил ядро, решение о связи сменилось — не поднимаю")
+		s.otkrytMimoTunnelya("решение о связи сменилось, ядро не поднимаю")
 		return
 	}
-	if err := s.podnyatZashchituPodZamkom(context.Background()); err != nil {
+	err := s.podnyatZashchituPodZamkom(context.Background())
+	if err != nil {
 		log.Printf("дом: связь после перезапуска ядра не поднялась: %v", err)
 	}
+	s.otkrytMimoTunnelyaPoItogu(err)
 }
 
 // SleditZaDomom — отправка открытого ключа (пока сервер его не принял) и
@@ -585,9 +600,13 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 	if b == nil || !vKonfige || !rabotaet {
 		d.mu.Lock()
 		d.svyaz, d.neudachPodryad = 0, 0
+		d.shchelknuliV, d.neudachPosleShchelchka = time.Time{}, 0
 		d.mu.Unlock()
 		return
 	}
+	// Мост — на своём выходе, прежде чем мерить дом: заглушку щелчка ядро
+	// могло поднять из cache_file (служба умерла между двумя щелчками).
+	s.vernutMostDoma("на шаге слежки")
 	proba := d.proba
 	if proba == nil {
 		proba = probaDnsDoma
@@ -600,16 +619,25 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 		}
 		otmena()
 	}
+	t := s.chasyDoma()
 	d.mu.Lock()
 	bylo := d.svyaz
 	d.svyaz = itog
+	shchelknuli := d.shchelknuliV
 	if itog > 0 {
 		d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili, d.mostMolchitS = 0, 0, time.Time{}, time.Time{}
+		d.shchelknuliV, d.neudachPosleShchelchka = time.Time{}, 0
 	} else {
 		d.neudachPodryad++
+		if !shchelknuli.IsZero() {
+			d.neudachPosleShchelchka++
+		}
 	}
 	neudach := d.neudachPodryad
 	d.mu.Unlock()
+	if itog > 0 && !shchelknuli.IsZero() {
+		log.Printf("дом: на связи после щелчка моста за %d с", int(t.Sub(shchelknuli).Round(time.Second)/time.Second))
+	}
 	if bylo != itog {
 		log.Printf("дом: %s", map[int]string{1: "на связи", -1: "нет связи"}[itog])
 	}
@@ -620,17 +648,32 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 
 // Самоизлечение входа домой. После обрыва связи (сон, пропал Wi-Fi)
 // обычный туннель оживает своей очередью узлов, а эндпоинт «Дом» в ядре —
-// нет; лечит его перезапуск ядра (как «Отключить → Подключить»). Порог —
+// нет: сокет моста под WireGuard умер молча, ошибки чтения нет, и bind
+// не переподключается. Лечение — сперва щелчок моста (shchelknutMost:
+// селектор TegShchelchkaDoma на заглушку и обратно, сокет моста
+// закрывается, WireGuard открывает новый), tun при этом не гаснет и трафик
+// мимо туннеля не уходит. Не ожил дом за probPosleShchelchka проб после
+// щелчка — перезапуск ядра (как «Отключить → Подключить»). Порог —
 // неудачных проб подряд (шаг ShagSlezhkiZaDomom: около полутора минут).
-// Первый перезапуск — сразу по порогу, следующие — не раньше паузы с
+// Первое лечение — сразу по порогу, следующие — не раньше паузы с
 // прошлого, пауза растёт по лестнице до часа: умерший узел дома дёргает
-// туннель не чаще раза в час. Удачная проба лестницу сбрасывает.
+// туннель не чаще раза в час. Щелчок и перезапуск после него — одно
+// лечение, одна ступень лестницы. Удачная проба лестницу сбрасывает.
 //
-// Пока не отвечает и сам выход моста (сети нет вовсе), перезапуск
-// бесполезен: не лечим и лестницу не тратим. Мост ожил — лестница с начала,
-// перезапуск на ближайшей неудачной пробе. Молчит мост дольше часа — лечим
+// Пока не отвечает и сам выход моста (сети нет вовсе), лечение
+// бесполезно: не лечим и лестницу не тратим. Мост ожил — лестница с начала,
+// лечение на ближайшей неудачной пробе. Молчит мост дольше часа — лечим
 // раз в час всё равно: замер моста мог и ошибиться.
 const porogLecheniyaDoma = 3
+
+// probPosleShchelchka — сколько неудачных проб после щелчка ждать до
+// перезапуска ядра (шаг ShagSlezhkiZaDomom: до минуты). WireGuard шлёт
+// пакет в новый сокет сразу же (keepalive, рукопожатие раз в 5 с, сама
+// проба), так что живой мост отвечает на первой же пробе.
+const probPosleShchelchka = 2
+
+// srokShchelchka — сколько ждать ответа Clash API на одно переключение.
+const srokShchelchka = 5 * time.Second
 
 var lesenkaLecheniyaDoma = []time.Duration{10 * time.Minute, 20 * time.Minute, 40 * time.Minute, time.Hour}
 
@@ -647,11 +690,14 @@ func sleduyushchayaPauzaLecheniya(tekushchaya time.Duration) time.Duration {
 	return potolokLecheniyaDoma
 }
 
-// lechitDom — перезапуск ядра самоизлечения, если пора: подъём связи не
-// идёт, прошлый перезапуск закончен, выход моста отвечает и пауза с прошлого
-// перезапуска вышла. Сам перезапуск — в горутине под perezapuski, тем же
-// путём, что при смене блока (perezapustitDlyaDoma): «Отключить», нажатое
-// после решения, его отменяет.
+// lechitDom — лечение «Дома», если пора: подъём связи не идёт, прошлое
+// лечение закончено, выход моста отвечает и пауза с прошлого лечения
+// вышла. Сперва щелчок моста — сразу, в этом шаге, под zamokPodyoma (ни
+// подъёма, ни перезапуска рядом). Щелчок не вышел (конфиг собран до
+// щелчка, Clash API не ответил) или дом не ожил за probPosleShchelchka проб
+// — перезапуск ядра в горутине под perezapuski, тем же путём, что при смене
+// блока (perezapustitDlyaDoma): «Отключить», нажатое после решения, его
+// отменяет.
 func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 	d := s.dom
 	s.zamok.Lock()
@@ -671,17 +717,43 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 		most = s.mostOtvechaet
 	}
 	zhiv, teg := most(ctx)
-	seychas := time.Now
-	if d.seychas != nil {
-		seychas = d.seychas
-	}
-	t := seychas()
+	t := s.chasyDoma()
 	d.mu.Lock()
 	zamolchal, ozhil := false, false
 	if !zhiv {
 		if d.mostMolchitS.IsZero() {
+			// Сеть пропала после щелчка — дом молчит не из-за моста под
+			// WireGuard, перезапуск ядра не поможет: щелчок забыт.
 			d.mostMolchitS, zamolchal = t, true
+			d.shchelknuliV, d.neudachPosleShchelchka = time.Time{}, 0
 		}
+	} else if !d.mostMolchitS.IsZero() {
+		d.mostMolchitS, d.pauzaLecheniya, d.kogdaLechili, ozhil = time.Time{}, 0, time.Time{}, true
+	}
+	otpustit := func() {
+		d.mu.Unlock()
+		if ozhil {
+			log.Printf("дом: мост «%s» снова отвечает — лечу без паузы", teg)
+		}
+	}
+	// Щёлкнули и ждём: дом не ожил за probPosleShchelchka проб — то же
+	// лечение продолжается перезапуском ядра, без новой паузы (и при
+	// молчащем мосте: щелчок раз в час при молчании дольше часа — тоже
+	// лечение, замер моста мог ошибиться).
+	if !d.shchelknuliV.IsZero() {
+		posle := d.neudachPosleShchelchka
+		if posle < probPosleShchelchka {
+			otpustit()
+			return
+		}
+		d.shchelknuliV, d.neudachPosleShchelchka = time.Time{}, 0
+		d.lechim = true
+		perezapustit := d.perezapustit
+		otpustit()
+		s.lechitPerezapuskom(perezapustit, fmt.Sprintf("щелчок не помог — перезапускаю ядро (неудачных проб после щелчка: %d)", posle))
+		return
+	}
+	if !zhiv {
 		ot := d.mostMolchitS
 		if d.kogdaLechili.After(ot) {
 			ot = d.kogdaLechili
@@ -689,30 +761,54 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 		if t.Sub(ot) < potolokLecheniyaDoma {
 			d.mu.Unlock()
 			if zamolchal {
-				log.Printf("дом: нет связи, и мост «%s» не отвечает — ядро не перезапускаю, пока не вернётся сеть", teg)
+				log.Printf("дом: нет связи, и мост «%s» не отвечает — не лечу, пока не вернётся сеть", teg)
 			}
 			return
 		}
-	} else if !d.mostMolchitS.IsZero() {
-		d.mostMolchitS, d.pauzaLecheniya, d.kogdaLechili, ozhil = time.Time{}, 0, time.Time{}, true
 	}
 	if d.pauzaLecheniya > 0 && t.Before(d.kogdaLechili.Add(d.pauzaLecheniya)) {
-		d.mu.Unlock()
+		otpustit()
+		return
+	}
+	// Подъём или перезапуск ядра идёт — щёлкать по ядру, которое сейчас
+	// гасят или поднимают, незачем: решим на следующей пробе.
+	if !s.zamokPodyoma.TryLock() {
+		otpustit()
 		return
 	}
 	d.lechim, d.kogdaLechili = true, t
 	d.pauzaLecheniya = sleduyushchayaPauzaLecheniya(d.pauzaLecheniya)
 	sleduyushchiy := t.Add(d.pauzaLecheniya)
 	perezapustit := d.perezapustit
-	d.mu.Unlock()
-	if ozhil {
-		log.Printf("дом: мост «%s» снова отвечает — перезапуск ядра без паузы", teg)
-	}
-	if perezapustit == nil {
-		perezapustit = s.perezapustitDlyaDoma
+	otpustit()
+	err := s.shchelknutMost(ctx)
+	s.zamokPodyoma.Unlock()
+	if err == nil {
+		d.mu.Lock()
+		d.lechim = false
+		d.shchelknuliV, d.neudachPosleShchelchka = t, 0
+		d.mu.Unlock()
+		log.Printf("дом: нет связи (неудачных проб подряд: %d) — щёлкаю мост, ядро не трогаю; следующее лечение не раньше %s",
+			neudach, sleduyushchiy.Format("15:04"))
+		return
 	}
 	prichina := fmt.Sprintf("нет связи (неудачных проб подряд: %d) — перезапускаю ядро, следующий раз не раньше %s",
 		neudach, sleduyushchiy.Format("15:04"))
+	if !errors.Is(err, errNetShchelchka) {
+		prichina = fmt.Sprintf("нет связи (неудачных проб подряд: %d), мост не щёлкнулся (%v) — перезапускаю ядро, следующий раз не раньше %s",
+			neudach, err, sleduyushchiy.Format("15:04"))
+	}
+	s.lechitPerezapuskom(perezapustit, prichina)
+}
+
+// lechitPerezapuskom — перезапуск ядра самоизлечения в горутине под
+// perezapuski; вызывающий уже поставил d.lechim, здесь он снимается по
+// окончании. perezapustit nil — perezapustitDlyaDoma.
+func (s *Sluzhba) lechitPerezapuskom(perezapustit func(prichina string, pokolenie uint64), prichina string) {
+	d := s.dom
+	if perezapustit == nil {
+		perezapustit = s.perezapustitDlyaDoma
+	}
 	pokolenie := s.pokolenieAvtorezhima()
 	d.perezapuski.Add(1)
 	go func() {
@@ -726,9 +822,138 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 	}()
 }
 
-// mostOtvechaet — жив ли выход, через который идёт мост «Дом» (detour
-// эндпоинта в конфиге на диске): замер ядра через этот выход, как у очереди
-// узлов. Не узнать (конфига или эндпоинта нет, Clash API не ответил —
+// chasyDoma — часы самоизлечения (подмена d.seychas в проверках).
+func (s *Sluzhba) chasyDoma() time.Time {
+	if s.dom != nil && s.dom.seychas != nil {
+		return s.dom.seychas()
+	}
+	return time.Now()
+}
+
+// pultMosta — то, чем служба щёлкает селектор моста: Clash API ядра
+// (*yadro.Yadro) или подмена в проверках.
+type pultMosta interface {
+	Vybrano(gruppa string) (string, error)
+	VybratZa(gruppa, uzel string, srok time.Duration) error
+}
+
+func (s *Sluzhba) pultDlyaMosta() pultMosta {
+	s.dom.mu.Lock()
+	p := s.dom.pult
+	s.dom.mu.Unlock()
+	if p != nil {
+		return p
+	}
+	if s.Yadro == nil {
+		return nil
+	}
+	return s.Yadro
+}
+
+// mostIzKonfiga — мост «Дом» в конфиге на диске (с ним ядро и запущено).
+func (s *Sluzhba) mostIzKonfiga() konfig.MostDoma {
+	if s.Yadro == nil {
+		return konfig.MostDoma{}
+	}
+	syroy, err := os.ReadFile(s.Yadro.PutKonfiga())
+	if err != nil {
+		return konfig.MostDoma{}
+	}
+	return konfig.RazobratMostDoma(syroy)
+}
+
+// yadroRabotaetDlyaDoma — ядро работает (на стенде — подмена rabotaetDlyaStenda).
+func (s *Sluzhba) yadroRabotaetDlyaDoma() bool {
+	if s.dom != nil && s.dom.rabotaetDlyaStenda != nil {
+		return s.dom.rabotaetDlyaStenda()
+	}
+	return s.Yadro != nil && s.Yadro.Sost() == yadro.Rabotaet
+}
+
+// errNetShchelchka — в конфиге ядра нет селектора щелчка (собран прежней
+// версией: ядро принято работающим после обновления) — лечит перезапуск.
+var errNetShchelchka = errors.New("в конфиге ядра нет щелчка моста")
+
+// shchelknutMost — селектор моста на заглушку и сразу обратно на выход
+// моста. Смена выбора закрывает сокет моста под WireGuard (konfig,
+// TegShchelchkaDoma), и bind эндпоинта открывает новый через тот же выход;
+// соединения людей не рвутся, tun не гаснет. Ошибка — щелчка не было или
+// селектор не вернулся (тогда его вернёт vernutMostDoma после перезапуска
+// ядра или на следующем шаге слежки).
+func (s *Sluzhba) shchelknutMost(ctx context.Context) error {
+	m := s.mostIzKonfiga()
+	p := s.pultDlyaMosta()
+	if m.Selektor == "" || p == nil {
+		return errNetShchelchka
+	}
+	if err := p.VybratZa(m.Selektor, m.Zaglushka, srokShchelchka); err != nil {
+		return fmt.Errorf("на заглушку: %w", err)
+	}
+	return vernutNaVyhod(ctx, p, m)
+}
+
+// vernutNaVyhod — селектор моста на его выход, с проверкой: ядро само
+// говорит (GET, поле now), что выбран выход. До трёх попыток.
+func vernutNaVyhod(ctx context.Context, p pultMosta, m konfig.MostDoma) error {
+	var err error
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("обратно на «%s» не вернулся: %w", m.Vyhod, ctx.Err())
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		if err = p.VybratZa(m.Selektor, m.Vyhod, srokShchelchka); err != nil {
+			continue
+		}
+		var seychas string
+		if seychas, err = p.Vybrano(m.Selektor); err != nil {
+			continue
+		}
+		if seychas == m.Vyhod {
+			return nil
+		}
+		err = fmt.Errorf("ядро говорит, что выбрано «%s»", seychas)
+	}
+	return fmt.Errorf("обратно на «%s» не вернулся: %w", m.Vyhod, err)
+}
+
+// vernutMostDoma — селектор моста стоит не на выходе моста — вернуть.
+// Так бывает, если служба умерла между двумя щелчками: выбор селектора
+// ядро хранит в cache_file и при следующем старте берёт оттуда, а на
+// заглушке «Дом» мёртв навсегда. Поэтому сверка — после каждого подъёма
+// ядра (podnyatZashchituRaz) и на каждом шаге слежки (ядро могло и
+// пережить службу: priyom_yadra). Ядро не работает, щелчка в конфиге нет,
+// Clash API не ответил — ничего: следующий шаг спросит снова.
+func (s *Sluzhba) vernutMostDoma(kogda string) {
+	if s.dom == nil || !s.yadroRabotaetDlyaDoma() {
+		return
+	}
+	m := s.mostIzKonfiga()
+	if m.Selektor == "" {
+		return
+	}
+	p := s.pultDlyaMosta()
+	if p == nil {
+		return
+	}
+	seychas, err := p.Vybrano(m.Selektor)
+	if err != nil || seychas == m.Vyhod {
+		return
+	}
+	ctx, otmena := context.WithTimeout(context.Background(), 4*srokShchelchka)
+	defer otmena()
+	if err := vernutNaVyhod(ctx, p, m); err != nil {
+		log.Printf("дом: мост «%s» стоит на «%s» (%s), %v", m.Selektor, seychas, kogda, err)
+		return
+	}
+	log.Printf("дом: мост «%s» стоял на «%s» (%s) — вернул на «%s»", m.Selektor, seychas, kogda, m.Vyhod)
+}
+
+// mostOtvechaet — жив ли выход, через который идёт мост «Дом» (выход за
+// селектором щелчка в конфиге на диске, не заглушка): замер ядра через этот
+// выход, как у очереди узлов. Не узнать (конфига или эндпоинта нет, Clash API не ответил —
 // ядро могло и зависнуть) — «жив»: тогда решает одна проба дома.
 func (s *Sluzhba) mostOtvechaet(ctx context.Context) (bool, string) {
 	if s.Yadro == nil {
@@ -753,10 +978,11 @@ func (s *Sluzhba) mostOtvechaet(ctx context.Context) (bool, string) {
 }
 
 // posleSna — машина проснулась: сбой до сна не в счёт. Пробы считаются
-// заново, а первый перезапуск после сна не ждёт паузы с прошлого сбоя.
+// заново, а первое лечение после сна не ждёт паузы с прошлого сбоя.
 func (d *domSluzhby) posleSna() {
 	d.mu.Lock()
 	d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili, d.mostMolchitS = 0, 0, time.Time{}, time.Time{}
+	d.shchelknuliV, d.neudachPosleShchelchka = time.Time{}, 0
 	d.mu.Unlock()
 }
 

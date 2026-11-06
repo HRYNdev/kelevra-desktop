@@ -27,6 +27,11 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("KELEVRA_PROKSI", "net"); err != nil {
 		panic(err)
 	}
+	// И фильтров WFP (запрет трафика мимо туннеля на время перезапуска ядра,
+	// zaslon_perezapuska.go): проверки подставляют свою систему.
+	if err := os.Setenv("KELEVRA_ZASLON", "net"); err != nil {
+		panic(err)
+	}
 	// И ни одна не имеет права стучаться на боевой сервер. Замер 19.10: тесты, где
 	// туннель «не встаёт», шлют срочный журнал (OtpravitZhurnalySrochno), а адрес
 	// без KELEVRA_PODPISKA — боевой subkv; каждый такой прогон заводил в учёте людей

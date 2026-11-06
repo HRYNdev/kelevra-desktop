@@ -923,7 +923,8 @@ func tunnelnyyVyhod(d map[string]any) string {
 		teg, _ := vh["tag"].(string)
 		switch tip {
 		case "selector":
-			if selector == "" {
+			// Селектор щелчка моста «Дом» — тоже не туннель для всего трафика.
+			if selector == "" && teg != TegShchelchkaDoma {
 				selector = teg
 			}
 		case "urltest":

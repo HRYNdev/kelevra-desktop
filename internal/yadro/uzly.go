@@ -73,7 +73,7 @@ func (y *Yadro) Gruppy() ([]Gruppa, error) {
 		if imya == "GLOBAL" { // служебная группа самого Clash API, человеку она не нужна
 			continue
 		}
-		if imya == konfig.TegMostaDoma { // мост «Дом» выбирает сам, человеку переключать нечего
+		if imya == konfig.TegMostaDoma || imya == konfig.TegShchelchkaDoma { // мостом «Дом» правит служба, человеку переключать нечего
 			continue
 		}
 		// Группа, которой правит автоматика и в которой один-единственный
@@ -239,7 +239,7 @@ func GruppyStatik(syroyKonfig []byte, vybor map[string]string) ([]Gruppa, error)
 		if !strings.EqualFold(o.Type, "selector") && !sam {
 			continue
 		}
-		if o.Tag == konfig.TegMostaDoma {
+		if o.Tag == konfig.TegMostaDoma || o.Tag == konfig.TegShchelchkaDoma {
 			continue
 		}
 		// Та же оговорка, что и в Gruppy(): группа-автоматика с единственным
