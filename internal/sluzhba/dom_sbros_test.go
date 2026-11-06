@@ -373,7 +373,8 @@ func TestDomPriyomYadra0698SoShchelchkom(t *testing.T) {
 	pult := novyyPultStend()
 	s.dom.pult = pult
 	zapuskov := 0
-	s.zapustitYadro = func(ctx context.Context) error { zapuskov++; return nil }
+	var poryadok []string
+	s.zapustitYadro = func(ctx context.Context) error { zapuskov++; poryadok = append(poryadok, "подъём"); return nil }
 	s.prinyatDom(&podpiska.Svedeniya{Dom: blokDoma(t, s, priv, 1, "100.76.0.1:51820")})
 	s.dom.perezapuski.Wait()
 
@@ -418,7 +419,7 @@ func TestDomPriyomYadra0698SoShchelchkom(t *testing.T) {
 	s.Yadro.Bin, s.Yadro.Api = svoy, api
 	var pogasheno []int
 	staroe := pogasitChuzhoe
-	pogasitChuzhoe = func(pid int) { pogasheno = append(pogasheno, pid) }
+	pogasitChuzhoe = func(pid int) { pogasheno = append(pogasheno, pid); poryadok = append(poryadok, "гашу") }
 	t.Cleanup(func() { pogasitChuzhoe = staroe })
 	staryyPoisk := nashiYadra
 	nashiYadra = func(string) []int { return nil }
@@ -427,7 +428,16 @@ func TestDomPriyomYadra0698SoShchelchkom(t *testing.T) {
 		Otpechatok: yadro.OtpechatokKonfigaBayt(staryy)})
 
 	z := zhurnalDlyaProverki(t)
+	poryadok = nil
 	s.PrinyatZhivoeYadro(context.Background(), "")
+	// Два туннеля рядом на Windows не работают (06.11: новый tun126 молчал,
+	// трафик шёл напрямую): прежнее ядро гасится ДО подъёма нового.
+	if strings.Join(poryadok, ",") != "гашу,подъём" {
+		t.Fatalf("порядок смены ядра %v, ждали: гашу прежнее, потом подъём нового\n%s", poryadok, z.String())
+	}
+	if !strings.Contains(z.String(), "трафик мимо туннеля закрыт до подъёма нового") {
+		t.Fatalf("нет строки о запрете на время смены:\n%s", z.String())
+	}
 	if zapuskov != 1 || len(pogasheno) != 1 || pogasheno[0] != os.Getpid() {
 		t.Fatalf("ядро 0.6.98 не сменено плавно: запусков %d, погашено %v\n%s", zapuskov, pogasheno, z.String())
 	}
