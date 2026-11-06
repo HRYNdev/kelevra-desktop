@@ -21,6 +21,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/pult"
 	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+	"github.com/HRYNdev/kelevra-desktop/internal/zaslon"
 )
 
 // Пульт (договор KelevraServer docs/PULT.md): служба принимает настройки и
@@ -66,6 +67,8 @@ func reestrDesktop() pult.Reestr {
 		{Imya: "funkcii.avtorezhim", Tip: pult.Flag, Umolchanie: "true", Gde: "автомат дома/не дома (выключатель, сразу)"},
 		{Imya: klyuchProbnyeYadra, Tip: pult.Flag, Umolchanie: "false", Gde: "брать пробные (prerelease) сборки ядра на сверке ядра (bratProbnyeYadra); выпуск ядра кольцом"},
 		{Imya: "kanal.dolgiy_opros", Tip: pult.Flag, Umolchanie: "false", Gde: "долгий опрос …/pult/zhdat (SleditZaDolgimOprosom)"},
+		{Imya: klyuchStrogiy, Tip: pult.Flag, Umolchanie: "false", Gde: "уровень 2: всё исходящее мимо туннеля закрыто, пока «подключено» вне дома, с момента старта службы (zaslon_perezapuska.go)"},
+		{Imya: klyuchAnthropicSeti, Tip: pult.Spisok, Min: 1, Max: 20, Umolchanie: strings.Join(zaslon.AnthropicPoUmolchaniyu, ", "), Gde: "адреса Anthropic (подсети) для уровня 1: к ним только из туннеля; негодные строки отбрасываются"},
 
 		// Периоды и сроки службы.
 		{Imya: "profil.period_min", Tip: pult.Celoe, Min: 15, Max: 1440, Umolchanie: "obnovlyat_min из настроек (60), не меньше 15", Gde: "плановое обновление профиля и сводки (ObnovlyatProfil)"},
@@ -106,6 +109,7 @@ func reestrDesktop() pult.Reestr {
 		vykl(vyklUchetTrafika, "учёт расхода этой машины (X-Device-Traffic)"),
 		vykl(vyklSrochnyyZhurnal, "срочная посылка журнала после неудачи связи"),
 		vykl(vyklZapisiYadra, "записи с полями из журнала ядра"),
+		vykl(vyklZapretAnthropic, "уровень 1 запрета мимо туннеля (Anthropic только через туннель)"),
 	}
 }
 
@@ -208,6 +212,9 @@ func (s *Sluzhba) prinyatSvodku(sv *podpiska.Svedeniya) {
 // primenitPult — то, что действует сразу при смене настроек (выключатели).
 // Остальное читается на своей границе (следующий цикл, следующий заход).
 func (s *Sluzhba) primenitPult() {
+	// Строгий режим, адреса Anthropic, выключатель уровня 1 и автомат — вход
+	// запрета мимо туннеля.
+	defer s.obnovitZaslon("пульт")
 	s.avtorezhimZamok.Lock()
 	idet := s.avtorezhimOtmena != nil
 	byl := s.avtorezhimOtpechatok
@@ -506,6 +513,10 @@ func (s *Sluzhba) Diagnostika() string {
 	dob("profil", yadro.OtpechatokKonfiga(hranenie.PutProfilya()))
 	dob("rezhim_kartiny", fmt.Sprint(s.rezhimKartiny()))
 	dob("set", fmt.Sprint(s.estSet()))
+	// Запрет мимо туннеля — до avtorezhimZamok: zaslon сам берёт его через vhodZaslona.
+	vz := s.vhodZaslona()
+	dob("zapret", fmt.Sprintf("%s namerenie:%v doma:%v strogiy:%v perezapusk:%v",
+		s.zaslon.Primeneno().Kratko(), vz.Namerenie, vz.Doma, vz.Strogiy, s.zaslon.Perezapusk()))
 	s.avtorezhimZamok.Lock()
 	dob("avtomat", fmt.Sprintf("vkl:%v ruchnoy:%v razreshen:%v", s.Nastroyki.Avtorezhim, s.Nastroyki.RuchnoyVybor, s.avtomatRazreshen()))
 	if s.avtorezhimEkz != nil {

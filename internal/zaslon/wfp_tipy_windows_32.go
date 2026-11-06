@@ -46,3 +46,7 @@ type wtFwpmFilter0 struct {
 	filterID            uint64
 	effectiveWeight     wtFwpValue0
 }
+
+// argU64 — UINT64 по значению для SyscallN: на 32 битах два слова, младшее
+// первым (stdcall кладёт 8-байтный аргумент на стек целиком).
+func argU64(v uint64) []uintptr { return []uintptr{uintptr(uint32(v)), uintptr(uint32(v >> 32))} }

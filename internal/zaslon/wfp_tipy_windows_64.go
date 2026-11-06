@@ -45,3 +45,6 @@ type wtFwpmFilter0 struct {
 	filterID            uint64
 	effectiveWeight     wtFwpValue0
 }
+
+// argU64 — UINT64 по значению для SyscallN: на 64 битах одно слово.
+func argU64(v uint64) []uintptr { return []uintptr{uintptr(v)} }

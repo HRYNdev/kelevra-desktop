@@ -76,6 +76,9 @@ func rolProcessa() string {
 	if os.Getenv("KELEVRA_BEZ_OKNA") == "1" || estArg(argSluzhba) {
 		return "служба"
 	}
+	if estArg(argDerzhatZapret) {
+		return "держатель"
+	}
 	return "окно"
 }
 
