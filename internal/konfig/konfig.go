@@ -75,6 +75,11 @@ type Kartina struct {
 	// след туннеля на диске (internal/tunnel) проверяет после жёсткой смерти
 	// копии, не остался ли висеть адаптер.
 	TunImya string `json:"tun_imya,omitempty"`
+	// TunAdresa — адреса туннельного входа ИЗ ПРОФИЛЯ, до сдвига под занятое
+	// имя (поля address / inet4_address / inet6_address). Нужны приложению:
+	// запрет мимо туннеля (internal/zaslon) пропускает к Anthropic только из
+	// этих адресов — со всеми соседями, на которые их двигает подбор имени.
+	TunAdresa []string `json:"tun_adresa,omitempty"`
 	// MtuTun — размер пакета туннеля в СОБРАННОМ конфиге, а не в профиле.
 	//
 	// Заведено 09.09. Профиль присылает 9000 (заводское значение sing-box,
@@ -311,6 +316,11 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 			if podmenaImeni != "" {
 				vh["interface_name"] = podmenaImeni
 				k.TunImya = podmenaImeni
+			}
+			// Адреса профиля — до сдвига: запрет мимо туннеля сам считает
+			// соседей (zaslon.SetiTunnelya).
+			for _, pole := range []string{"address", "inet4_address", "inet6_address"} {
+				k.TunAdresa = append(k.TunAdresa, spisokStrok(vh[pole])...)
 			}
 			// Адрес двигаем тем же сдвигом, что и имя: остаток прошлой
 			// попытки держит их вместе, и разъехаться им нельзя.

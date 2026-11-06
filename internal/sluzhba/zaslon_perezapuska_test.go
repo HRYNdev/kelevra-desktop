@@ -15,35 +15,66 @@ import (
 
 // zaslonStenda — система запрета на подмене: настоящих фильтров WFP в
 // проверках нет и быть не должно (сеть машины проверяющего не меняется).
+// stoit — стоит ли полный запрет («запрет остального исходящего»), zakrytiy —
+// сколько раз он ставился.
 type zaslonStenda struct {
 	mu       sync.Mutex
-	stoit    bool
+	filtry   []zaslon.Filtr
 	zakrytiy int
 	oshibka  error
 }
 
-func (z *zaslonStenda) Zakryt([]string) error {
+func polnyyVFiltrah(ff []zaslon.Filtr) bool {
+	for _, f := range ff {
+		if f.Zapret && f.Ves == zaslon.VesZapreta && len(f.Usloviya) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (z *zaslonStenda) Primenit(ff []zaslon.Filtr) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	z.zakrytiy++
 	if z.oshibka != nil {
 		return z.oshibka
 	}
-	z.stoit = true
+	z.filtry = append([]zaslon.Filtr(nil), ff...)
+	if polnyyVFiltrah(ff) {
+		z.zakrytiy++
+	}
 	return nil
 }
 
-func (z *zaslonStenda) Otkryt() error {
+func (z *zaslonStenda) Snyat() error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	z.stoit = false
+	z.filtry = nil
 	return nil
 }
 
 func (z *zaslonStenda) sostoyanie() (stoit bool, zakrytiy int) {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	return z.stoit, z.zakrytiy
+	return polnyyVFiltrah(z.filtry), z.zakrytiy
+}
+
+// anthropic — стоит ли запрет Anthropic мимо туннеля (уровень 1).
+func (z *zaslonStenda) anthropic() bool {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	for _, f := range z.filtry {
+		if f.Zapret && f.Ves == zaslon.VesAnthropicZapret {
+			return true
+		}
+	}
+	return false
+}
+
+func (z *zaslonStenda) pusto() bool {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return len(z.filtry) == 0
 }
 
 // stendZaslona — служба с поднятой связью, подменённым запуском ядра и
@@ -56,7 +87,7 @@ func stendZaslona(t *testing.T, zapusk func() error) (*Sluzhba, *zaslonStenda, *
 		t.Fatal("на стенде (KELEVRA_DIR) служба взяла настоящий WFP")
 	}
 	sys := &zaslonStenda{}
-	s.zaslon = &zaslon.Zaslon{Sys: sys, Programmy: s.programmyMimoZaslona}
+	s.zaslon = &zaslon.Zaslon{Sys: sys, Vhod: s.vhodZaslona, Dannye: s.dannyeZaslona}
 	s.zashchitaPodnyataDlyaStenda = func() bool { return true }
 	var mu sync.Mutex
 	videl := &[]bool{}

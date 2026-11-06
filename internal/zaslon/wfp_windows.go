@@ -5,20 +5,25 @@
 // фильтры) Windows удаляет сама, как только закрыт дескриптор сессии, — в
 // том числе когда процесс службы умер. Вечной блокировки интернета не бывает.
 //
+// Сессия одна на процесс и живёт, пока стоит хоть какое-то правило: смена
+// правил — одна транзакция (удалить прежние фильтры по номерам, добавить
+// новые), снятие всего — закрытие сессии. Поставщик и подслой — со случайными
+// GUID на каждую сессию: при обновлении держатель и новая служба держат свои
+// сессии одновременно, и одинаковые ключи не дали бы второй встать.
+//
 // Устройство перенесено из wireguard-windows (golang.zx2c4.com/wireguard/windows,
 // tunnel/firewall, тег v0.5.3; SPDX-License-Identifier: MIT, Copyright (C)
 // 2019-2021 WireGuard LLC, полный текст — LICENSE.wireguard рядом): сессия,
 // поставщик, подслой с наибольшим весом, разрешения своих программ по
 // ALE_APP_ID, петля, DHCP и «запретить всё» с наименьшим весом. Отличия:
 //   - только исходящие (слои ALE_AUTH_CONNECT_V4/V6): входящие не трогаем;
+//   - набор фильтров — данные (filtry.go), здесь только перевод в FWPM_FILTER0;
 //   - разрешение не «своего процесса», а списка программ по пути (ядро
 //     sing-box.exe — отдельный процесс — и служба Kelevra.exe), без условия
 //     ALE_USER_ID;
-//   - разрешена локальная сеть (RFC1918, link-local, ULA, мультикаст) — дом
-//     и шлюз не ломаются;
-//   - адреса и маски для условий живут в переменных пакета, а не на стеке
-//     функции: в условие WFP указатель уходит числом (uintptr), и сборщик
-//     мусора Go о нём не знает;
+//   - адреса и маски для условий выделяются в куче и держатся в wfp.hranit до
+//     конца транзакции: в условие WFP указатель уходит числом (uintptr), и
+//     сборщик мусора Go о нём не знает;
 //   - ошибка вызова — его код возврата (DWORD), а не GetLastError.
 
 package zaslon
@@ -26,6 +31,7 @@ package zaslon
 import (
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -39,71 +45,84 @@ import (
 func NovayaSistema() Sistema { return &wfp{} }
 
 type wfp struct {
-	mu      sync.Mutex
-	sessiya uintptr
+	mu           sync.Mutex
+	sessiya      uintptr
+	postavshchik windows.GUID
+	podsloy      windows.GUID
+	nomera       []uint64 // фильтры, которые стоят сейчас
+	hranit       []any    // память условий текущей транзакции (см. шапку)
 }
 
-// Веса фильтров внутри своего подслоя: решает совпавший фильтр с наибольшим.
-const (
-	vesProgramm = 15
-	vesPetli    = 14
-	vesDhcp     = 13
-	vesSeti     = 12
-	vesZapreta  = 0
-)
-
-// Локальная сеть. Переменные пакета, а не литералы в функции: см. шапку.
-var (
-	lokalnyeV4 = [...]wtFwpV4AddrAndMask{
-		{0x0A000000, 0xFF000000}, // 10.0.0.0/8
-		{0xAC100000, 0xFFF00000}, // 172.16.0.0/12
-		{0xC0A80000, 0xFFFF0000}, // 192.168.0.0/16
-		{0xA9FE0000, 0xFFFF0000}, // 169.254.0.0/16 link-local
-		{0xE0000000, 0xF0000000}, // 224.0.0.0/4 мультикаст (mDNS, SSDP)
-		{0xFFFFFFFF, 0xFFFFFFFF}, // 255.255.255.255 широковещание
-	}
-	lokalnyeV6 = [...]wtFwpV6AddrAndMask{
-		{[16]uint8{0xfe, 0x80}, 10}, // fe80::/10 link-local (в том числе NDP)
-		{[16]uint8{0xfc}, 7},        // fc00::/7 ULA
-		{[16]uint8{0xff}, 8},        // ff00::/8 мультикаст (NDP, DHCPv6, mDNS)
-	}
-)
-
-func (w *wfp) Zakryt(programmy []string) error {
+// Primenit — заменить фильтры одной транзакцией. Не вышло — стоят прежние.
+//
+// Не вышло в своей сессии (номер фильтра потерян, дескриптор умер вместе с
+// перезапуском BFE) — второй заход в НОВОЙ сессии рядом: она встаёт целиком,
+// и только потом закрывается старая. Промежутка без правил нет и тут.
+func (w *wfp) Primenit(filtry []Filtr) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.sessiya != 0 {
-		return nil
-	}
 	if err := modfwpuclnt.Load(); err != nil {
 		return fmt.Errorf("WFP недоступен: %w", err)
 	}
-	if len(programmy) == 0 {
-		// Без разрешения ядру туннель не поднимется вовсе: запрет держал бы
-		// человека без сети до срока.
-		return fmt.Errorf("не названо ни одной программы, которой можно наружу")
+	if w.sessiya == 0 {
+		if err := w.otkrytSessiyu(); err != nil {
+			return err
+		}
+		return w.zamenit(filtry)
 	}
-	sessiya, err := otkrytSessiyu()
-	if err != nil {
-		return err
+	err := w.zamenit(filtry)
+	if err == nil {
+		return nil
 	}
-	if err := vTranzakcii(sessiya, func() error { return postavitFiltry(sessiya, programmy) }); err != nil {
-		_ = fwpmEngineClose0(sessiya)
-		return err
+	staraya, stPost, stPods, stNomera := w.sessiya, w.postavshchik, w.podsloy, w.nomera
+	vernut := func() { w.sessiya, w.postavshchik, w.podsloy, w.nomera = staraya, stPost, stPods, stNomera }
+	if err2 := w.otkrytSessiyu(); err2 != nil {
+		vernut()
+		return fmt.Errorf("%w; новая сессия не открылась: %v", err, err2)
 	}
-	w.sessiya = sessiya
+	if err2 := w.zamenit(filtry); err2 != nil {
+		_ = fwpmEngineClose0(w.sessiya)
+		vernut()
+		return fmt.Errorf("%w; в новой сессии: %v", err, err2)
+	}
+	_ = fwpmEngineClose0(staraya)
 	return nil
 }
 
-func (w *wfp) Otkryt() error {
+// zamenit — в текущей сессии: снять прежние фильтры, поставить новые.
+func (w *wfp) zamenit(filtry []Filtr) error {
+	var novye []uint64
+	err := vTranzakcii(w.sessiya, func() error {
+		for _, id := range w.nomera {
+			if err := fwpmFilterDeleteById0(w.sessiya, id); err != nil {
+				return fmt.Errorf("снять фильтр %d: %w", id, err)
+			}
+		}
+		for _, f := range filtry {
+			id, err := w.dobavit(f)
+			if err != nil {
+				return err
+			}
+			novye = append(novye, id)
+		}
+		return nil
+	})
+	w.hranit = nil
+	if err != nil {
+		return err
+	}
+	w.nomera = novye
+	return nil
+}
+
+// Snyat — закрыть сессию: Windows снимает все её объекты. Не закрылась —
+// дескриптор не теряем: иначе снять запрет было бы нечем до смерти процесса.
+func (w *wfp) Snyat() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.sessiya == 0 {
 		return nil
 	}
-	// Закрытие динамической сессии снимает её фильтры. Не закрылась — дескриптор
-	// не теряем: иначе снять запрет было бы уже нечем до смерти службы. Ещё
-	// попытка сразу, не вышло — сессия остаётся, следующий Otkryt повторит.
 	err := fwpmEngineClose0(w.sessiya)
 	if err != nil {
 		time.Sleep(200 * time.Millisecond)
@@ -112,28 +131,64 @@ func (w *wfp) Otkryt() error {
 	if err != nil {
 		return fmt.Errorf("сессия WFP не закрылась, повторю при следующем снятии: %w", err)
 	}
-	w.sessiya = 0
+	w.sessiya, w.nomera = 0, nil
 	return nil
 }
 
-func otkrytSessiyu() (uintptr, error) {
-	dd, err := podpis("Kelevra", "Kelevra: перезапуск ядра")
+// otkrytSessiyu — сессия, затем поставщик и подслой одной транзакцией.
+func (w *wfp) otkrytSessiyu() error {
+	dd, err := podpis("Kelevra", "Kelevra: запрет мимо туннеля")
 	if err != nil {
-		return 0, err
+		return err
 	}
-	sessiya := wtFwpmSession0{
+	opisanie := wtFwpmSession0{
 		displayData: *dd,
 		flags:       cFWPM_SESSION_FLAG_DYNAMIC,
 		// Не INFINITE: транзакцию BFE может держать чужая программа (антивирус,
-		// другой VPN), и тогда перезапуск висел бы под zamokPodyoma вечно, а с
-		// ним «Подключиться» и «Отключить». Не дождались — ошибка, перезапуск как раньше.
+		// другой VPN), и тогда «Отключить» ждало бы вечно. Не дождались —
+		// ошибка, правила прежние, повтор через 5 с.
 		txnWaitTimeoutInMSec: 5000,
 	}
 	var h uintptr
-	if err := fwpmEngineOpen0(&sessiya, &h); err != nil {
-		return 0, err
+	if err := fwpmEngineOpen0(&opisanie, &h); err != nil {
+		return err
 	}
-	return h, nil
+	postavshchik, err := windows.GenerateGUID()
+	if err != nil {
+		_ = fwpmEngineClose0(h)
+		return err
+	}
+	podsloy, err := windows.GenerateGUID()
+	if err != nil {
+		_ = fwpmEngineClose0(h)
+		return err
+	}
+	err = vTranzakcii(h, func() error {
+		dd, err := podpis("Kelevra", "Kelevra: запрет мимо туннеля")
+		if err != nil {
+			return err
+		}
+		if err := fwpmProviderAdd0(h, &wtFwpmProvider0{providerKey: postavshchik, displayData: *dd}); err != nil {
+			return err
+		}
+		dd, err = podpis("Kelevra: трафик мимо туннеля",
+			"Anthropic только через туннель; при полном запрете — туннель, ядро, служба, петля, DHCP, NDP, локальная сеть, остальное исходящее запрещено")
+		if err != nil {
+			return err
+		}
+		return fwpmSubLayerAdd0(h, &wtFwpmSublayer0{
+			subLayerKey: podsloy,
+			displayData: *dd,
+			providerKey: &postavshchik,
+			weight:      ^uint16(0),
+		})
+	})
+	if err != nil {
+		_ = fwpmEngineClose0(h)
+		return err
+	}
+	w.sessiya, w.postavshchik, w.podsloy, w.nomera = h, postavshchik, podsloy, nil
+	return nil
 }
 
 func vTranzakcii(sessiya uintptr, delo func() error) error {
@@ -151,157 +206,125 @@ func vTranzakcii(sessiya uintptr, delo func() error) error {
 	return nil
 }
 
-// postavitFiltry — поставщик, подслой и фильтры одной транзакцией.
-func postavitFiltry(sessiya uintptr, programmy []string) error {
-	postavshchik, err := windows.GenerateGUID()
-	if err != nil {
-		return err
+// dobavit — один Filtr как FWPM_FILTER0. Под w.mu, внутри транзакции.
+func (w *wfp) dobavit(f Filtr) (uint64, error) {
+	sloy := cFWPM_LAYER_ALE_AUTH_CONNECT_V4
+	if f.Semeystvo == V6 {
+		sloy = cFWPM_LAYER_ALE_AUTH_CONNECT_V6
 	}
-	podsloy, err := windows.GenerateGUID()
-	if err != nil {
-		return err
-	}
-	dd, err := podpis("Kelevra", "Kelevra: перезапуск ядра")
-	if err != nil {
-		return err
-	}
-	if err := fwpmProviderAdd0(sessiya, &wtFwpmProvider0{providerKey: postavshchik, displayData: *dd}); err != nil {
-		return err
-	}
-	dd, err = podpis("Kelevra: трафик мимо туннеля", "Разрешения ядра и службы, затем запрет остального исходящего")
-	if err != nil {
-		return err
-	}
-	if err := fwpmSubLayerAdd0(sessiya, &wtFwpmSublayer0{
-		subLayerKey: podsloy,
-		displayData: *dd,
-		providerKey: &postavshchik,
-		weight:      ^uint16(0),
-	}); err != nil {
-		return err
-	}
-	f := filtry{sessiya: sessiya, postavshchik: &postavshchik, podsloy: podsloy}
-
-	// Свои программы: ядро (до узлов VPS) и служба.
-	for _, put := range programmy {
-		if err := f.razreshitProgrammu(put); err != nil {
-			return err
+	// Условия одного поля — подряд (WFP сводит их в «или»).
+	usloviya := append([]Uslovie(nil), f.Usloviya...)
+	sort.SliceStable(usloviya, func(i, j int) bool { return usloviya[i].Pole < usloviya[j].Pole })
+	var wt []wtFwpmFilterCondition0
+	for _, u := range usloviya {
+		c, osvobodit, err := w.uslovie(u)
+		if err != nil {
+			return 0, fmt.Errorf("фильтр «%s»: %w", f.Imya, err)
 		}
+		if osvobodit != nil {
+			defer osvobodit()
+		}
+		wt = append(wt, c)
 	}
-	// Петля.
-	petlya := []wtFwpmFilterCondition0{{
-		fieldKey:       cFWPM_CONDITION_FLAGS,
-		matchType:      cFWP_MATCH_FLAGS_ALL_SET,
-		conditionValue: wtFwpConditionValue0{_type: cFWP_UINT32, value: cFWP_CONDITION_FLAG_IS_LOOPBACK},
-	}}
-	if err := f.oba("петля", petlya, vesPetli, cFWP_ACTION_PERMIT); err != nil {
-		return err
-	}
-	// DHCP: запрос клиента 68 → 67 (IPv4) и 546 → 547 (IPv6) на любой адрес —
-	// сервер DHCP в гостинице или у провайдера бывает и не в частной сети.
-	if err := f.dobavit("DHCP", cFWPM_LAYER_ALE_AUTH_CONNECT_V4, portyUdp(68, 67), vesDhcp, cFWP_ACTION_PERMIT); err != nil {
-		return err
-	}
-	if err := f.dobavit("DHCPv6", cFWPM_LAYER_ALE_AUTH_CONNECT_V6, portyUdp(546, 547), vesDhcp, cFWP_ACTION_PERMIT); err != nil {
-		return err
-	}
-	// Локальная сеть: несколько условий одного поля — «или».
-	var setV4, setV6 []wtFwpmFilterCondition0
-	for i := range lokalnyeV4 {
-		setV4 = append(setV4, wtFwpmFilterCondition0{
-			fieldKey:       cFWPM_CONDITION_IP_REMOTE_ADDRESS,
-			matchType:      cFWP_MATCH_EQUAL,
-			conditionValue: wtFwpConditionValue0{_type: cFWP_V4_ADDR_MASK, value: uintptr(unsafe.Pointer(&lokalnyeV4[i]))},
-		})
-	}
-	for i := range lokalnyeV6 {
-		setV6 = append(setV6, wtFwpmFilterCondition0{
-			fieldKey:       cFWPM_CONDITION_IP_REMOTE_ADDRESS,
-			matchType:      cFWP_MATCH_EQUAL,
-			conditionValue: wtFwpConditionValue0{_type: cFWP_V6_ADDR_MASK, value: uintptr(unsafe.Pointer(&lokalnyeV6[i]))},
-		})
-	}
-	if err := f.dobavit("локальная сеть", cFWPM_LAYER_ALE_AUTH_CONNECT_V4, setV4, vesSeti, cFWP_ACTION_PERMIT); err != nil {
-		return err
-	}
-	if err := f.dobavit("локальная сеть", cFWPM_LAYER_ALE_AUTH_CONNECT_V6, setV6, vesSeti, cFWP_ACTION_PERMIT); err != nil {
-		return err
-	}
-	// Всё остальное исходящее — запрет.
-	return f.oba("остальное исходящее", nil, vesZapreta, cFWP_ACTION_BLOCK)
-}
-
-func portyUdp(svoy, chuzhoy uint16) []wtFwpmFilterCondition0 {
-	return []wtFwpmFilterCondition0{
-		{fieldKey: cFWPM_CONDITION_IP_PROTOCOL, matchType: cFWP_MATCH_EQUAL, conditionValue: wtFwpConditionValue0{_type: cFWP_UINT8, value: cIPPROTO_UDP}},
-		{fieldKey: cFWPM_CONDITION_IP_LOCAL_PORT, matchType: cFWP_MATCH_EQUAL, conditionValue: wtFwpConditionValue0{_type: cFWP_UINT16, value: uintptr(svoy)}},
-		{fieldKey: cFWPM_CONDITION_IP_REMOTE_PORT, matchType: cFWP_MATCH_EQUAL, conditionValue: wtFwpConditionValue0{_type: cFWP_UINT16, value: uintptr(chuzhoy)}},
-	}
-}
-
-type filtry struct {
-	sessiya      uintptr
-	postavshchik *windows.GUID
-	podsloy      windows.GUID
-}
-
-// razreshitProgrammu — всё исходящее программы put (ALE_APP_ID по пути).
-func (f filtry) razreshitProgrammu(put string) error {
-	putW, err := windows.UTF16PtrFromString(put)
-	if err != nil {
-		return err
-	}
-	// Блоб с номером программы выделяет сам WFP (память не Go — не движется
-	// и не собирается); WFP копирует его в фильтр, после — освобождаем.
-	var appID *wtFwpByteBlob
-	if err := fwpmGetAppIdFromFileName0(putW, &appID); err != nil {
-		return fmt.Errorf("%s: %w", put, err)
-	}
-	defer fwpmFreeMemory0(unsafe.Pointer(&appID))
-	usloviya := []wtFwpmFilterCondition0{{
-		fieldKey:       cFWPM_CONDITION_ALE_APP_ID,
-		matchType:      cFWP_MATCH_EQUAL,
-		conditionValue: wtFwpConditionValue0{_type: cFWP_BYTE_BLOB_TYPE, value: uintptr(unsafe.Pointer(appID))},
-	}}
-	return f.oba("программа "+put, usloviya, vesProgramm, cFWP_ACTION_PERMIT)
-}
-
-// oba — тот же фильтр на IPv4 и IPv6.
-func (f filtry) oba(chto string, usloviya []wtFwpmFilterCondition0, ves uint8, deystvie wtFwpActionType) error {
-	if err := f.dobavit(chto, cFWPM_LAYER_ALE_AUTH_CONNECT_V4, usloviya, ves, deystvie); err != nil {
-		return err
-	}
-	return f.dobavit(chto, cFWPM_LAYER_ALE_AUTH_CONNECT_V6, usloviya, ves, deystvie)
-}
-
-func (f filtry) dobavit(chto string, sloy windows.GUID, usloviya []wtFwpmFilterCondition0, ves uint8, deystvie wtFwpActionType) error {
-	imya := "Kelevra: " + chto
-	if deystvie == cFWP_ACTION_BLOCK {
-		imya = "Kelevra: запрет, " + chto
+	imya := "Kelevra: " + f.Imya
+	deystvie := cFWP_ACTION_PERMIT
+	if f.Zapret {
+		imya = "Kelevra: запрет, " + f.Imya
+		deystvie = cFWP_ACTION_BLOCK
 	}
 	dd, err := podpis(imya, "")
 	if err != nil {
-		return err
+		return 0, err
 	}
+	postavshchik := new(windows.GUID)
+	*postavshchik = w.postavshchik
+	w.hranit = append(w.hranit, postavshchik)
 	filtr := wtFwpmFilter0{
 		displayData: *dd,
-		providerKey: f.postavshchik,
+		providerKey: postavshchik,
 		layerKey:    sloy,
-		subLayerKey: f.podsloy,
-		weight:      wtFwpValue0{_type: cFWP_UINT8, value: uintptr(ves)},
+		subLayerKey: w.podsloy,
+		weight:      wtFwpValue0{_type: cFWP_UINT8, value: uintptr(f.Ves)},
 		action:      wtFwpmAction0{_type: deystvie},
 	}
-	if len(usloviya) > 0 {
-		filtr.numFilterConditions = uint32(len(usloviya))
-		filtr.filterCondition = &usloviya[0]
+	if len(wt) > 0 {
+		filtr.numFilterConditions = uint32(len(wt))
+		filtr.filterCondition = &wt[0]
 	}
 	var id uint64
-	err = fwpmFilterAdd0(f.sessiya, &filtr, &id)
-	runtime.KeepAlive(usloviya)
+	err = fwpmFilterAdd0(w.sessiya, &filtr, &id)
+	runtime.KeepAlive(wt)
 	if err != nil {
-		return fmt.Errorf("фильтр «%s»: %w", chto, err)
+		return 0, fmt.Errorf("фильтр «%s»: %w", f.Imya, err)
 	}
-	return nil
+	return id, nil
+}
+
+// uslovie — FWPM_FILTER_CONDITION0. osvobodit — что освободить после
+// добавления фильтра (блоб номера программы выделяет сам WFP).
+func (w *wfp) uslovie(u Uslovie) (wtFwpmFilterCondition0, func(), error) {
+	switch u.Pole {
+	case PoleProgramma:
+		putW, err := windows.UTF16PtrFromString(u.Put)
+		if err != nil {
+			return wtFwpmFilterCondition0{}, nil, err
+		}
+		// Блоб с номером программы выделяет сам WFP (память не Go — не движется
+		// и не собирается); WFP копирует его в фильтр, после — освобождаем.
+		var appID *wtFwpByteBlob
+		if err := fwpmGetAppIdFromFileName0(putW, &appID); err != nil {
+			return wtFwpmFilterCondition0{}, nil, fmt.Errorf("%s: %w", u.Put, err)
+		}
+		return wtFwpmFilterCondition0{
+			fieldKey:       cFWPM_CONDITION_ALE_APP_ID,
+			matchType:      cFWP_MATCH_EQUAL,
+			conditionValue: wtFwpConditionValue0{_type: cFWP_BYTE_BLOB_TYPE, value: uintptr(unsafe.Pointer(appID))},
+		}, func() { fwpmFreeMemory0(unsafe.Pointer(&appID)) }, nil
+	case PoleUdalennyy, PoleLokalnyy:
+		pole := cFWPM_CONDITION_IP_REMOTE_ADDRESS
+		if u.Pole == PoleLokalnyy {
+			pole = cFWPM_CONDITION_IP_LOCAL_ADDRESS
+		}
+		a := u.Set.Masked().Addr()
+		if a.Is4() {
+			b := a.As4()
+			m := &wtFwpV4AddrAndMask{
+				addr: uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]),
+				mask: maskaV4(u.Set.Bits()),
+			}
+			w.hranit = append(w.hranit, m)
+			return wtFwpmFilterCondition0{fieldKey: pole, matchType: cFWP_MATCH_EQUAL,
+				conditionValue: wtFwpConditionValue0{_type: cFWP_V4_ADDR_MASK, value: uintptr(unsafe.Pointer(m))}}, nil, nil
+		}
+		m := &wtFwpV6AddrAndMask{addr: a.As16(), prefixLength: uint8(u.Set.Bits())}
+		w.hranit = append(w.hranit, m)
+		return wtFwpmFilterCondition0{fieldKey: pole, matchType: cFWP_MATCH_EQUAL,
+			conditionValue: wtFwpConditionValue0{_type: cFWP_V6_ADDR_MASK, value: uintptr(unsafe.Pointer(m))}}, nil, nil
+	case PolePetlya:
+		return wtFwpmFilterCondition0{
+			fieldKey:       cFWPM_CONDITION_FLAGS,
+			matchType:      cFWP_MATCH_FLAGS_ALL_SET,
+			conditionValue: wtFwpConditionValue0{_type: cFWP_UINT32, value: cFWP_CONDITION_FLAG_IS_LOOPBACK},
+		}, nil, nil
+	case PoleProtokol:
+		return wtFwpmFilterCondition0{fieldKey: cFWPM_CONDITION_IP_PROTOCOL, matchType: cFWP_MATCH_EQUAL,
+			conditionValue: wtFwpConditionValue0{_type: cFWP_UINT8, value: uintptr(u.Chislo)}}, nil, nil
+	case PoleLokalnyyPort:
+		return wtFwpmFilterCondition0{fieldKey: cFWPM_CONDITION_IP_LOCAL_PORT, matchType: cFWP_MATCH_EQUAL,
+			conditionValue: wtFwpConditionValue0{_type: cFWP_UINT16, value: uintptr(u.Chislo)}}, nil, nil
+	case PoleUdalennyyPort:
+		return wtFwpmFilterCondition0{fieldKey: cFWPM_CONDITION_IP_REMOTE_PORT, matchType: cFWP_MATCH_EQUAL,
+			conditionValue: wtFwpConditionValue0{_type: cFWP_UINT16, value: uintptr(u.Chislo)}}, nil, nil
+	}
+	return wtFwpmFilterCondition0{}, nil, fmt.Errorf("незнакомое условие %d", u.Pole)
+}
+
+// maskaV4 — маска числом в порядке хоста: /23 → 0xFFFFFE00.
+func maskaV4(bity int) uint32 {
+	if bity <= 0 {
+		return 0
+	}
+	return ^uint32(0) << (32 - bity)
 }
 
 func podpis(imya, opisanie string) (*wtFwpmDisplayData0, error) {
@@ -329,6 +352,7 @@ var (
 	procFwpmProviderAdd0          = modfwpuclnt.NewProc("FwpmProviderAdd0")
 	procFwpmSubLayerAdd0          = modfwpuclnt.NewProc("FwpmSubLayerAdd0")
 	procFwpmFilterAdd0            = modfwpuclnt.NewProc("FwpmFilterAdd0")
+	procFwpmFilterDeleteById0     = modfwpuclnt.NewProc("FwpmFilterDeleteById0")
 	procFwpmGetAppIdFromFileName0 = modfwpuclnt.NewProc("FwpmGetAppIdFromFileName0")
 	procFwpmFreeMemory0           = modfwpuclnt.NewProc("FwpmFreeMemory0")
 	procFwpmTransactionBegin0     = modfwpuclnt.NewProc("FwpmTransactionBegin0")
@@ -382,6 +406,15 @@ func fwpmFilterAdd0(h uintptr, f *wtFwpmFilter0, id *uint64) error {
 	}
 	r1, _, _ := syscall.SyscallN(procFwpmFilterAdd0.Addr(), h, uintptr(unsafe.Pointer(f)), 0, uintptr(unsafe.Pointer(id)))
 	return oshibkaWfp("FwpmFilterAdd0", r1)
+}
+
+func fwpmFilterDeleteById0(h uintptr, id uint64) error {
+	if err := procFwpmFilterDeleteById0.Find(); err != nil {
+		return err
+	}
+	// UINT64 по значению: на 64 битах одно слово, на 32 — два (argU64).
+	r1, _, _ := syscall.SyscallN(procFwpmFilterDeleteById0.Addr(), append([]uintptr{h}, argU64(id)...)...)
+	return oshibkaWfp("FwpmFilterDeleteById0", r1)
 }
 
 func fwpmGetAppIdFromFileName0(put *uint16, appID **wtFwpByteBlob) error {

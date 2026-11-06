@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -12,44 +13,71 @@ import (
 
 // lozhnaya — система-подмена: настоящего WFP в проверках нет и быть не должно.
 type lozhnaya struct {
-	mu        sync.Mutex
-	zakryto   bool
-	zakrytiy  int
-	otkrytiy  int
-	programmy []string
-	oshibka   error
+	mu         sync.Mutex
+	filtry     []Filtr
+	estSessiya bool
+	primeneniy int
+	snyatiy    int
+	oshibka    error
 }
 
-func (l *lozhnaya) Zakryt(p []string) error {
+func (l *lozhnaya) Primenit(f []Filtr) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.zakrytiy++
-	l.programmy = p
+	l.primeneniy++
 	if l.oshibka != nil {
 		return l.oshibka
 	}
-	l.zakryto = true
+	l.filtry = append([]Filtr(nil), f...)
+	l.estSessiya = true
 	return nil
 }
 
-func (l *lozhnaya) Otkryt() error {
+func (l *lozhnaya) Snyat() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.otkrytiy++
-	l.zakryto = false
+	l.snyatiy++
+	l.filtry, l.estSessiya = nil, false
 	return nil
 }
 
-func (l *lozhnaya) schet() (zakrytiy, otkrytiy int) {
+// polnyy — стоит ли «запрет остального исходящего».
+func (l *lozhnaya) polnyy() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.zakrytiy, l.otkrytiy
+	return estZapretVsego(l.filtry)
 }
 
-func (l *lozhnaya) stoit() bool {
+func (l *lozhnaya) anthropic() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.zakryto
+	for _, f := range l.filtry {
+		if f.Ves == VesAnthropicZapret && f.Zapret {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *lozhnaya) pusto() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.filtry) == 0
+}
+
+func (l *lozhnaya) schet() (primeneniy, snyatiy int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.primeneniy, l.snyatiy
+}
+
+func estZapretVsego(f []Filtr) bool {
+	for _, x := range f {
+		if x.Zapret && x.Ves == VesZapreta && len(x.Usloviya) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // zhurnal — журнал пакета log на время проверки.
@@ -83,30 +111,58 @@ func perehvatitZhurnal(t *testing.T) *zhurnal {
 	return z
 }
 
+// stend — заслон на подмене с управляемым входом.
+type stend struct {
+	mu sync.Mutex
+	v  Vhod
+}
+
+func (s *stend) vhod() Vhod {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.v
+}
+
+func (s *stend) zadat(v Vhod) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.v = v
+}
+
+func novyyZaslon(sys Sistema, st *stend) *Zaslon {
+	return &Zaslon{
+		Sys:  sys,
+		Vhod: st.vhod,
+		Dannye: func() Dannye {
+			return Dannye{
+				Tunnel:    []netip.Prefix{netip.MustParsePrefix("172.19.0.0/30"), netip.MustParsePrefix("fdfe:dcba:9876::/126")},
+				Programmy: []string{`C:\k\sing-box.exe`, `C:\k\Kelevra.exe`},
+			}
+		},
+	}
+}
+
 func TestZakrytIOtkrytPriPodyome(t *testing.T) {
 	zh := perehvatitZhurnal(t)
 	sys := &lozhnaya{}
-	z := &Zaslon{Sys: sys, Programmy: func() []string { return []string{`C:\k\sing-box.exe`, `C:\k\Kelevra.exe`} }}
+	z := novyyZaslon(sys, &stend{})
 	if !z.Zakryt() {
 		t.Fatal("запрет не встал")
 	}
-	if !sys.stoit() || !z.Zakryto() {
-		t.Fatal("после Zakryt система не закрыта")
+	if !sys.polnyy() || !z.Zakryto() || !z.Perezapusk() {
+		t.Fatal("после Zakryt нет полного запрета")
 	}
-	if len(sys.programmy) != 2 || !strings.HasSuffix(sys.programmy[0], "sing-box.exe") {
-		t.Fatalf("разрешены не те программы: %v", sys.programmy)
-	}
-	// Повтор при стоящем запрете — без второго обращения к системе.
-	if zk, _ := sys.schet(); !z.Zakryt() || zk != 1 {
-		t.Fatalf("повторное закрытие дёрнуло систему (%d раз)", zk)
+	// Повтор при идущем перезапуске — без второго обращения к системе.
+	if pr, _ := sys.schet(); !z.Zakryt() || pr != 1 {
+		t.Fatalf("повторное закрытие дёрнуло систему (%d раз)", pr)
 	}
 	z.OtkrytPodnyat()
-	if sys.stoit() || z.Zakryto() {
-		t.Fatal("туннель поднят, а запрет стоит")
+	if !sys.pusto() || z.Zakryto() || z.Perezapusk() {
+		t.Fatal("туннель поднят, а запрет стоит (намерения нет — должно быть пусто)")
 	}
 	z.OtkrytPodnyat() // повтор — ничего
-	if _, ot := sys.schet(); ot != 1 {
-		t.Fatalf("снятий %d, ждали 1", ot)
+	if _, sn := sys.schet(); sn != 1 {
+		t.Fatalf("снятий %d, ждали 1", sn)
 	}
 	tekst := zh.String()
 	for _, nuzhno := range []string{
@@ -122,19 +178,72 @@ func TestZakrytIOtkrytPriPodyome(t *testing.T) {
 	}
 }
 
-// Предохранитель: туннель не поднялся — запрет снимается сам по сроку.
+// Подключено: после перезапуска остаётся уровень 1, а не пусто.
+func TestPoslePerezapuskaOstayotsyaUroven1(t *testing.T) {
+	zh := perehvatitZhurnal(t)
+	sys := &lozhnaya{}
+	st := &stend{v: Vhod{Namerenie: true}}
+	z := novyyZaslon(sys, st)
+	if err := z.Obnovit("старт"); err != nil {
+		t.Fatal(err)
+	}
+	if !sys.anthropic() || sys.polnyy() {
+		t.Fatal("подключено: ждали только уровень 1")
+	}
+	z.Zakryt()
+	if !sys.polnyy() || !sys.anthropic() {
+		t.Fatal("перезапуск: ждали полный запрет вместе с Anthropic")
+	}
+	z.OtkrytPodnyat()
+	if sys.polnyy() || !sys.anthropic() {
+		t.Fatal("после подъёма: ждали уровень 1")
+	}
+	if _, sn := sys.schet(); sn != 0 {
+		t.Fatalf("при смене правил сессию закрывали (%d) — щель", sn)
+	}
+	if !strings.Contains(zh.String(), "открыт: туннель поднят за ") || !strings.Contains(zh.String(), "(Anthropic только через туннель)") {
+		t.Errorf("нет строки итога с уровнем 1:\n%s", zh.String())
+	}
+}
+
+// Строгий: временный запрет кончился по сроку — полный остаётся.
+func TestStrogiyPoSrokuOstayotsyaZakrytym(t *testing.T) {
+	zh := perehvatitZhurnal(t)
+	sys := &lozhnaya{}
+	st := &stend{v: Vhod{Namerenie: true, Strogiy: true}}
+	z := novyyZaslon(sys, st)
+	z.Srok = 20 * time.Millisecond
+	_ = z.Obnovit("старт")
+	z.Zakryt()
+	srok := time.Now().Add(5 * time.Second)
+	for z.Perezapusk() && time.Now().Before(srok) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if z.Perezapusk() {
+		t.Fatal("временный запрет не кончился по сроку")
+	}
+	if !sys.polnyy() {
+		t.Fatal("строгий: после срока полного запрета нет")
+	}
+	if !strings.Contains(zh.String(), "полный запрет остаётся") {
+		t.Errorf("нет строки «полный запрет остаётся»:\n%s", zh.String())
+	}
+}
+
+// Предохранитель: туннель не поднялся — временный запрет снимается сам.
 func TestPredohranitelPoSroku(t *testing.T) {
 	zh := perehvatitZhurnal(t)
 	sys := &lozhnaya{}
-	z := &Zaslon{Sys: sys, Srok: 30 * time.Millisecond}
+	z := novyyZaslon(sys, &stend{})
+	z.Srok = 30 * time.Millisecond
 	if !z.Zakryt() {
 		t.Fatal("запрет не встал")
 	}
 	srok := time.Now().Add(5 * time.Second)
-	for sys.stoit() && time.Now().Before(srok) {
+	for sys.polnyy() && time.Now().Before(srok) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if sys.stoit() || z.Zakryto() {
+	if sys.polnyy() || z.Zakryto() {
 		t.Fatal("запрет не снялся по сроку")
 	}
 	if !strings.Contains(zh.String(), "открыт по сроку") || !strings.Contains(zh.String(), "туннель не поднялся") {
@@ -142,16 +251,17 @@ func TestPredohranitelPoSroku(t *testing.T) {
 	}
 	// Поздний подъём после срока — ничего не трогает.
 	z.OtkrytPodnyat()
-	if _, ot := sys.schet(); ot != 1 {
-		t.Fatalf("снятий %d, ждали 1", ot)
+	if _, sn := sys.schet(); sn != 1 {
+		t.Fatalf("снятий %d, ждали 1", sn)
 	}
 }
 
-// Срок прошлого закрытия не снимает новое.
+// Срок прошлого перезапуска не снимает новый.
 func TestStaryySrokNeTrogaetNovyyZapret(t *testing.T) {
 	perehvatitZhurnal(t)
 	sys := &lozhnaya{}
-	z := &Zaslon{Sys: sys, Srok: time.Hour}
+	z := novyyZaslon(sys, &stend{})
+	z.Srok = time.Hour
 	z.Zakryt()
 	z.mu.Lock()
 	staryy := z.nomer
@@ -159,7 +269,7 @@ func TestStaryySrokNeTrogaetNovyyZapret(t *testing.T) {
 	z.Otkryt("проверка")
 	z.Zakryt()
 	z.poSroku(staryy, time.Hour) // срабатывание таймера прошлого закрытия
-	if !z.Zakryto() || !sys.stoit() {
+	if !z.Zakryto() || !sys.polnyy() {
 		t.Fatal("таймер прошлого закрытия снял новый запрет")
 	}
 	z.Otkryt("конец")
@@ -169,11 +279,11 @@ func TestStaryySrokNeTrogaetNovyyZapret(t *testing.T) {
 func TestOshibkaSistemyNeLomaet(t *testing.T) {
 	zh := perehvatitZhurnal(t)
 	sys := &lozhnaya{oshibka: errors.New("WFP недоступен")}
-	z := &Zaslon{Sys: sys}
+	z := novyyZaslon(sys, &stend{})
 	if z.Zakryt() {
 		t.Fatal("при ошибке системы Zakryt сказал «закрыто»")
 	}
-	if z.Zakryto() {
+	if z.Zakryto() || z.Perezapusk() {
 		t.Fatal("при ошибке системы запрет числится стоящим")
 	}
 	if !strings.Contains(zh.String(), "закрыть трафик мимо туннеля не вышло (WFP недоступен) — перезапускаю как раньше") {
@@ -185,6 +295,43 @@ func TestOshibkaSistemyNeLomaet(t *testing.T) {
 	}
 }
 
+// Отказ WFP на уровне 1 — повтор сам, без нового события.
+func TestOshibkaPovtoryaetsya(t *testing.T) {
+	perehvatitZhurnal(t)
+	sys := &lozhnaya{oshibka: errors.New("BFE занят")}
+	z := novyyZaslon(sys, &stend{v: Vhod{Namerenie: true}})
+	if err := z.Obnovit("старт"); err == nil {
+		t.Fatal("ошибка системы не дошла")
+	}
+	sys.mu.Lock()
+	sys.oshibka = nil
+	sys.mu.Unlock()
+	srok := time.Now().Add(PovtorPosleOshibki + 5*time.Second)
+	for !sys.anthropic() && time.Now().Before(srok) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !sys.anthropic() {
+		t.Fatal("уровень 1 не встал повтором")
+	}
+}
+
+// «Отключить» снимает всё сразу — и уровень 1, и строгий.
+func TestOtklyuchitSnimaetVsyo(t *testing.T) {
+	perehvatitZhurnal(t)
+	sys := &lozhnaya{}
+	st := &stend{v: Vhod{Namerenie: true, Strogiy: true}}
+	z := novyyZaslon(sys, st)
+	_ = z.Obnovit("старт")
+	if !sys.polnyy() {
+		t.Fatal("строгий не встал")
+	}
+	st.zadat(Vhod{Namerenie: false, Strogiy: true})
+	_ = z.Obnovit("«Отключить»")
+	if !sys.pusto() || sys.estSessiya {
+		t.Fatal("после «Отключить» что-то осталось")
+	}
+}
+
 // Без системы (не Windows, стенд) и nil — ничего не делать и не падать.
 func TestBezSistemy(t *testing.T) {
 	var nichto *Zaslon
@@ -193,6 +340,10 @@ func TestBezSistemy(t *testing.T) {
 	}
 	nichto.OtkrytPodnyat()
 	nichto.Otkryt("x")
+	_ = nichto.Obnovit("x")
+	if !nichto.Primeneno().Pusto() {
+		t.Fatal("nil-заслон что-то держит")
+	}
 	pustoy := &Zaslon{}
 	if pustoy.Zakryt() {
 		t.Fatal("заслон без системы закрылся")
@@ -203,14 +354,47 @@ func TestBezSistemy(t *testing.T) {
 func TestOtkrytSPrichinoy(t *testing.T) {
 	zh := perehvatitZhurnal(t)
 	sys := &lozhnaya{}
-	z := &Zaslon{Sys: sys}
+	z := novyyZaslon(sys, &stend{})
 	z.Zakryt()
 	z.Otkryt("решение о связи сменилось")
-	if sys.stoit() {
+	if sys.polnyy() {
 		t.Fatal("запрет не снят")
 	}
 	if !strings.Contains(zh.String(), ": решение о связи сменилось") {
 		t.Errorf("нет причины в журнале:\n%s", zh.String())
+	}
+}
+
+// Тот же вход — система не дёргается (идемпотентность приведения).
+func TestTotZheVhodNeDyorgaet(t *testing.T) {
+	perehvatitZhurnal(t)
+	sys := &lozhnaya{}
+	z := novyyZaslon(sys, &stend{v: Vhod{Namerenie: true}})
+	for i := 0; i < 5; i++ {
+		_ = z.Obnovit("заход")
+	}
+	if pr, _ := sys.schet(); pr != 1 {
+		t.Fatalf("одни и те же правила ставились %d раз", pr)
+	}
+}
+
+// Неверные адреса пульта: берутся понятые, а ни одного — умолчание.
+func TestAdresaPulta(t *testing.T) {
+	perehvatitZhurnal(t)
+	sys := &lozhnaya{}
+	seti := []string{"мусор", "1.2.3.0/24"}
+	z := &Zaslon{Sys: sys, Vhod: func() Vhod { return Vhod{Namerenie: true} },
+		Dannye: func() Dannye { return Dannye{Seti: seti} }}
+	_ = z.Obnovit("x")
+	p := z.Primeneno()
+	if len(p.Seti) != 1 || p.Seti[0].String() != "1.2.3.0/24" {
+		t.Fatalf("адреса %v, ждали только 1.2.3.0/24", p.Seti)
+	}
+	seti = []string{"мусор"}
+	_ = z.Obnovit("y")
+	p = z.Primeneno()
+	if len(p.Seti) != 2 || p.Seti[0].String() != "160.79.104.0/23" {
+		t.Fatalf("при негодном списке адреса %v, ждали умолчание", p.Seti)
 	}
 }
 

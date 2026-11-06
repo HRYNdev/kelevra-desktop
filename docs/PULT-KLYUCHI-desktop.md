@@ -17,6 +17,8 @@
 | `funkcii.avtorezhim` | bool | — | true | автомат дома/не дома (выключатель, сразу) |
 | `yadro.probnye` | bool | — | false | брать пробные (prerelease) сборки ядра на сверке ядра (bratProbnyeYadra); выпуск ядра кольцом |
 | `kanal.dolgiy_opros` | bool | — | false | долгий опрос …/pult/zhdat (SleditZaDolgimOprosom) |
+| `kanal.strogiy` | bool | — | false | уровень 2: всё исходящее мимо туннеля закрыто, пока «подключено» вне дома, с момента старта службы (zaslon_perezapuska.go) |
+| `kanal.anthropic_seti` | список строк | 1–20 шт. | 160.79.104.0/23, 2607:6bc0::/48 | адреса Anthropic (подсети) для уровня 1: к ним только из туннеля; негодные строки отбрасываются |
 | `profil.period_min` | int | 15–1440 | obnovlyat_min из настроек (60), не меньше 15 | плановое обновление профиля и сводки (ObnovlyatProfil) |
 | `obnovleniya.period_proverki_min` | int | 30–1440 | 240 | фоновая проверка обновления (SleditZaObnovleniem) |
 | `obnovleniya.srok_proverki_s` | int | 5–300 | 30 | срок ответа на фоновую проверку (srokFonovoyProverkiObnovleniya) |
@@ -48,3 +50,4 @@
 | `vykl.uchet_trafika` | bool | — | false | выключатель: учёт расхода этой машины (X-Device-Traffic) |
 | `vykl.srochnyy_zhurnal` | bool | — | false | выключатель: срочная посылка журнала после неудачи связи |
 | `vykl.zapisi_yadra` | bool | — | false | выключатель: записи с полями из журнала ядра |
+| `vykl.zapret_anthropic` | bool | — | false | выключатель: уровень 1 запрета мимо туннеля (Anthropic только через туннель) |
