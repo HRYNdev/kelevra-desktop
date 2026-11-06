@@ -74,26 +74,17 @@ type domSluzhby struct {
 	// (ждут проверки).
 	perezapuski sync.WaitGroup
 	// Самоизлечение (lechitDom): neudachPodryad — неудачных проб подряд;
-	// lechim — сброс сети ядра или перезапуск ядра идёт; kogdaLechili — когда
-	// начато последнее лечение; pauzaLecheniya — раньше
-	// kogdaLechili+pauzaLecheniya следующее не начинать (0 — сразу по порогу).
-	// Удачная проба и сон машины паузу снимают.
+	// lechim — идёт проверка по смене сети или перезапуск ядра (второй
+	// рядом не начинается); kogdaLechili — когда начато последнее лечение;
+	// pauzaLecheniya — раньше kogdaLechili+pauzaLecheniya следующее не
+	// начинать (0 — сразу по порогу). Удачная проба и сон машины паузу снимают.
 	neudachPodryad int
 	lechim         bool
 	kogdaLechili   time.Time
 	pauzaLecheniya time.Duration
-	// Сброс сети ядра (sbrositSetYadra) — первый шаг лечения, до перезапуска
-	// ядра. sbrosiliV — когда сбросили и ждём пробы (нулевое — не ждём);
-	// neudachPosleSbrosa — неудачных проб с тех пор.
-	sbrosiliV          time.Time
-	neudachPosleSbrosa int
-	// Сброс по смене сети (dom_smena_seti.go): sbrosPoSmeneV — когда
-	// сбросили по событию (для строки «на связи после сброса»), poslSbros —
-	// последний сброс любого рода (отсечка srokMezhduSbrosami).
-	sbrosPoSmeneV time.Time
-	poslSbros     time.Time
-	// pult — Clash API ядра для сброса сети; nil — s.Yadro. Подмена для проверок.
-	pult pultYadra
+	// proverkaPoSmene — когда начата последняя проверка «Дома» по смене сети
+	// (dom_smena_seti.go, отсечка srokMezhduProverkamiPoSmene).
+	proverkaPoSmene time.Time
 	// sledchik — события смены сети; nil — avtorezhim.NovySledchik.
 	// otpechatokSeti — отпечаток физической сети; nil —
 	// avtorezhim.OtpechatokSeti. Подмены для проверок.
@@ -380,8 +371,8 @@ func (s *Sluzhba) SleditZaDomom(ctx context.Context, shag time.Duration) {
 	if shag <= 0 {
 		shag = ShagSlezhkiZaDomom
 	}
-	// Смена физической сети — сброс сети ядра сразу, не дожидаясь проб
-	// (dom_smena_seti.go).
+	// Смена физической сети — проба «Дома» сразу, не дожидаясь трёх проб
+	// слежки, и перезапуск ядра, если дом не ответил (dom_smena_seti.go).
 	go s.sleditZaSmenoySeti(ctx)
 	t := time.NewTicker(shag)
 	defer t.Stop()
@@ -613,7 +604,6 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 	if b == nil || !vKonfige || !rabotaet {
 		d.mu.Lock()
 		d.svyaz, d.neudachPodryad = 0, 0
-		d.sbrosiliV, d.neudachPosleSbrosa, d.sbrosPoSmeneV = time.Time{}, 0, time.Time{}
 		d.mu.Unlock()
 		return
 	}
@@ -629,30 +619,16 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 		}
 		otmena()
 	}
-	t := s.chasyDoma()
 	d.mu.Lock()
 	bylo := d.svyaz
 	d.svyaz = itog
-	// Последний сброс сети — лечения или по смене сети: от него и считаем,
-	// за сколько дом ожил.
-	sbrosili := d.sbrosiliV
-	if d.sbrosPoSmeneV.After(sbrosili) {
-		sbrosili = d.sbrosPoSmeneV
-	}
 	if itog > 0 {
 		d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili, d.mostMolchitS = 0, 0, time.Time{}, time.Time{}
-		d.sbrosiliV, d.neudachPosleSbrosa, d.sbrosPoSmeneV = time.Time{}, 0, time.Time{}
 	} else {
 		d.neudachPodryad++
-		if !d.sbrosiliV.IsZero() {
-			d.neudachPosleSbrosa++
-		}
 	}
 	neudach := d.neudachPodryad
 	d.mu.Unlock()
-	if itog > 0 && bylo != 1 && !sbrosili.IsZero() {
-		log.Printf("дом: на связи после сброса сети за %d с", int(t.Sub(sbrosili).Round(time.Second)/time.Second))
-	}
 	if bylo != itog {
 		log.Printf("дом: %s", map[int]string{1: "на связи", -1: "нет связи"}[itog])
 	}
@@ -665,32 +641,22 @@ func (s *Sluzhba) proveritSvyazDoma(ctx context.Context) {
 // обычный туннель оживает своей очередью узлов, а эндпоинт «Дом» в ядре —
 // нет: соединение моста под WireGuard умерло молча, ошибки чтения нет, и
 // bind не переподключается (замер 06.11: ни строки у эндпоинта и моста за
-// полчаса). Лечение — сперва сброс сети ядра (sbrositSetYadra: Clash API
-// DELETE /connections, в ядре ResetNetwork → BindUpdate у WireGuard — тот же
-// путь, которым ядро само оживило «Дом» после «updated default interface»),
-// tun при этом не гаснет и трафик мимо туннеля не уходит. Не ожил дом за
-// probPosleSbrosa проб после сброса — перезапуск ядра (как «Отключить →
-// Подключить»). Порог —
-// неудачных проб подряд (шаг ShagSlezhkiZaDomom: около полутора минут).
-// Первое лечение — сразу по порогу, следующие — не раньше паузы с
+// полчаса). Лечение — перезапуск ядра (как «Отключить → Подключить»); с
+// 0.6.98 он идёт под запретом трафика мимо туннеля (zaslon_perezapuska.go),
+// туннель встаёт за секунды. Мягкие пути «Дом» не оживили: щелчок
+// селектора моста (#166) и сброс сети ядра Clash API DELETE /connections
+// (#167) — живьём 06.11 на 0.6.100 сброс по смене сети дом не вернул, а
+// второй сброс завис по сроку; ожил «Дом» только после перезапуска ядра.
+// Порог — неудачных проб подряд (шаг ShagSlezhkiZaDomom: около полутора
+// минут). Первое лечение — сразу по порогу, следующие — не раньше паузы с
 // прошлого, пауза растёт по лестнице до часа: умерший узел дома дёргает
-// туннель не чаще раза в час. Сброс и перезапуск после него — одно
-// лечение, одна ступень лестницы. Удачная проба лестницу сбрасывает.
+// туннель не чаще раза в час. Удачная проба лестницу сбрасывает.
 //
 // Пока не отвечает и сам выход моста (сети нет вовсе), лечение
 // бесполезно: не лечим и лестницу не тратим. Мост ожил — лестница с начала,
 // лечение на ближайшей неудачной пробе. Молчит мост дольше часа — лечим
 // раз в час всё равно: замер моста мог и ошибиться.
 const porogLecheniyaDoma = 3
-
-// probPosleSbrosa — сколько неудачных проб после сброса сети ждать до
-// перезапуска ядра (шаг ShagSlezhkiZaDomom: до минуты). WireGuard шлёт
-// пакет в новое соединение сразу же (keepalive, рукопожатие раз в 5 с, сама
-// проба), так что живой мост отвечает на первой же пробе.
-const probPosleSbrosa = 2
-
-// srokSbrosa — сколько ждать ответа Clash API на сброс сети ядра.
-const srokSbrosa = 5 * time.Second
 
 var lesenkaLecheniyaDoma = []time.Duration{10 * time.Minute, 20 * time.Minute, 40 * time.Minute, time.Hour}
 
@@ -709,12 +675,9 @@ func sleduyushchayaPauzaLecheniya(tekushchaya time.Duration) time.Duration {
 
 // lechitDom — лечение «Дома», если пора: подъём связи не идёт, прошлое
 // лечение закончено, выход моста отвечает и пауза с прошлого лечения
-// вышла. Сперва сброс сети ядра — сразу, в этом шаге, под zamokPodyoma (ни
-// подъёма, ни перезапуска рядом). Сброс не вышел (Clash API ответил
-// ошибкой или не ответил) или дом не ожил за probPosleSbrosa проб —
-// перезапуск ядра в горутине под perezapuski, тем же путём, что при смене
-// блока (perezapustitDlyaDoma): «Отключить», нажатое после решения, его
-// отменяет.
+// вышла, очередь подъёма свободна. Лечение — перезапуск ядра в горутине под
+// perezapuski, тем же путём, что при смене блока (perezapustitDlyaDoma):
+// «Отключить», нажатое после решения, его отменяет.
 func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 	d := s.dom
 	s.zamok.Lock()
@@ -739,10 +702,9 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 	zamolchal, ozhil := false, false
 	if !zhiv {
 		if d.mostMolchitS.IsZero() {
-			// Сеть пропала после сброса — дом молчит не из-за моста под
-			// WireGuard, перезапуск ядра не поможет: сброс забыт.
+			// Сети нет — дом молчит не из-за моста под WireGuard, перезапуск
+			// ядра не поможет.
 			d.mostMolchitS, zamolchal = t, true
-			d.sbrosiliV, d.neudachPosleSbrosa = time.Time{}, 0
 		}
 	} else if !d.mostMolchitS.IsZero() {
 		d.mostMolchitS, d.pauzaLecheniya, d.kogdaLechili, ozhil = time.Time{}, 0, time.Time{}, true
@@ -752,23 +714,6 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 		if ozhil {
 			log.Printf("дом: мост «%s» снова отвечает — лечу без паузы", teg)
 		}
-	}
-	// Сбросили и ждём: дом не ожил за probPosleSbrosa проб — то же лечение
-	// продолжается перезапуском ядра, без новой паузы (и при молчащем мосте:
-	// сброс раз в час при молчании дольше часа — тоже лечение, замер моста
-	// мог ошибиться).
-	if !d.sbrosiliV.IsZero() {
-		posle := d.neudachPosleSbrosa
-		if posle < probPosleSbrosa {
-			otpustit()
-			return
-		}
-		d.sbrosiliV, d.neudachPosleSbrosa = time.Time{}, 0
-		d.lechim = true
-		perezapustit := d.perezapustit
-		otpustit()
-		s.lechitPerezapuskom(perezapustit, fmt.Sprintf("сброс сети не помог — перезапускаю ядро (неудачных проб после сброса: %d)", posle))
-		return
 	}
 	if !zhiv {
 		ot := d.mostMolchitS
@@ -787,29 +732,22 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 		otpustit()
 		return
 	}
-	// Подъём или перезапуск ядра идёт — сбрасывать сеть ядра, которое сейчас
-	// гасят или поднимают, незачем: решим на следующей пробе.
+	// Подъём или перезапуск ядра идёт — новое ядро и так поднимется заново:
+	// решим на следующей пробе, ступень лестницы не тратим. Сам перезапуск
+	// берёт zamokPodyoma заново (perezapustit); занят он к тому времени —
+	// perezapustit не ждёт и уступает тому подъёму.
 	if !s.zamokPodyoma.TryLock() {
 		otpustit()
 		return
 	}
+	s.zamokPodyoma.Unlock()
 	d.lechim, d.kogdaLechili = true, t
 	d.pauzaLecheniya = sleduyushchayaPauzaLecheniya(d.pauzaLecheniya)
 	sleduyushchiy := t.Add(d.pauzaLecheniya)
 	perezapustit := d.perezapustit
 	otpustit()
-	log.Printf("дом: нет связи (неудачных проб подряд: %d) — сбрасываю сеть ядра, туннель не трогаю; следующее лечение не раньше %s",
-		neudach, sleduyushchiy.Format("15:04"))
-	err := s.sbrositSetYadra()
-	s.zamokPodyoma.Unlock()
-	if err == nil {
-		d.mu.Lock()
-		d.lechim = false
-		d.sbrosiliV, d.neudachPosleSbrosa, d.poslSbros = t, 0, t
-		d.mu.Unlock()
-		return
-	}
-	s.lechitPerezapuskom(perezapustit, fmt.Sprintf("сеть ядра не сбросилась (%v) — перезапускаю ядро", err))
+	s.lechitPerezapuskom(perezapustit, fmt.Sprintf("нет связи (неудачных проб подряд: %d) — перезапускаю ядро; следующее лечение не раньше %s",
+		neudach, sleduyushchiy.Format("15:04")))
 }
 
 // lechitPerezapuskom — перезапуск ядра самоизлечения в горутине под
@@ -841,45 +779,12 @@ func (s *Sluzhba) chasyDoma() time.Time {
 	return time.Now()
 }
 
-// pultYadra — то, чем служба сбрасывает сеть ядра: Clash API ядра
-// (*yadro.Yadro) или подмена в проверках.
-type pultYadra interface {
-	SbrositSet(srok time.Duration) error
-}
-
-func (s *Sluzhba) pultDlyaSbrosa() pultYadra {
-	s.dom.mu.Lock()
-	p := s.dom.pult
-	s.dom.mu.Unlock()
-	if p != nil {
-		return p
-	}
-	if s.Yadro == nil {
-		return nil
-	}
-	return s.Yadro
-}
-
 // yadroRabotaetDlyaDoma — ядро работает (на стенде — подмена rabotaetDlyaStenda).
 func (s *Sluzhba) yadroRabotaetDlyaDoma() bool {
 	if s.dom != nil && s.dom.rabotaetDlyaStenda != nil {
 		return s.dom.rabotaetDlyaStenda()
 	}
 	return s.Yadro != nil && s.Yadro.Sost() == yadro.Rabotaet
-}
-
-// sbrositSetYadra — сброс сети ядра (yadro.SbrositSet: Clash API DELETE
-// /connections): ядро закрывает соединения и зовёт InterfaceUpdated у
-// эндпоинтов, WireGuard «Дома» открывает соединение моста заново. Tun не
-// гаснет, конфиг тот же — годится и для ядра, принятого от прошлой копии.
-// Ошибка — сброса не было (ядро ответило не 2xx или не ответило за
-// srokSbrosa).
-func (s *Sluzhba) sbrositSetYadra() error {
-	p := s.pultDlyaSbrosa()
-	if p == nil {
-		return errors.New("ядра нет")
-	}
-	return p.SbrositSet(srokSbrosa)
 }
 
 // mostOtvechaet — жив ли выход, через который идёт мост «Дом» (detour
@@ -913,7 +818,6 @@ func (s *Sluzhba) mostOtvechaet(ctx context.Context) (bool, string) {
 func (d *domSluzhby) posleSna() {
 	d.mu.Lock()
 	d.neudachPodryad, d.pauzaLecheniya, d.kogdaLechili, d.mostMolchitS = 0, 0, time.Time{}, time.Time{}
-	d.sbrosiliV, d.neudachPosleSbrosa = time.Time{}, 0
 	d.mu.Unlock()
 }
 

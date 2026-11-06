@@ -2,39 +2,54 @@ package sluzhba
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/avtorezhim"
 )
 
-// Сброс сети ядра по смене физической сети — не дожидаясь трёх неудачных
-// проб «Дома» (lechitDom).
+// Проверка «Дома» по смене физической сети — не дожидаясь трёх неудачных
+// проб слежки (lechitDom).
 //
 // Зачем. Замер 06.11: Wi-Fi выключили на 45 с и включили, ядро смены сети не
 // заметило (строки «network: updated default interface» нет), и соединение
 // моста под WireGuard осталось молча мёртвым — «Дом» висел, пока его не
-// перезапустили. Когда ядро смену замечает само (20:15 того же дня), оно
-// зовёт InterfaceUpdated у эндпоинта, bind передиаливает, и «Дом» оживает
-// через секунды. Служба узнаёт о смене сети тем же событием, что авторежим
-// (avtorezhim.SledchikSeti: NotifyAddrChange — изменилась таблица IP-адресов
-// машины), и делает за ядро то же самое: Clash API DELETE /connections
-// (yadro.SbrositSet → ResetNetwork → InterfaceUpdated у эндпоинтов).
+// перезапустили. Сброс сети ядра (Clash API DELETE /connections) живьём
+// «Дом» не оживил: чтение моста XHTTP после молчаливого обрыва не
+// просыпается, а второй сброс завис по сроку (06.11, 0.6.100). Оживил
+// перезапуск ядра — с 0.6.98 он идёт под запретом трафика мимо туннеля, так
+// что мимо туннеля ничего не уходит. Поэтому по смене сети: пауза
+// pauzaPeredProboyPoSmene (мосту дать время на рукопожатие), одна проба
+// «Дома»; ответил — ядро не трогаем, не ответил — перезапуск ядра сразу.
 //
-// Своя слежка, а не служитель авторежима: тот крутится только при
+// О смене сети служба узнаёт тем же событием, что авторежим
+// (avtorezhim.SledchikSeti: NotifyAddrChange — изменилась таблица IP-адресов
+// машины). Своя слежка, а не служитель авторежима: тот крутится только при
 // включённом авторежиме, а «Дом» нужен и без него.
 //
 // Событие NotifyAddrChange приходит и от нашего TUN (подъём и перезапуск
 // ядра), и от адресов IPv6, и пачкой на одну смену. Поэтому решает не само
 // событие, а отпечаток физической сети (avtorezhim.OtpechatokSeti: адаптер,
-// свой IPv4 и шлюз у физических адаптеров): сброс — только когда сеть есть и
-// она другая, чем была, или между событиями пропадала. Сеть пропала (Wi-Fi
-// выключен) — сбрасывать нечего: ждём, пока вернётся.
+// свой IPv4 и шлюз у физических адаптеров): проверка — только когда сеть
+// есть и она другая, чем была, или между событиями пропадала. Сеть пропала
+// (Wi-Fi выключен) — проверять нечего: ждём, пока вернётся.
+//
+// Проверка идёт в самом цикле слежки (до ~12 с: пауза и две попытки пробы).
+// События за это время не теряются и не копятся: следчик шлёт их без
+// очереди (канал на одно событие, лишние роняет), так что смены за время
+// проверки цикл увидит одним событием сразу после неё. Второй перезапуск
+// рядом не начнётся: на время проверки и перезапуска стоит d.lechim, а
+// между проверками — отсечка srokMezhduProverkamiPoSmene.
 
-// srokMezhduSbrosami — сброс по смене сети не чаще этого (и не раньше этого
-// после сброса самоизлечения): пачка событий одной смены — один сброс, а
-// дребезжащий Wi-Fi не рвёт соединения людей каждые несколько секунд.
-const srokMezhduSbrosami = 30 * time.Second
+// srokMezhduProverkamiPoSmene — проверка по смене сети не чаще этого:
+// пачка событий одной смены — одна проверка, а дребезжащий Wi-Fi не
+// перезапускает ядро каждые несколько секунд.
+const srokMezhduProverkamiPoSmene = 30 * time.Second
+
+// pauzaPeredProboyPoSmene — сколько дать мосту «Дома» после смены сети до
+// пробы: рукопожатие WireGuard идёт раз в 5 с. Подмена для проверок.
+var pauzaPeredProboyPoSmene = 6 * time.Second
 
 // pauzaPosleSobytiyaSeti — тишина после последнего события, прежде чем
 // смотреть сеть: пачка событий одной смены схлопывается в одну проверку,
@@ -107,56 +122,111 @@ func (s *Sluzhba) sleditZaSobytiyamiSeti(ctx context.Context, sobytiya <-chan st
 				chto = "другая сеть"
 			}
 			proshlyy, propadala = tekushchiy, false
-			s.sbrositSetPoSmeneSeti(chto)
+			s.proveritDomPoSmeneSeti(ctx, chto)
 		}
 	}
 }
 
-// sbrositSetPoSmeneSeti — сброс сети ядра по смене физической сети, если
-// туннель поднят с «Домом», лечение и подъём не идут и прошлый сброс был не
-// ближе srokMezhduSbrosami. Удался — неудачные пробы до смены сети не в
-// счёт (как после сна): у сброса есть три пробы, чтобы «Дом» ожил, дальше —
-// обычное самоизлечение. Не удался — ничего: решат пробы.
-func (s *Sluzhba) sbrositSetPoSmeneSeti(chto string) {
-	d := s.dom
-	if d.kesh.Blok() == nil {
-		return
+// domMozhnoProveryat — туннель поднят с «Домом» (блок есть, дом в конфиге,
+// ядро работает) и подъём связи не идёт.
+func (s *Sluzhba) domMozhnoProveryat() bool {
+	if s.dom.kesh.Blok() == nil {
+		return false
 	}
 	s.zamok.Lock()
 	vKonfige, idet := s.kartina.Dom, s.podyomIdet
 	s.zamok.Unlock()
-	if !vKonfige || idet || !s.yadroRabotaetDlyaDoma() {
+	return vKonfige && !idet && s.yadroRabotaetDlyaDoma()
+}
+
+// proveritDomPoSmeneSeti — по смене физической сети: если туннель поднят с
+// «Домом», лечение, подъём и перезапуск не идут и прошлая проверка была не
+// ближе srokMezhduProverkamiPoSmene — пауза pauzaPeredProboyPoSmene, проба
+// «Дома»; ответил — ядро не трогаем, не ответил — перезапуск ядра
+// (lechitPerezapuskom). Неудачные пробы до смены сети не в счёт: дальше
+// обычное самоизлечение с начала счёта. ctx отменён (служба
+// останавливается) — выходит сразу, ничего не трогая.
+func (s *Sluzhba) proveritDomPoSmeneSeti(ctx context.Context, chto string) {
+	d := s.dom
+	if !s.domMozhnoProveryat() {
 		return
 	}
+	// Подъём или перезапуск ядра идёт — новое ядро и так начнёт с нового
+	// соединения моста.
+	if !s.zamokPodyoma.TryLock() {
+		return
+	}
+	s.zamokPodyoma.Unlock()
 	t := s.chasyDoma()
 	d.mu.Lock()
 	if d.lechim {
 		d.mu.Unlock()
 		return
 	}
-	if !d.poslSbros.IsZero() && t.Sub(d.poslSbros) < srokMezhduSbrosami {
-		proshlo := t.Sub(d.poslSbros).Round(time.Second)
+	if !d.proverkaPoSmene.IsZero() && t.Sub(d.proverkaPoSmene) < srokMezhduProverkamiPoSmene {
+		proshlo := t.Sub(d.proverkaPoSmene).Round(time.Second)
 		d.mu.Unlock()
-		log.Printf("дом: сеть сменилась (%s), но сеть ядра сбрасывали %d с назад — не сбрасываю", chto, int(proshlo/time.Second))
+		log.Printf("дом: сеть сменилась (%s), но дом проверяли %d с назад — не трогаю", chto, int(proshlo/time.Second))
 		return
 	}
-	// Подъём или перезапуск ядра идёт — новое ядро и так начнёт с чистой сети.
-	if !s.zamokPodyoma.TryLock() {
-		d.mu.Unlock()
-		return
-	}
-	d.lechim = true
+	d.lechim, d.proverkaPoSmene = true, t
+	proba := d.proba
 	d.mu.Unlock()
-	log.Printf("дом: сеть сменилась — сбрасываю сеть ядра, туннель не трогаю (%s)", chto)
-	err := s.sbrositSetYadra()
-	s.zamokPodyoma.Unlock()
+	otboy := func() {
+		d.mu.Lock()
+		d.lechim = false
+		d.mu.Unlock()
+	}
+
+	taymer := time.NewTimer(pauzaPeredProboyPoSmene)
+	select {
+	case <-ctx.Done():
+		taymer.Stop()
+		otboy()
+		return
+	case <-taymer.C:
+	}
+	// За паузу человек мог нажать «Отключить», ядро — упасть, подъём — начаться.
+	b := d.kesh.Blok()
+	if b == nil || !s.domMozhnoProveryat() {
+		otboy()
+		return
+	}
+	if proba == nil {
+		proba = probaDnsDoma
+	}
+	zhiv := false
+	for i := 0; i < 2 && !zhiv && ctx.Err() == nil; i++ {
+		pctx, otmena := context.WithTimeout(ctx, 3*time.Second)
+		zhiv = proba(pctx, b.DNS, b.Zona) == nil
+		otmena()
+	}
+	if ctx.Err() != nil {
+		otboy()
+		return
+	}
 	d.mu.Lock()
-	d.lechim = false
-	if err == nil {
-		d.poslSbros, d.sbrosPoSmeneV, d.neudachPodryad = t, t, 0
+	d.neudachPodryad = 0
+	if zhiv {
+		d.lechim = false
+		d.mu.Unlock()
+		log.Printf("дом: сеть сменилась (%s), дом на связи — ядро не трогаю", chto)
+		return
 	}
+	perezapustit := d.perezapustit
+	most := d.most
 	d.mu.Unlock()
-	if err != nil {
-		log.Printf("дом: сеть ядра не сбросилась (%v) — дальше решат пробы", err)
+	// Выход моста сам не отвечает (сеть ещё не ожила, узел лёг) — перезапуск
+	// ядра «Дом» не вернёт, а дребезг Wi-Fi дёргал бы ядро каждые 30 с. Как в
+	// lechitDom: не трогаем, дальше решат пробы и лестница.
+	if most == nil {
+		most = s.mostOtvechaet
 	}
+	if zhivMost, teg := most(ctx); !zhivMost {
+		otboy()
+		log.Printf("дом: сеть сменилась (%s), дом не отвечает, но и мост «%s» молчит — ядро не трогаю", chto, teg)
+		return
+	}
+	// d.lechim снимет lechitPerezapuskom по окончании перезапуска.
+	s.lechitPerezapuskom(perezapustit, fmt.Sprintf("сеть сменилась (%s), дом не отвечает — перезапускаю ядро", chto))
 }
