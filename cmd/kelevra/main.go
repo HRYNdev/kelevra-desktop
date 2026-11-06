@@ -767,6 +767,10 @@ func zhitZnachkom(papka, putZhurnala string) {
 			perezapusk <- v
 		}
 	}()
+	// Подсказка значка по состоянию службы (opros_znachka.go): хука службы у
+	// этого процесса нет, без опроса она вечно «отключено».
+	go oprashivatSostoyanie(shagOprosaZnachka, func() (string, bool) { return kopiya.Nayti(papka) },
+		sostoyanieSluzhby, pometitZashchitu, stop)
 	for {
 		versiya, nado := zhdatSignalIliPerezapusk(vyhod, perezapusk)
 		if !nado {
