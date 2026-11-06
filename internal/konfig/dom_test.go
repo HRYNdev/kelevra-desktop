@@ -86,13 +86,6 @@ func TestDomBezBlokaKonfigKakRanshe(t *testing.T) {
 			t.Fatalf("дом не вписан: %+v", ks)
 		}
 		delete(s, "endpoints")
-		var vyhody []any
-		for _, o := range s["outbounds"].([]any) {
-			if t := o.(map[string]any)["tag"]; t != TegShchelchkaDoma && t != TegZaglushkiDoma {
-				vyhody = append(vyhody, o)
-			}
-		}
-		s["outbounds"] = vyhody
 		r := s["route"].(map[string]any)
 		var pravila []any
 		for _, p := range r["rules"].([]any) {
@@ -134,10 +127,7 @@ func TestDomEndpoint(t *testing.T) {
 	e := eps[0].(map[string]any)
 	ozh := map[string]any{
 		"type": "wireguard", "tag": "Дом", "mtu": float64(1280), "address": []any{"100.77.0.5/32"},
-		"private_key": probnyyDom().PrivatnyyKlyuch, "detour": TegShchelchkaDoma,
-	}
-	if got := vyhodZaShchelchkom(t, d); got != "Соединение" {
-		t.Errorf("за щелчком %q, ждали «Соединение»", got)
+		"private_key": probnyyDom().PrivatnyyKlyuch, "detour": "Соединение",
 	}
 	for k, v := range ozh {
 		if !reflect.DeepEqual(e[k], v) {
@@ -160,6 +150,33 @@ func TestDomEndpoint(t *testing.T) {
 	}
 }
 
+// Мост «Дом» идёт прямо через выход моста, как до 0.6.98: ни селектора
+// «Дом · щелчок», ни заглушки block вход домой в конфиг не добавляет —
+// выходы с «Домом» и без него те же.
+func TestDomBezSelektoraShchelchka(t *testing.T) {
+	s, _ := sobrat(t, profilTelefona(t), Vybor{Dom: probnyyDom()})
+	bez, _ := sobrat(t, profilTelefona(t), Vybor{})
+	tegi := func(d map[string]any) []string {
+		var spisok []string
+		for _, o := range d["outbounds"].([]any) {
+			tip, _ := o.(map[string]any)["type"].(string)
+			teg, _ := o.(map[string]any)["tag"].(string)
+			spisok = append(spisok, tip+" "+teg)
+		}
+		return spisok
+	}
+	if a, b := tegi(s), tegi(bez); !reflect.DeepEqual(a, b) {
+		t.Fatalf("выходы с «Домом» %v, без него %v", a, b)
+	}
+	gotovyy, _, err := Prigotovit(profilTelefona(t), Vybor{Dom: probnyyDom()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(gotovyy), "щелчок") || strings.Contains(string(gotovyy), "заглушка") {
+		t.Fatal("в конфиге остался селектор щелчка")
+	}
+}
+
 // MostDomaIzKonfiga отдаёт detour эндпоинта «Дом» готового конфига; без
 // входа домой — пусто.
 func TestMostDomaIzKonfiga(t *testing.T) {
@@ -168,24 +185,7 @@ func TestMostDomaIzKonfiga(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := MostDomaIzKonfiga(gotovyy); got != "Соединение" {
-		t.Fatalf("мост %q, ждали «Соединение» (выход за щелчком, не сам селектор)", got)
-	}
-	if m := RazobratMostDoma(gotovyy); m != (MostDoma{Vyhod: "Соединение", Selektor: TegShchelchkaDoma, Zaglushka: TegZaglushkiDoma}) {
-		t.Fatalf("мост из конфига: %+v", m)
-	}
-	// Конфиг прежней версии (detour эндпоинта — сразу выход): щёлкать нечем,
-	// мерить — сам detour.
-	staryy := []byte(`{"endpoints":[{"type":"wireguard","tag":"Дом","detour":"Финляндия"}],"outbounds":[{"type":"vless","tag":"Финляндия"}]}`)
-	if m := RazobratMostDoma(staryy); m != (MostDoma{Vyhod: "Финляндия"}) {
-		t.Fatalf("старый конфиг: %+v", m)
-	}
-	// Селектор щелчка стоит не на default: мерить всё равно выход, не заглушку.
-	// И заглушка без default — выход первый не-block.
-	bezDefault := []byte(`{"endpoints":[{"type":"wireguard","tag":"Дом","detour":"` + TegShchelchkaDoma + `"}],"outbounds":[
-		{"type":"vless","tag":"Финляндия"},{"type":"block","tag":"` + TegZaglushkiDoma + `"},
-		{"type":"selector","tag":"` + TegShchelchkaDoma + `","outbounds":["` + TegZaglushkiDoma + `","Финляндия"]}]}`)
-	if m := RazobratMostDoma(bezDefault); m.Vyhod != "Финляндия" || m.Zaglushka != TegZaglushkiDoma {
-		t.Fatalf("без default: %+v", m)
+		t.Fatalf("мост %q, ждали «Соединение»", got)
 	}
 	bez, _, err := Prigotovit(profilTelefona(t), Vybor{})
 	if err != nil {

@@ -431,5 +431,5 @@ func (s *Sluzhba) smenitYadroPlavno(ctx context.Context, p yadro.Peredacha) {
 		return
 	}
 	log.Printf("новое ядро работает — гашу прежнее (pid %d)", p.PID)
-	yadro.PogasitChuzhoe(p.PID)
+	pogasitChuzhoe(p.PID)
 }

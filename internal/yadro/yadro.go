@@ -591,6 +591,41 @@ func (y *Yadro) Trafik() (*Trafik, error) {
 	return &Trafik{VverhBayt: v.UploadTotal, VnizBayt: v.DownloadTotal}, nil
 }
 
+// SbrositSet — «сброс сети ядра»: Clash API DELETE /connections. В sing-box
+// это не только закрытие всех соединений (trafficManager.CloseAllConnections),
+// но и network.ResetNetwork: connectionManager.CloseAll и InterfaceUpdated у
+// каждого эндпоинта (route/network.go), у WireGuard — BindUpdate, то есть
+// сокет моста «Дом» открывается заново. Тот же путь ядро проходит само, когда
+// замечает смену сети («network: updated default interface»). Tun не гаснет;
+// текущие соединения программ рвутся и открываются заново.
+//
+// srok — сколько ждать ответа (0 — обычный клиент).
+func (y *Yadro) SbrositSet(srok time.Duration) error {
+	req, err := http.NewRequest(http.MethodDelete, "http://"+y.api()+"/connections", nil)
+	if err != nil {
+		return err
+	}
+	if y.Sekret != "" {
+		req.Header.Set("Authorization", "Bearer "+y.Sekret)
+	}
+	klient := y.klient()
+	if srok > 0 && klient.Timeout < srok {
+		k := *klient
+		k.Timeout = srok
+		klient = &k
+	}
+	otvet, err := klient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer otvet.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(otvet.Body, 4096))
+	if otvet.StatusCode < 200 || otvet.StatusCode >= 300 {
+		return fmt.Errorf("ядро ответило %d", otvet.StatusCode)
+	}
+	return nil
+}
+
 // cveta — раскраска вывода ядра. В файле и в окне она выглядит абракадаброй
 // вида «[36mINFO[0m»: терминала, который её понимает, у приложения нет.
 var cveta = regexp.MustCompile("\x1b\\[[0-9;]*m")
