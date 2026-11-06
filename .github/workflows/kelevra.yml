@@ -75,10 +75,24 @@ jobs:
       # вышло 09.09.2026 на PR #110: тесты, vet и сборка прошли, а проверка
       # значилась проваленной из-за имени файла. Красный по такому поводу
       # хуже бесполезного: он приучает не верить гейту.
+      # Ветка со слэшем (feat/…, запуск руками через workflow_dispatch) даёт
+      # то же падение: «artifact name is not valid … Forward slash». Имя
+      # считается отдельным шагом: у PR — prN, иначе ветка со «/» → «-».
+      - name: Имя артефакта
+        id: imya
+        env:
+          NOMER_PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$NOMER_PR" ]; then
+            IMYA="pr$NOMER_PR"
+          else
+            IMYA="${GITHUB_REF_NAME//\//-}"
+          fi
+          echo "imya=Kelevra-$IMYA" >> "$GITHUB_OUTPUT"
       - name: Забрать Kelevra.exe
         uses: actions/upload-artifact@v6
         with:
-          name: Kelevra-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || github.ref_name }}
+          name: ${{ steps.imya.outputs.imya }}
           path: build/Kelevra.exe
           retention-days: 14
 
