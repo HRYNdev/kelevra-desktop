@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,40 +23,6 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
-// pultStend — подставной Clash API для сброса сети ядра: сколько раз
-// сбрасывали; oshibka — сброс отвергнут (ядро ответило ошибкой или молчит).
-type pultStend struct {
-	mu      sync.Mutex
-	sbrosy  int
-	oshibka error
-	// naSbros — зовётся на каждый принятый сброс.
-	naSbros func()
-}
-
-func novyyPultStend() *pultStend { return &pultStend{} }
-
-func (p *pultStend) SbrositSet(time.Duration) error {
-	p.mu.Lock()
-	if p.oshibka != nil {
-		err := p.oshibka
-		p.mu.Unlock()
-		return err
-	}
-	p.sbrosy++
-	hook := p.naSbros
-	p.mu.Unlock()
-	if hook != nil {
-		hook()
-	}
-	return nil
-}
-
-func (p *pultStend) skolko() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.sbrosy
-}
-
 func zhurnalDlyaProverki(t *testing.T) *syncBuffer {
 	t.Helper()
 	z := &syncBuffer{}
@@ -64,116 +31,12 @@ func zhurnalDlyaProverki(t *testing.T) *syncBuffer {
 	return z
 }
 
-// Сброс помог: три неудачи — сброс сети ядра, ядро не тронуто; следующая
-// проба удачна — в журнале, за сколько секунд ожил дом, лестница сброшена.
-func TestDomSbrosOzhil(t *testing.T) {
-	st := novyyStendLecheniya(t)
-	z := zhurnalDlyaProverki(t)
-	for i := 0; i < 3; i++ {
-		st.proba()
-	}
-	st.zhdat(t, 1, 0, "три неудачи")
-	if !strings.Contains(z.String(), "дом: нет связи (неудачных проб подряд: 3) — сбрасываю сеть ядра, туннель не трогаю") {
-		t.Fatalf("сброса нет в журнале:\n%s", z.String())
-	}
-	st.sejchas = st.sejchas.Add(ShagSlezhkiZaDomom)
-	st.otvet = nil
-	st.proba()
-	st.zhdat(t, 1, 0, "дом ожил")
-	if !strings.Contains(z.String(), "дом: на связи после сброса сети за 30 с") {
-		t.Fatalf("оживления после сброса нет в журнале:\n%s", z.String())
-	}
-	if st.s.dom.pauzaLecheniya != 0 || !st.s.dom.sbrosiliV.IsZero() {
-		t.Fatalf("лестница не сброшена: пауза %v, сброс %v", st.s.dom.pauzaLecheniya, st.s.dom.sbrosiliV)
-	}
-	// Снова молчит — снова сброс сразу по порогу, без паузы.
-	st.otvet = errors.New("молчит")
-	for i := 0; i < 3; i++ {
-		st.proba()
-	}
-	st.zhdat(t, 2, 0, "новый сбой после оживления")
-	if strings.Contains(z.String(), "защит") {
-		t.Fatalf("в строках лечения слово «защита»:\n%s", z.String())
-	}
-}
-
-// Ядро не приняло сброс (ошибка HTTP или срок вышел) — сброса не было,
-// перезапуск ядра сразу, в той же пробе, без ожидания двух проб.
-func TestDomSbrosNeVyshel(t *testing.T) {
-	st := novyyStendLecheniya(t)
-	st.pult.mu.Lock()
-	st.pult.oshibka = errors.New("ядро ответило 500")
-	st.pult.mu.Unlock()
-	for i := 0; i < 3; i++ {
-		st.proba()
-	}
-	st.zhdat(t, 0, 1, "сброс отвергнут")
-	if p := st.perezapuski[0]; !strings.Contains(p, "сеть ядра не сбросилась (ядро ответило 500) — перезапускаю ядро") {
-		t.Fatalf("причина: %q", p)
-	}
-	if st.s.dom.pauzaLecheniya != 10*time.Minute {
-		t.Fatalf("ступень лестницы %v, ждали 10m: перезапуск после неудачного сброса — то же лечение", st.s.dom.pauzaLecheniya)
-	}
-}
-
-// Настоящий Clash API (yadro.SbrositSet): DELETE /connections с паролем;
-// ядро не ответило в срок — перезапуск сразу.
-func TestDomSbrosCherezClashApi(t *testing.T) {
-	var mu sync.Mutex
-	var zaprosy []string
-	molchat := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		zaprosy = append(zaprosy, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
-		mu.Unlock()
-		select {
-		case <-molchat:
-			<-r.Context().Done()
-			return
-		default:
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	st := novyyStendLecheniya(t)
-	st.s.dom.pult = nil
-	st.s.Yadro.Api = strings.TrimPrefix(srv.URL, "http://")
-	st.s.Yadro.Sekret = "sekret"
-	st.s.Yadro.Klient = &http.Client{Timeout: 200 * time.Millisecond}
-	for i := 0; i < 3; i++ {
-		st.proba()
-	}
-	st.zhdat(t, 0, 0, "сброс через Clash API")
-	mu.Lock()
-	got := append([]string(nil), zaprosy...)
-	mu.Unlock()
-	if len(got) != 1 || got[0] != "DELETE /connections Bearer sekret" {
-		t.Fatalf("запросы к Clash API: %v", got)
-	}
-	if st.s.dom.sbrosiliV.IsZero() {
-		t.Fatal("удачный сброс не запомнен — перезапуск после двух проб не наступит")
-	}
-
-	// Новое лечение (пауза вышла), а ядро молчит дольше srokSbrosa — сразу
-	// перезапуск. Срок сброса — свой (5 с), а не короткий клиент проверки:
-	// ждём не дольше него.
-	st.otvet = nil
-	st.proba()
-	st.otvet = errors.New("молчит")
-	close(molchat)
-	st.sejchas = st.sejchas.Add(time.Hour)
-	nachalo := time.Now()
-	for i := 0; i < 3; i++ {
-		st.proba()
-	}
-	if proshlo := time.Since(nachalo); proshlo > srokSbrosa+3*time.Second {
-		t.Fatalf("сброс ждал ядро %v, срок %v", proshlo, srokSbrosa)
-	}
-	st.zhdat(t, 0, 1, "ядро не ответило на сброс")
-	if p := st.perezapuski[0]; !strings.Contains(p, "сеть ядра не сбросилась") {
-		t.Fatalf("причина: %q", p)
-	}
+// bezPauzyPoSmene — проверка по смене сети без настоящей паузы перед пробой.
+func bezPauzyPoSmene(t *testing.T) {
+	t.Helper()
+	bylo := pauzaPeredProboyPoSmene
+	pauzaPeredProboyPoSmene = 0
+	t.Cleanup(func() { pauzaPeredProboyPoSmene = bylo })
 }
 
 // stendSmenySeti — слежка за сменой сети на подставных событиях,
@@ -190,6 +53,7 @@ type stendSmenySeti struct {
 
 func novyyStendSmenySeti(t *testing.T, nachalo string) *stendSmenySeti {
 	t.Helper()
+	bezPauzyPoSmene(t)
 	st := &stendSmenySeti{stendLecheniya: novyyStendLecheniya(t), otpechat: nachalo,
 		sobytiya: make(chan struct{}), tiki: make(chan time.Time), gotovo: make(chan struct{})}
 	st.s.dom.otpechatokSeti = func() string {
@@ -210,7 +74,8 @@ func novyyStendSmenySeti(t *testing.T, nachalo string) *stendSmenySeti {
 }
 
 // shag — сеть стала otpechat: событие, тишина вышла, проверка; второе
-// событие доходит, только когда проверка (и сброс) закончены.
+// событие доходит, только когда проверка закончена, а перезапуск (если
+// решён) — дождан.
 func (st *stendSmenySeti) shag(otpechat string) {
 	st.mu.Lock()
 	st.otpechat = otpechat
@@ -218,14 +83,16 @@ func (st *stendSmenySeti) shag(otpechat string) {
 	st.sobytiya <- struct{}{}
 	st.tiki <- time.Time{}
 	st.sobytiya <- struct{}{}
+	st.s.dom.perezapuski.Wait()
 }
 
-// Wi-Fi выключили и включили (замер 06.11, 20:43:52–20:44:37): пока сети
-// нет — не сбрасываем; сеть вернулась — сброс сети ядра сразу, без проб;
-// следующая проба удачна — строка «на связи после сброса». События от
-// своего TUN и повтор той же сети сброса не дают. Сеть снова сменилась
-// раньше 30 с с прошлого сброса — не сбрасываем; позже — сбрасываем.
-func TestDomSbrosPoSmeneSeti(t *testing.T) {
+// Wi-Fi выключили и включили (замер 06.11, 21:58:56–21:59:28): пока сети
+// нет — ничего; сеть вернулась, дом не отвечает — перезапуск ядра сразу, без
+// трёх проб, неудачи до смены сети не в счёт. События от своего TUN и повтор
+// той же сети проверки не дают. Другая сеть, дом отвечает — ядро не трогаем.
+// Сеть снова сменилась раньше 30 с с прошлой проверки — не трогаем; позже —
+// снова проверка и перезапуск.
+func TestDomPoSmeneSeti(t *testing.T) {
 	st := novyyStendSmenySeti(t, "13 192.168.1.5 192.168.1.1")
 	z := zhurnalDlyaProverki(t)
 	// До выключения дом был на связи.
@@ -236,62 +103,59 @@ func TestDomSbrosPoSmeneSeti(t *testing.T) {
 	st.shag("") // Wi-Fi выключен
 	st.proba()
 	st.proba()
-	if n := st.pult.skolko(); n != 0 {
-		t.Fatalf("сети нет, а сеть ядра сбрасывали %d раз", n)
-	}
+	st.zhdat(t, 0, "сети нет")
 	st.sejchas = st.sejchas.Add(45 * time.Second)
 	st.shag("13 192.168.1.5 192.168.1.1") // включён, та же сеть и тот же адрес
-	if n := st.pult.skolko(); n != 1 {
-		t.Fatalf("сеть вернулась: сбросов %d, ждали 1", n)
+	st.zhdat(t, 1, "сеть вернулась, дом молчит")
+	if p := st.perezapuski[0]; p != "сеть сменилась (сеть вернулась), дом не отвечает — перезапускаю ядро" {
+		t.Fatalf("причина: %q", p)
 	}
-	if !strings.Contains(z.String(), "дом: сеть сменилась — сбрасываю сеть ядра, туннель не трогаю (сеть вернулась)") {
-		t.Fatalf("сброса по смене сети нет в журнале:\n%s", z.String())
+	if st.s.dom.neudachPodryad != 0 || st.s.dom.pauzaLecheniya != 0 {
+		t.Fatalf("неудачи до смены сети в счёте: %d, ступень %v", st.s.dom.neudachPodryad, st.s.dom.pauzaLecheniya)
 	}
-	if st.s.dom.neudachPodryad != 0 {
-		t.Fatalf("неудачи до смены сети в счёте: %d", st.s.dom.neudachPodryad)
-	}
+	// Новое ядро: дом ожил, строки о «сбросе» нет.
 	st.sejchas = st.sejchas.Add(10 * time.Second)
 	st.otvet = nil
 	st.proba()
-	if !strings.Contains(z.String(), "дом: на связи после сброса сети за 10 с") {
-		t.Fatalf("оживления после сброса нет в журнале:\n%s", z.String())
+	if strings.Contains(z.String(), "после сброса") {
+		t.Fatalf("в журнале строка о сбросе сети, которого не было:\n%s", z.String())
 	}
-	st.zhdat(t, 1, 0, "сброс по смене сети — не лечение")
 
 	// Свой TUN поднялся или сменился адрес IPv6: физическая сеть та же.
 	st.sejchas = st.sejchas.Add(time.Minute)
 	st.shag("13 192.168.1.5 192.168.1.1")
-	if n := st.pult.skolko(); n != 1 {
-		t.Fatalf("физическая сеть та же, а сбросов %d", n)
+	if n := strings.Count(z.String(), "дом: сеть сменилась"); n != 0 {
+		t.Fatalf("физическая сеть та же, а проверок в журнале %d:\n%s", n, z.String())
 	}
-	// Другая сеть через минуту — сброс; ещё одна через 10 с — отсечка.
+	// Другая сеть через минуту, дом отвечает — ядро не трогаем.
 	st.shag("13 172.20.10.3 172.20.10.1")
-	if n := st.pult.skolko(); n != 2 {
-		t.Fatalf("другая сеть: сбросов %d, ждали 2", n)
+	st.zhdat(t, 1, "другая сеть, дом на связи")
+	if !strings.Contains(z.String(), "дом: сеть сменилась (другая сеть), дом на связи — ядро не трогаю") {
+		t.Fatalf("проверки по смене сети нет в журнале:\n%s", z.String())
 	}
+	// Ещё одна смена через 10 с — отсечка.
+	st.otvet = errors.New("молчит")
 	st.sejchas = st.sejchas.Add(10 * time.Second)
 	st.shag("13 10.0.0.7 10.0.0.1")
-	if n := st.pult.skolko(); n != 2 {
-		t.Fatalf("смена раньше 30 с с прошлого сброса: сбросов %d, ждали 2", n)
-	}
-	if !strings.Contains(z.String(), "сбрасывали 10 с назад — не сбрасываю") {
+	st.zhdat(t, 1, "смена раньше 30 с с прошлой проверки")
+	if !strings.Contains(z.String(), "дом: сеть сменилась (другая сеть), но дом проверяли 10 с назад — не трогаю") {
 		t.Fatalf("отсечки нет в журнале:\n%s", z.String())
 	}
 	st.sejchas = st.sejchas.Add(30 * time.Second)
 	st.shag("13 192.168.1.5 192.168.1.1")
-	if n := st.pult.skolko(); n != 3 {
-		t.Fatalf("смена через 40 с: сбросов %d, ждали 3", n)
-	}
-	if strings.Contains(z.String(), "защит") {
+	st.zhdat(t, 2, "смена через 40 с, дом молчит")
+	if strings.Contains(z.String()+strings.Join(st.perezapuski, "\n"), "защит") {
 		t.Fatalf("в новых строках слово «защита»:\n%s", z.String())
 	}
 }
 
 // Сеть вернулась, но туннель не поднят (ядро стоит), «Дома» нет в конфиге
-// или идёт перезапуск — сбрасывать нечего; первая смена при поднятом
-// туннеле — сброс.
-func TestDomSbrosPoSmeneSetiNeVovremya(t *testing.T) {
+// или очередь подъёма занята — ни пробы, ни перезапуска; первая смена при
+// поднятом туннеле — проба и перезапуск.
+func TestDomPoSmeneSetiNeVovremya(t *testing.T) {
 	st := novyyStendSmenySeti(t, "13 192.168.1.5 192.168.1.1")
+	var prob atomic.Int32
+	st.s.dom.proba = func(context.Context, string, string) error { prob.Add(1); return st.otvet }
 	rabotaet := false
 	st.s.dom.rabotaetDlyaStenda = func() bool { return rabotaet }
 	st.shag("")
@@ -307,19 +171,88 @@ func TestDomSbrosPoSmeneSetiNeVovremya(t *testing.T) {
 	st.s.zamokPodyoma.Lock()
 	st.shag("13 10.0.0.7 10.0.0.1")
 	st.s.zamokPodyoma.Unlock()
-	if n := st.pult.skolko(); n != 0 {
-		t.Fatalf("сбросов %d при стоящем ядре, без «Дома» и при занятой очереди", n)
+	st.zhdat(t, 0, "при стоящем ядре, без «Дома» и при занятой очереди")
+	if n := prob.Load(); n != 0 {
+		t.Fatalf("проб «Дома» %d, ждали 0", n)
+	}
+	if st.s.dom.lechim {
+		t.Fatal("лечение осталось отмеченным")
 	}
 	st.shag("13 192.168.1.5 192.168.1.1")
-	if n := st.pult.skolko(); n != 1 {
-		t.Fatalf("туннель поднят, сеть сменилась: сбросов %d, ждали 1", n)
+	st.zhdat(t, 1, "туннель поднят, сеть сменилась, дом молчит")
+	if n := prob.Load(); n != 2 {
+		t.Fatalf("попыток пробы %d, ждали 2", n)
+	}
+}
+
+// Перезапуск по смене сети идёт (долгий), сеть снова сменилась позже
+// отсечки — второй перезапуск рядом не начинается; самоизлечение пробами в
+// это время тоже ждёт.
+func TestDomPoSmeneSetiOdinPerezapusk(t *testing.T) {
+	st := novyyStendSmenySeti(t, "13 192.168.1.5 192.168.1.1")
+	var vyzovov atomic.Int32
+	otpustit := make(chan struct{})
+	st.s.dom.perezapustit = func(string, uint64) {
+		vyzovov.Add(1)
+		<-otpustit
+	}
+	st.mu.Lock()
+	st.otpechat = "13 172.20.10.3 172.20.10.1"
+	st.mu.Unlock()
+	st.sobytiya <- struct{}{}
+	st.tiki <- time.Time{}
+	st.sobytiya <- struct{}{} // проверка закончена, перезапуск висит
+	st.sejchas = st.sejchas.Add(time.Minute)
+	st.mu.Lock()
+	st.otpechat = "13 10.0.0.7 10.0.0.1"
+	st.mu.Unlock()
+	st.tiki <- time.Time{}
+	st.sobytiya <- struct{}{}
+	for i := 0; i < 4; i++ {
+		st.s.proveritSvyazDoma(context.Background())
+	}
+	close(otpustit)
+	st.s.dom.perezapuski.Wait()
+	if n := vyzovov.Load(); n != 1 {
+		t.Fatalf("перезапусков %d, ждали 1", n)
+	}
+}
+
+// Служба останавливается во время паузы перед пробой — слежка выходит
+// сразу, а не по концу паузы; ни пробы, ни перезапуска, лечение не висит.
+func TestDomPoSmeneSetiOtmena(t *testing.T) {
+	st := novyyStendSmenySeti(t, "13 192.168.1.5 192.168.1.1")
+	pauzaPeredProboyPoSmene = time.Hour
+	var prob atomic.Int32
+	st.s.dom.proba = func(context.Context, string, string) error { prob.Add(1); return st.otvet }
+	st.mu.Lock()
+	st.otpechat = "13 172.20.10.3 172.20.10.1"
+	st.mu.Unlock()
+	st.sobytiya <- struct{}{}
+	st.tiki <- time.Time{} // проверка началась и ждёт паузу
+	st.otmena()
+	select {
+	case <-st.gotovo:
+	case <-time.After(5 * time.Second):
+		t.Fatal("слежка не вышла по отмене — ждёт конца паузы")
+	}
+	st.s.dom.perezapuski.Wait()
+	st.zhdat(t, 0, "отмена во время паузы")
+	if n := prob.Load(); n != 0 {
+		t.Fatalf("проб %d после отмены", n)
+	}
+	st.s.dom.mu.Lock()
+	lechim := st.s.dom.lechim
+	st.s.dom.mu.Unlock()
+	if lechim {
+		t.Fatal("после отмены лечение осталось отмеченным — самоизлечение встанет")
 	}
 }
 
 // Адрес появился раньше шлюза: первое событие застаёт сеть пустой, нового
-// события нет — слежка смотрит ещё несколько раз сама и сбрасывает, когда
+// события нет — слежка смотрит ещё несколько раз сама и проверяет дом, когда
 // шлюз появился.
-func TestDomSbrosShlyuzPozzheAdresa(t *testing.T) {
+func TestDomPoSmeneShlyuzPozzheAdresa(t *testing.T) {
 	st := novyyStendSmenySeti(t, "")
 	// Что увидит каждая следующая проверка, по порядку (без гонки с
 	// проверкой, которая уже идёт).
@@ -337,11 +270,10 @@ func TestDomSbrosShlyuzPozzheAdresa(t *testing.T) {
 	st.sobytiya <- struct{}{}
 	st.tiki <- time.Time{}    // проверка: сети ещё нет
 	st.tiki <- time.Time{}    // повтор: всё ещё нет
-	st.tiki <- time.Time{}    // повтор: шлюз есть — сброс
+	st.tiki <- time.Time{}    // повтор: шлюз есть — проба, дом молчит
 	st.sobytiya <- struct{}{} // проверка закончена
-	if n := st.pult.skolko(); n != 1 {
-		t.Fatalf("сбросов %d, ждали 1", n)
-	}
+	st.s.dom.perezapuski.Wait()
+	st.zhdat(t, 1, "шлюз позже адреса")
 }
 
 // Окно (и всё, что ходит через /api/vybrat) группу моста не переключает и в
@@ -362,16 +294,15 @@ func TestDomMostNeVybiraetsyaVruchnuyu(t *testing.T) {
 
 // Обновление с 0.6.98: живое ядро прошлой копии работает по конфигу с
 // селектором «Дом · щелчок» (detour эндпоинта — селектор, рядом заглушка
-// block). Служба такое ядро не принимает как есть (конфиг устарел), а плавно
-// меняет: новое ядро на конфиге без селектора, старое гасится. Дальше «Дом»
-// лечится сбросом сети, без паники и без вечной сверки.
+// block). Служба такое ядро не принимает как есть (конфиг устарел), а
+// меняет: прежнее гасится, потом новое поднимается на конфиге без
+// селектора, трафик мимо туннеля в это время закрыт. Дальше «Дом» лечится
+// перезапуском ядра, без паники и без вечной сверки.
 func TestDomPriyomYadra0698SoShchelchkom(t *testing.T) {
 	s := stendSPravami(t)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	s.dom.kesh.Klyuchi = []ed25519.PublicKey{priv.Public().(ed25519.PublicKey)}
 	s.Nastroyki.Slot = "01-7"
-	pult := novyyPultStend()
-	s.dom.pult = pult
 	zapuskov := 0
 	var poryadok []string
 	s.zapustitYadro = func(ctx context.Context) error { zapuskov++; poryadok = append(poryadok, "подъём"); return nil }
@@ -439,7 +370,7 @@ func TestDomPriyomYadra0698SoShchelchkom(t *testing.T) {
 		t.Fatalf("нет строки о запрете на время смены:\n%s", z.String())
 	}
 	if zapuskov != 1 || len(pogasheno) != 1 || pogasheno[0] != os.Getpid() {
-		t.Fatalf("ядро 0.6.98 не сменено плавно: запусков %d, погашено %v\n%s", zapuskov, pogasheno, z.String())
+		t.Fatalf("ядро 0.6.98 не сменено: запусков %d, погашено %v\n%s", zapuskov, pogasheno, z.String())
 	}
 	novyy, err := os.ReadFile(s.Yadro.PutKonfiga())
 	if err != nil {
@@ -455,14 +386,33 @@ func TestDomPriyomYadra0698SoShchelchkom(t *testing.T) {
 	s.dom.rabotaetDlyaStenda = func() bool { return true }
 	s.dom.proba = func(context.Context, string, string) error { return errors.New("молчит") }
 	s.dom.most = func(context.Context) (bool, string) { return true, vyhod }
-	s.dom.perezapustit = func(string, uint64) {
-		t.Fatal("сброс сети вышел, а ядро перезапускают")
-	}
+	var prichiny []string
+	s.dom.perezapustit = func(prichina string, _ uint64) { prichiny = append(prichiny, prichina) }
 	for i := 0; i < 3; i++ {
 		s.proveritSvyazDoma(context.Background())
 		s.dom.perezapuski.Wait()
 	}
-	if n := pult.skolko(); n != 1 {
-		t.Fatalf("сбросов сети %d, ждали 1", n)
+	if len(prichiny) != 1 || !strings.Contains(prichiny[0], "нет связи (неудачных проб подряд: 3) — перезапускаю ядро") {
+		t.Fatalf("после приёма ядра «Дом» не лечится перезапуском: %q", prichiny)
+	}
+}
+
+// Сеть вернулась, дом молчит, но и выход моста не отвечает (сеть ещё не
+// ожила, узел лёг): перезапуск ядра «Дом» не вернёт, а дребезг Wi-Fi дёргал
+// бы ядро каждые 30 с — ядро не трогаем.
+func TestDomPoSmeneSetiMostMolchit(t *testing.T) {
+	st := novyyStendSmenySeti(t, "13 192.168.1.5 192.168.1.1")
+	z := zhurnalDlyaProverki(t)
+	st.s.dom.most = func(context.Context) (bool, string) { return false, "Дом · мост" }
+	st.otvet = errors.New("молчит")
+	st.shag("")
+	st.sejchas = st.sejchas.Add(45 * time.Second)
+	st.shag("13 192.168.1.5 192.168.1.1")
+	st.zhdat(t, 0, "мост молчит")
+	if !strings.Contains(z.String(), "но и мост «Дом · мост» молчит — ядро не трогаю") {
+		t.Fatalf("строки о молчащем мосте нет:\n%s", z.String())
+	}
+	if st.s.dom.lechim {
+		t.Fatal("d.lechim не снят")
 	}
 }

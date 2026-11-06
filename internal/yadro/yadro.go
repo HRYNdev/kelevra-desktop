@@ -599,6 +599,11 @@ func (y *Yadro) Trafik() (*Trafik, error) {
 // замечает смену сети («network: updated default interface»). Tun не гаснет;
 // текущие соединения программ рвутся и открываются заново.
 //
+// Служба «Дом» этим больше не лечит: живьём 06.11 (0.6.100) сброс мост
+// XHTTP под WireGuard не оживил, а повторный сброс завис по сроку — «Дом»
+// вернул только перезапуск ядра (sluzhba/dom.go, lechitDom). Сброс оставлен
+// как проверенный кирпич Clash API на случай других нужд.
+//
 // srok — сколько ждать ответа (0 — обычный клиент).
 func (y *Yadro) SbrositSet(srok time.Duration) error {
 	req, err := http.NewRequest(http.MethodDelete, "http://"+y.api()+"/connections", nil)

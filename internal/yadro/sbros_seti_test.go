@@ -9,7 +9,7 @@ import (
 )
 
 // Сброс сети ядра — DELETE /connections с паролем Clash API; 204 — сброшено,
-// любой другой код и молчание — ошибка (служба тогда перезапускает ядро).
+// любой другой код и молчание — ошибка.
 func TestSbrositSet(t *testing.T) {
 	kod := http.StatusNoContent
 	var metod, put, parol string
