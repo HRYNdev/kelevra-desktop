@@ -85,6 +85,10 @@ type domSluzhby struct {
 	// proverkaPoSmene — когда начата последняя проверка «Дома» по смене сети
 	// (dom_smena_seti.go, отсечка srokMezhduProverkamiPoSmene).
 	proverkaPoSmene time.Time
+	// yadroPodnyatoV — когда служба последний раз подняла ядро (новый адаптер
+	// туннеля). Подъём сам рождает событие смены адресов, а «Дому» после
+	// подъёма нужно ~10 с: проверка по смене сети в это окно молчит.
+	yadroPodnyatoV time.Time
 	// sledchik — события смены сети; nil — avtorezhim.NovySledchik.
 	// otpechatokSeti — отпечаток физической сети; nil —
 	// avtorezhim.OtpechatokSeti. Подмены для проверок.

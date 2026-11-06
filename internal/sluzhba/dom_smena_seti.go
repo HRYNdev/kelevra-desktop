@@ -20,6 +20,12 @@ import (
 // просыпается, а второй сброс завис по сроку (06.11, 0.6.100). Оживил
 // перезапуск ядра — с 0.6.98 он идёт под запретом трафика мимо туннеля, так
 // что мимо туннеля ничего не уходит. Поэтому по смене сети: пауза
+// srokPoslePodyomaYadra — сколько после подъёма ядра проверка по смене сети
+// молчит: новый адаптер туннеля сам рождает событие смены адресов, а «Дом»
+// поднимается ~10 с (живьём 06.11: перезапуск по пробам в 22:35:18 и тут же
+// второй — по событию от своего же адаптера в 22:35:22).
+var srokPoslePodyomaYadra = 30 * time.Second
+
 // pauzaPeredProboyPoSmene (мосту дать время на рукопожатие), одна проба
 // «Дома»; ответил — ядро не трогаем, не ответил — перезапуск ядра сразу.
 //
@@ -163,6 +169,12 @@ func (s *Sluzhba) proveritDomPoSmeneSeti(ctx context.Context, chto string) {
 		d.mu.Unlock()
 		return
 	}
+	if !d.yadroPodnyatoV.IsZero() && t.Sub(d.yadroPodnyatoV) < srokPoslePodyomaYadra {
+		proshlo := t.Sub(d.yadroPodnyatoV).Round(time.Second)
+		d.mu.Unlock()
+		log.Printf("дом: сеть сменилась (%s), но ядро поднято %d с назад — «Дом» ещё поднимается, не трогаю", chto, int(proshlo/time.Second))
+		return
+	}
 	if !d.proverkaPoSmene.IsZero() && t.Sub(d.proverkaPoSmene) < srokMezhduProverkamiPoSmene {
 		proshlo := t.Sub(d.proverkaPoSmene).Round(time.Second)
 		d.mu.Unlock()
@@ -229,4 +241,15 @@ func (s *Sluzhba) proveritDomPoSmeneSeti(ctx context.Context, chto string) {
 	}
 	// d.lechim снимет lechitPerezapuskom по окончании перезапуска.
 	s.lechitPerezapuskom(perezapustit, fmt.Sprintf("сеть сменилась (%s), дом не отвечает — перезапускаю ядро", chto))
+}
+
+// otmetitPodyomYadra — служба только что подняла ядро (см. yadroPodnyatoV).
+func (s *Sluzhba) otmetitPodyomYadra() {
+	if s.dom == nil {
+		return
+	}
+	t := s.chasyDoma()
+	s.dom.mu.Lock()
+	s.dom.yadroPodnyatoV = t
+	s.dom.mu.Unlock()
 }

@@ -416,3 +416,27 @@ func TestDomPoSmeneSetiMostMolchit(t *testing.T) {
 		t.Fatal("d.lechim не снят")
 	}
 }
+
+// Живьём 06.11 (0.6.101): Wi-Fi вернулся, пробы довели до перезапуска ядра
+// в 22:35:18, а новый адаптер туннеля сам дал событие смены адресов — в
+// 22:35:22 проверка по смене сети нашла «Дом» ещё не поднятым и перезапустила
+// ядро второй раз. После подъёма ядра проверка по смене сети молчит.
+func TestDomPoSmeneSetiPoslePodyomaMolchit(t *testing.T) {
+	st := novyyStendSmenySeti(t, "13 192.168.1.5 192.168.1.1")
+	z := zhurnalDlyaProverki(t)
+	st.otvet = errors.New("молчит")
+	st.shag("") // Wi-Fi выключен
+	st.sejchas = st.sejchas.Add(45 * time.Second)
+	st.s.otmetitPodyomYadra() // ядро только что перезапущено пробами
+	st.sejchas = st.sejchas.Add(4 * time.Second)
+	st.shag("13 192.168.1.5 192.168.1.1")
+	st.zhdat(t, 0, "ядро поднято 4 с назад")
+	if !strings.Contains(z.String(), "но ядро поднято 4 с назад — «Дом» ещё поднимается, не трогаю") {
+		t.Fatalf("строки об окне после подъёма нет:\n%s", z.String())
+	}
+	// Через 30 с после подъёма — обычная проверка.
+	st.sejchas = st.sejchas.Add(31 * time.Second)
+	st.shag("")
+	st.shag("13 192.168.1.5 192.168.1.1")
+	st.zhdat(t, 1, "окно после подъёма прошло")
+}
