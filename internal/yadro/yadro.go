@@ -70,6 +70,10 @@ type Yadro struct {
 	// vhodSluzhby — адрес входа службы в конфиге ЖИВОГО ядра (см.
 	// VhodSluzhby): свой — из конфига на старте, принятый — из записки.
 	vhodSluzhby string
+	// otpechatokRaboty — отпечаток конфига, по которому работает живое ядро
+	// (свой — из байтов, прочитанных до старта; принятый — из записки).
+	// По нему сверяется снимок konfig_v_rabote.json (KonfigVRabote).
+	otpechatokRaboty string
 }
 
 // VhodSluzhby — адрес входа службы (internal/zapasnoy) у работающего ядра;
@@ -212,10 +216,14 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 		return fmt.Errorf("%w: нет конфига: сначала введите код доступа", ErrNeZapuskalos)
 	}
 
-	// Вход службы — из того самого конфига, с которым ядро стартует.
+	// Вход службы — из того самого конфига, с которым ядро стартует. Байты
+	// читаются один раз ДО старта: из них же отпечаток в записке и снимок
+	// конфига живого ядра (konfig_v_rabote.json). Читать файл снова после
+	// ответа API нельзя — его успевает переписать ежечасная пересборка.
 	var vhod string
-	if b, err := os.ReadFile(y.PutKonfiga()); err == nil {
-		vhod = zapasnoy.AdresVhoda(b)
+	telo, _ := os.ReadFile(y.PutKonfiga())
+	if len(telo) > 0 {
+		vhod = zapasnoy.AdresVhoda(telo)
 	}
 	cmd := exec.Command(y.Bin, "run", "-c", y.PutKonfiga(), "-D", y.Papka)
 	cmd.Dir = y.Papka
@@ -299,12 +307,17 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 				// работает. Записать её при старте процесса значило бы
 				// оставить преемнице приглашение принять ядро, которое ещё
 				// может упасть на подъёме.
+				otpechatok := OtpechatokKonfigaBayt(telo)
+				zapisatSnimok(y.Papka, telo)
+				y.zamok.Lock()
+				y.otpechatokRaboty = otpechatok
+				y.zamok.Unlock()
 				ZapisatPeredachu(y.Papka, Peredacha{
 					PID:         cmd.Process.Pid,
 					Bin:         y.Bin,
 					Api:         y.api(),
-					Otpechatok:  OtpechatokKonfiga(y.PutKonfiga()),
-					Adapter:     ImyaAdapteraIzKonfiga(y.PutKonfiga()),
+					Otpechatok:  otpechatok,
+					Adapter:     imyaAdapteraIzBayt(telo),
 					VhodSluzhby: vhod,
 					Kogda:       time.Now(),
 				})
@@ -322,7 +335,7 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 func (y *Yadro) Ostanovit() error {
 	y.zamok.Lock()
 	d, umer := y.derzh, y.umer
-	y.derzh, y.sost = nil, Stoit
+	y.derzh, y.sost, y.otpechatokRaboty = nil, Stoit, ""
 	y.zamok.Unlock()
 	if d == nil {
 		return nil
@@ -336,6 +349,7 @@ func (y *Yadro) Ostanovit() error {
 	// Записку снимаем ДО того, как гасим: если нас убьют посреди остановки,
 	// преемница не должна получить приглашение принять ядро, которого уже нет.
 	UbratPeredachu(y.Papka)
+	ubratSnimok(y.Papka)
 	if err := d.ubit(); err != nil {
 		log.Printf("не смог остановить ядро: %v", err)
 		return err
@@ -402,6 +416,14 @@ type ItogPriyoma struct {
 // Пустая строка — посчитать не вышло, тогда конфиг не сверяем вовсе: принять
 // работающее ядро всё равно лучше, чем оборвать связь из-за неизвестности.
 func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
+	ustarel := p.Otpechatok != "" && zhelaemyyOtpechatok != "" && p.Otpechatok != zhelaemyyOtpechatok
+	return y.PrinyatSResheniem(p, ustarel)
+}
+
+// PrinyatSResheniem — Prinyat, где «конфиг устарел, менять сейчас» решил
+// вызывающий (служба сверяет конфиги по смыслу, yadro.SravnitKonfigi):
+// smenit — вернуть KonfigUstarel вместо приёма живого ядра.
+func (y *Yadro) PrinyatSResheniem(p Peredacha, smenit bool) ItogPriyoma {
 	y.zamok.Lock()
 	zanyato := y.derzh != nil
 	y.zamok.Unlock()
@@ -433,7 +455,7 @@ func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
 	// Конфиг сверяем последним: две проверки выше отвечают «наше ли это
 	// ядро», а эта — «годится ли оно как есть». Разные вопросы и разные
 	// ответы вызывающему.
-	if p.Otpechatok != "" && zhelaemyyOtpechatok != "" && p.Otpechatok != zhelaemyyOtpechatok {
+	if smenit {
 		return ItogPriyoma{KonfigUstarel: true,
 			Pochemu: "ядро живо, но работает по прежнему конфигу"}
 	}
@@ -446,6 +468,7 @@ func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
 	prinyatoe := &derzhatel{pid: p.PID, proc: proc}
 	y.derzh, y.sost, y.umer = prinyatoe, Rabotaet, make(chan struct{})
 	y.vhodSluzhby = p.VhodSluzhby
+	y.otpechatokRaboty = p.Otpechatok
 	umer := y.umer
 	y.zamok.Unlock()
 

@@ -115,6 +115,13 @@ var (
 )
 
 func main() {
+	// `check -c <конфиг>` (internal/yadro.Proverit, проверка конфига до
+	// остановки рабочего ядра): конфиг, который не разбирается как JSON, или
+	// маркер check_otkaz.marker в рабочей папке — отказ кодом 1, как у
+	// настоящего ядра; иначе — успех.
+	if len(os.Args) > 1 && os.Args[1] == "check" {
+		os.Exit(proverit(os.Args[2:]))
+	}
 	if _, err := os.Stat(markerTiho); err == nil {
 		fmt.Fprintln(os.Stderr, "лже-ядро: тихий успех — стартую с первой попытки, реестра не касаюсь")
 		sluzhit()
@@ -304,4 +311,38 @@ func proxiesVybrat(w http.ResponseWriter, r *http.Request) {
 		vybratMu.Unlock()
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// markerOtkazaProverki — стенд просит check отвергнуть любой конфиг.
+const markerOtkazaProverki = "check_otkaz.marker"
+
+// proverit — `check -c <путь> [-D <папка>]`: код выхода, как у sing-box.
+func proverit(args []string) int {
+	put, papka := "", ""
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i] {
+		case "-c":
+			put = args[i+1]
+		case "-D":
+			papka = args[i+1]
+		}
+	}
+	if papka != "" {
+		_ = os.Chdir(papka)
+	}
+	if _, err := os.Stat(markerOtkazaProverki); err == nil {
+		fmt.Fprintln(os.Stderr, "FATAL[0000] лже-ядро: проверка отвергнута маркером "+markerOtkazaProverki)
+		return 1
+	}
+	b, err := os.ReadFile(put)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "FATAL[0000] read config:", err)
+		return 1
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		fmt.Fprintln(os.Stderr, "FATAL[0000] decode config:", err)
+		return 1
+	}
+	return 0
 }
