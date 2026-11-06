@@ -393,7 +393,7 @@ func TestAdresaPulta(t *testing.T) {
 	seti = []string{"мусор"}
 	_ = z.Obnovit("y")
 	p = z.Primeneno()
-	if len(p.Seti) != 2 || p.Seti[0].String() != "160.79.104.0/23" {
+	if len(p.Seti) != len(AnthropicPoUmolchaniyu) || p.Seti[0].String() != "160.79.104.0/23" {
 		t.Fatalf("при негодном списке адреса %v, ждали умолчание", p.Seti)
 	}
 }
