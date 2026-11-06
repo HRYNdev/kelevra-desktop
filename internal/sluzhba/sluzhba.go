@@ -467,6 +467,22 @@ type Sluzhba struct {
 	// zapustitDerzhatelya — точка подмены запуска держателя запрета при
 	// обновлении (peredatZapretNovoyKopii). nil в бою — новый exe с флагом.
 	zapustitDerzhatelya func(put string) (snyat func(), err error)
+	// otlozh — отложенный перезапуск ядра (otlozhennyy_perezapusk.go).
+	otlozh otlozhennyyPerezapusk
+	// proverkaKonfiga — подмена `sing-box check` для проверок; nil —
+	// s.Yadro.Proverit (perezapusk_yadra.go).
+	proverkaKonfiga func(ctx context.Context, telo []byte) error
+	// vybranoDlyaStenda — подмена «что выбрано в группах живого ядра»; nil —
+	// Clash API.
+	vybranoDlyaStenda func(rabota []byte) map[string]string
+	// ocheredZhiv, ocheredKogda — последний замер текущего узла очередью
+	// узлов (под zamok): жив ли обычный туннель (dom_tunnel.go).
+	ocheredZhiv  bool
+	ocheredKogda time.Time
+	// konfigDoPeresborki — config.json, каким его застала эта копия на
+	// старте (до своей пересборки): конфиг живого ядра прошлой копии, если
+	// снимка нет.
+	konfigDoPeresborki []byte
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -532,6 +548,10 @@ func Novaya() (*Sluzhba, error) {
 	s.nachatZaslon()
 	// Сторож ядра: падения работавшего ядра — в очередь сторожа.
 	s.nachatStorozh()
+	// Конфиг, с которым, возможно, работает живое ядро прошлой копии, — до
+	// пересборки: по нему приём ядра судит, нужен ли перезапуск, если
+	// снимка konfig_v_rabote.json нет (perezapusk_yadra.go).
+	s.konfigDoPeresborki, _ = os.ReadFile(s.Yadro.PutKonfiga())
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
@@ -560,6 +580,17 @@ func (s *Sluzhba) PerestroitKonfig() error {
 // perestroit принимает отступления от обычной сборки конфига (имя адаптера,
 // правила с диска).
 func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
+	gotovyy, k, err := s.sobratKonfig(dop)
+	if err != nil {
+		return err
+	}
+	return s.primenitSobrannyy(gotovyy, k)
+}
+
+// sobratKonfig — конфиг ядра из профиля с отступлениями dop, в памяти, без
+// записи на диск (perestroit пишет; сверка «нужен ли перезапуск» и проверка
+// ядром — perezapusk_yadra.go — только смотрят).
+func (s *Sluzhba) sobratKonfig(dop konfig.Vybor) ([]byte, konfig.Kartina, error) {
 	dop.ClashSekret = sekretClash()
 	if dop.VhodSluzhby == nil {
 		dop.VhodSluzhby = vhodSluzhbyDlyaSborki()
@@ -572,12 +603,13 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	}
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
-		return err
+		return nil, konfig.Kartina{}, err
 	}
-	gotovyy, k, err := konfig.Prigotovit(syroy, dop)
-	if err != nil {
-		return err
-	}
+	return konfig.Prigotovit(syroy, dop)
+}
+
+// primenitSobrannyy — собранный конфиг на диск и в картину службы.
+func (s *Sluzhba) primenitSobrannyy(gotovyy []byte, k konfig.Kartina) error {
 	if err := s.Yadro.ZapisatKonfig(gotovyy); err != nil {
 		return err
 	}
@@ -653,7 +685,13 @@ func (s *Sluzhba) SohranitProfil(syroy []byte) error {
 	if naboryProfilya() != staryeNabory {
 		s.pnutSverku()
 	}
-	return s.PerestroitKonfig()
+	if err := s.PerestroitKonfig(); err != nil {
+		return err
+	}
+	// Ядро работает — нужен ли ему новый профиль сейчас, позже или вовсе
+	// не нужен (perezapusk_yadra.go).
+	s.posleNovogoProfilya()
+	return nil
 }
 
 // Adres — на чём слушать: только петля, наружу приложение не смотрит.
@@ -1745,6 +1783,8 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 						return int(v)
 					},
 					Vozvrat: func() time.Duration { return s.pult.Dlitelnost("uzel.vozvrat_na_pervyy_min", time.Minute, 0) },
+					// Жив ли обычный туннель — для решения о лечении «Дома» (dom.go).
+					Tekushchiy: s.otmetitTunnelPoOcheredi,
 				}
 				log.Printf("очередь узлов: %q, узлы %v", gruppa, uzly)
 			}
@@ -2972,6 +3012,9 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		s.zamok.Unlock()
 		zakrepitTunnel(tunImya)
 		s.otmetitPodyomYadra()
+		// Ядро поднято на свежем конфиге (и новом ядре, если оно было
+		// отложено): отложенный перезапуск больше не нужен.
+		s.otlozhennyyVypolnen()
 		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
 		// применяем прямо сейчас.
 		s.primenitSohranennyeUzly()
@@ -3905,6 +3948,11 @@ func (s *Sluzhba) primenitObnovlennye(papka string, itog pravila.Itog) {
 	if len(zhdut) > 0 {
 		log.Printf("правила обновлены: %s — в работу пойдут при следующем подключении", strings.Join(zhdut, ", "))
 		s.zapomnitSvezhiePravila(len(zhdut))
+		// Ядро работает — «следующего подключения» можно ждать сутками:
+		// отложенный перезапуск (otlozhennyy_perezapusk.go).
+		if s.Yadro != nil && s.Yadro.PID() != "" {
+			s.otlozhitPerezapusk(prichinaPravila, "наборы правил ждут перезапуска ядра: "+strings.Join(zhdut, ", "), "")
+		}
 	}
 }
 

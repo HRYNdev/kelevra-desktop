@@ -51,6 +51,10 @@ type Ochered struct {
 	// Функциями: пульт меняется на ходу, а очередь живёт, пока не сменится конфиг.
 	Porog   func() int
 	Vozvrat func() time.Duration
+	// Tekushchiy — итог замера текущего узла на каждом шаге (жив ли обычный
+	// туннель): служба по нему решает, лечить ли «Дом» перезапуском ядра
+	// (sluzhba/dom.go). nil — не сообщать.
+	Tekushchiy func(zhiv bool)
 
 	provalov    int
 	pervyyZhivS time.Time
@@ -168,7 +172,11 @@ func (o *Ochered) Shag(ctx context.Context) bool {
 		// В «Соединении» стоит не узел (комната, ручной выход) — это не наше дело.
 		return false
 	}
-	if o.zhiv(ctx, tek) {
+	zhivTek := o.zhiv(ctx, tek)
+	if o.Tekushchiy != nil && ctx.Err() == nil {
+		o.Tekushchiy(zhivTek)
+	}
+	if zhivTek {
 		o.provalov = 0
 		if i == 0 {
 			o.pervyyZhivS = time.Time{}

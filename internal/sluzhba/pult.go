@@ -99,6 +99,9 @@ func reestrDesktop() pult.Reestr {
 
 		// Очередь узлов своей сети (internal/ochered).
 		{Imya: "uzel.porog_otkazov", Tip: pult.Celoe, Min: 1, Max: 20, Umolchanie: fmt.Sprint(ochered.ProvalovDoPerehoda), Gde: "провалов подряд до перехода на следующий узел"},
+		// Отложенный перезапуск ядра (otlozhennyy_perezapusk.go).
+		{Imya: "yadro.otlozhit_ne_dolshe_ch", Tip: pult.Celoe, Min: 1, Max: 72, Umolchanie: fmt.Sprint(int(srokPoUmolchaniyu / time.Hour)), Gde: "отложенный перезапуск ядра — не позже, ч"},
+		{Imya: "yadro.tishina_min", Tip: pult.Celoe, Min: 1, Max: 240, Umolchanie: m(tishinaPoUmolchaniyu), Gde: "тихое окно для отложенного перезапуска ядра, мин"},
 		{Imya: "uzel.vozvrat_na_pervyy_min", Tip: pult.Celoe, Min: 1, Max: 120, Umolchanie: m(ochered.VozvratCherez), Gde: "сколько первый узел жив до возврата на него"},
 
 		// Выключатели подсистем, выключение которых безопасно.

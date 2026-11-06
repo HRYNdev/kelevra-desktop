@@ -99,6 +99,9 @@ func (s *Sluzhba) prigotovitYadroRaz(ctx context.Context) error {
 		log.Printf("сверка ядра: отвергнутая сборка %s всё ещё на месте ядра — уберу при следующем подключении", itog.Svezhaya)
 	case itog.Otlozheno:
 		log.Printf("сверка ядра: стоит %s, свежая %s — подпись верна (ed25519), заменю при следующем подключении", slovoVersii(itog.Stoit), itog.Svezhaya)
+		// Ядро работает — следующего подключения можно ждать сутками:
+		// замена при ближайшем естественном моменте (otlozhennyy_perezapusk.go).
+		s.otlozhitDlyaYadra(itog.Svezhaya)
 	case itog.Stoit == itog.Svezhaya:
 		log.Printf("сверка ядра: стоит свежая сборка %s", itog.Stoit)
 	default:

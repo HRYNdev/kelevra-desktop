@@ -1011,6 +1011,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// Ядро тоже сверяется со свежей подписанной сборкой и меняется при
 	// следующем подключении (internal/sluzhba/smena_yadra.go).
 	go s.SveryatYadro(ctx, periodFonovoyProverki())
+	// Перезапуск ядра, который нужен, но не срочно (новый профиль, новое
+	// ядро), — при смене сети, пробуждении, в тихое окно или по сроку
+	// (internal/sluzhba/otlozhennyy_perezapusk.go).
+	go s.VestiOtlozhennyyPerezapusk(ctx)
 	// Раз в сутки, в конце дня, копия отдаёт свои журналы разработчику
 	// (internal/zhurnaly). Тот же ctx, что у двух горутин выше — defer
 	// otmena() гасит всех троих разом. Тумблер человека проверяется внутри,

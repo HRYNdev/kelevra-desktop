@@ -231,10 +231,7 @@ func (s *Sluzhba) proveritDomPoSmeneSeti(ctx context.Context, chto string) {
 	// Выход моста сам не отвечает (сеть ещё не ожила, узел лёг) — перезапуск
 	// ядра «Дом» не вернёт, а дребезг Wi-Fi дёргал бы ядро каждые 30 с. Как в
 	// lechitDom: не трогаем, дальше решат пробы и лестница.
-	if most == nil {
-		most = s.mostOtvechaet
-	}
-	if zhivMost, teg := most(ctx); !zhivMost {
+	if zhivMost, teg := s.tunnelDlyaDoma(ctx, most); !zhivMost {
 		otboy()
 		log.Printf("дом: сеть сменилась (%s), дом не отвечает, но и мост «%s» молчит — ядро не трогаю", chto, teg)
 		return

@@ -985,15 +985,20 @@ func TestDomSamoizlechenieMostOzhilSnimaetPauzu(t *testing.T) {
 	}
 }
 
-// Мост молчит всё время (замер мог ошибиться) — лечение не выключается
-// насовсем: раз в час с начала молчания перезапуск.
-func TestDomSamoizlechenieMostMolchitChas(t *testing.T) {
+// Обычный туннель (выход моста) молчит всё время — ядро не трогается вовсе:
+// раньше по часу молчания перезапускали всё равно, а поле 31.10–07.11 (ноут
+// 01-3: 21 из 33 серий «Дом: нет связи» при плохом туннеле, 23 перезапуска
+// за неделю) показало, что такой перезапуск только моргает TUN. Туннель
+// ожил — лечение на первой же неудачной пробе «Дома», без паузы.
+func TestDomSamoizlechenieMostMolchitNeLechit(t *testing.T) {
 	st := novyyStendLecheniya(t)
 	t0 := time.Date(2026, 10, 30, 22, 45, 0, 0, time.UTC)
-	st.shagi(t0, t0.Add(2*time.Hour+10*time.Minute), func(time.Time) bool { return false })
-	molchit := t0.Add(2 * ShagSlezhkiZaDomom) // третья проба — первое решение
-	ozhidali := []time.Time{molchit.Add(time.Hour), molchit.Add(2 * time.Hour)}
-	if len(st.kogda) != 2 || !st.kogda[0].Equal(ozhidali[0]) || !st.kogda[1].Equal(ozhidali[1]) {
-		t.Fatalf("перезапуски %v, ждали %v", st.kogda, ozhidali)
+	konecMolchaniya := t0.Add(2*time.Hour + 10*time.Minute)
+	st.shagi(t0, konecMolchaniya, func(time.Time) bool { return false })
+	st.zhdat(t, 0, "туннель молчит больше двух часов")
+	ozhil := konecMolchaniya.Add(ShagSlezhkiZaDomom)
+	st.shagi(ozhil, ozhil, func(time.Time) bool { return true })
+	if len(st.kogda) != 1 || !st.kogda[0].Equal(ozhil) {
+		t.Fatalf("перезапуски %v, ждали один в %v (туннель ожил, «Дом» молчит)", st.kogda, ozhil)
 	}
 }
