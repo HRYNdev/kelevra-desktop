@@ -135,10 +135,9 @@ func (p Politika) Kratko() string {
 }
 
 // AnthropicPoUmolchaniyu — адреса Anthropic, если пульт не задал своих
-// (kanal.anthropic_seti). Источник — решение и замер 07.11.2026: те же два
-// блока, что Anthropic публикует как адреса своего API; принадлежность к
-// AS399358 здесь не сверялась — уточнять пультом.
-var AnthropicPoUmolchaniyu = []string{"160.79.104.0/23", "2607:6bc0::/48"}
+// (kanal.anthropic_seti). Источник — анонсы AS399358 «ANTHROPIC - Anthropic, PBC»
+// по RIPEstat (announced-prefixes), сверено 07.11.2026; сменятся — править пультом.
+var AnthropicPoUmolchaniyu = []string{"160.79.104.0/23", "2607:6bc0::/48", "2607:6bc0:11::/48"}
 
 // RazobratSeti — строки вида «адрес/маска» в подсети. Негодные строки не
 // принимаются и возвращаются отдельно (для журнала): лучше узкий запрет по
