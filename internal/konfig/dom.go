@@ -37,6 +37,22 @@ const TegDoma = "Дом"
 // связи с выбором человека в «Соединении». В окне её нет (yadro.Gruppy).
 const TegMostaDoma = "Дом · мост"
 
+// TegShchelchkaDoma — селектор, через который мост «Дом» идёт всегда: прежний
+// выход моста (vless портала, TegMostaDoma или «Соединение») и заглушка
+// TegZaglushkiDoma. Служба щёлкает его «на заглушку и обратно», когда дом
+// молчит (sluzhba/dom.go, shchelknutMost): смена выбора закрывает сокет моста
+// (protocol/group/selector.go → interrupt.Group.Interrupt закрывает
+// не-внешние соединения группы, а диал bind'а эндпоинта именно такой), и
+// WireGuard переоткрывает его сам (transport/wireguard, ClientBind.receive →
+// connect) — без перезапуска ядра и без провала tun. Соединения людей
+// помечены внешними и при interrupt_exist_connections=false не рвутся. В окне
+// селектора нет (yadro.Gruppy).
+const TegShchelchkaDoma = "Дом · щелчок"
+
+// TegZaglushkiDoma — выход type block, запасной вариант TegShchelchkaDoma:
+// на нём селектор стоит доли секунды между двумя щелчками.
+const TegZaglushkiDoma = "Дом · заглушка"
+
 // TegDnsDoma — тег DNS-сервера дома.
 const TegDnsDoma = "dns-dom"
 
@@ -80,17 +96,18 @@ func dobavitDom(d map[string]any, dm Dom, tunTeg string) (beda, most string) {
 	if !dm.goden() {
 		return "блок неполон", ""
 	}
-	if tegZanyat(d, TegDoma) || tegZanyat(d, TegMostaDoma) {
+	if tegZanyat(d, TegDoma) || tegZanyat(d, TegMostaDoma) || tegZanyat(d, TegShchelchkaDoma) || tegZanyat(d, TegZaglushkiDoma) {
 		return "тег «" + TegDoma + "» в профиле уже занят", ""
 	}
 	r, ok := d["route"].(map[string]any)
 	if !ok {
 		return "в профиле нет route", ""
 	}
-	detour, most := vyhodMosta(d, dm.Portaly)
-	if detour == "" {
+	vyhod, most := vyhodMosta(d, dm.Portaly)
+	if vyhod == "" {
 		return "в профиле нет туннельного выхода для моста", ""
 	}
+	detour := dobavitShchelchok(d, vyhod)
 
 	mtu := dm.MTU
 	if mtu <= 0 {
@@ -194,6 +211,30 @@ func vyhodMosta(d map[string]any, portaly []PortalDoma) (string, string) {
 		return t, "входов с порталом в профиле нет, мост через " + t
 	}
 	return t, "мост через " + t
+}
+
+// dobavitShchelchok — селектор TegShchelchkaDoma над выходом моста и
+// заглушкой; возвращает его тег (detour эндпоинта). По умолчанию — прежний
+// выход. interrupt_exist_connections=false: щелчок закрывает только сокет
+// моста, соединения людей через «Соединение» не рвутся.
+//
+// Выбор селектора ядро хранит в cache_file (zapomnitVybor) и при старте
+// берёт оттуда, если такой вариант есть. Умри служба между двумя щелчками —
+// ядро после перезапуска встало бы на заглушку. Поэтому служба после каждого
+// подъёма ядра и на каждом шаге слежки сверяет селектор с выходом моста и
+// возвращает его (sluzhba/dom.go, vernutMostDoma).
+func dobavitShchelchok(d map[string]any, vyhod string) string {
+	vyhody, _ := d["outbounds"].([]any)
+	d["outbounds"] = append(vyhody,
+		map[string]any{"type": "block", "tag": TegZaglushkiDoma},
+		map[string]any{
+			"type":                        "selector",
+			"tag":                         TegShchelchkaDoma,
+			"outbounds":                   []any{vyhod, TegZaglushkiDoma},
+			"default":                     vyhod,
+			"interrupt_exist_connections": false,
+		})
+	return TegShchelchkaDoma
 }
 
 // dobavitDnsDoma — сервер дома и правило зоны первым в dns.rules (раньше
@@ -302,24 +343,77 @@ func ochistitSvoyuSet(vh map[string]any) []string {
 	return sdelano
 }
 
-// MostDomaIzKonfiga — через какой выход идёт мост «Дом» (detour эндпоинта
-// TegDoma) в готовом конфиге ядра; пусто — входа домой в конфиге нет.
-func MostDomaIzKonfiga(syroy []byte) string {
+// MostDoma — как идёт мост «Дом» в готовом конфиге ядра.
+type MostDoma struct {
+	// Vyhod — настоящий выход моста: vless портала, TegMostaDoma или
+	// «Соединение». Его меряет служба перед лечением; заглушкой он не бывает.
+	Vyhod string
+	// Selektor — селектор щелчка (TegShchelchkaDoma) и его заглушка; пусто —
+	// конфиг собран до щелчка (detour эндпоинта — сразу выход), щёлкать нечего.
+	Selektor, Zaglushka string
+}
+
+// RazobratMostDoma — мост «Дом» из готового конфига ядра; пустой Vyhod —
+// входа домой в конфиге нет.
+func RazobratMostDoma(syroy []byte) MostDoma {
 	var d struct {
 		Endpoints []struct {
 			Tag    string `json:"tag"`
 			Detour string `json:"detour"`
 		} `json:"endpoints"`
+		Outbounds []struct {
+			Type      string   `json:"type"`
+			Tag       string   `json:"tag"`
+			Outbounds []string `json:"outbounds"`
+			Default   string   `json:"default"`
+		} `json:"outbounds"`
 	}
 	if json.Unmarshal(syroy, &d) != nil {
-		return ""
+		return MostDoma{}
 	}
+	detour := ""
 	for _, e := range d.Endpoints {
 		if e.Tag == TegDoma {
-			return e.Detour
+			detour = e.Detour
+			break
 		}
 	}
-	return ""
+	if detour != TegShchelchkaDoma {
+		return MostDoma{Vyhod: detour}
+	}
+	tipy := map[string]string{}
+	for _, o := range d.Outbounds {
+		tipy[o.Tag] = o.Type
+	}
+	for _, o := range d.Outbounds {
+		if o.Tag != TegShchelchkaDoma || o.Type != "selector" {
+			continue
+		}
+		md := MostDoma{Selektor: o.Tag}
+		for _, n := range o.Outbounds {
+			if tipy[n] == "block" {
+				md.Zaglushka = n
+			} else if md.Vyhod == "" {
+				md.Vyhod = n
+			}
+		}
+		if o.Default != "" && tipy[o.Default] != "block" {
+			md.Vyhod = o.Default
+		}
+		if md.Vyhod == "" || md.Zaglushka == "" {
+			// Селектор не нашей формы: щёлкать нечем, мерить — его выход.
+			return MostDoma{Vyhod: md.Vyhod}
+		}
+		return md
+	}
+	return MostDoma{}
+}
+
+// MostDomaIzKonfiga — через какой выход идёт мост «Дом» в готовом конфиге
+// ядра: за селектором щелчка — его выход по умолчанию, не заглушка. Пусто —
+// входа домой в конфиге нет.
+func MostDomaIzKonfiga(syroy []byte) string {
+	return RazobratMostDoma(syroy).Vyhod
 }
 
 // bezPodseti — p без s (p пересекается с s): если p внутри s — пусто; если
@@ -466,6 +560,7 @@ func ssylaetsyaNaDom(v any) bool {
 	}
 	s := string(b)
 	return strings.Contains(s, `"`+TegDoma+`"`) || strings.Contains(s, TegDnsDoma) || strings.Contains(s, TegMostaDoma) ||
+		strings.Contains(s, TegShchelchkaDoma) || strings.Contains(s, TegZaglushkiDoma) ||
 		strings.Contains(s, "100.77.")
 }
 
@@ -494,7 +589,7 @@ func vyrezatChuzhoyDom(d map[string]any) {
 		ostalis := make([]any, 0, len(o))
 		for _, v := range o {
 			if vh, ok := v.(map[string]any); ok {
-				if t, _ := vh["tag"].(string); t == TegDoma || t == TegMostaDoma {
+				if t, _ := vh["tag"].(string); tegVhodaDomoy(t) {
 					udalennye[t] = true
 					continue
 				}
@@ -506,9 +601,9 @@ func vyrezatChuzhoyDom(d map[string]any) {
 		for _, v := range ostalis {
 			if vh, ok := v.(map[string]any); ok {
 				if l, ok := vh["outbounds"].([]any); ok {
-					vh["outbounds"] = otfiltrovat(l, func(x any) bool { t, _ := x.(string); return t == TegDoma || t == TegMostaDoma })
+					vh["outbounds"] = otfiltrovat(l, func(x any) bool { t, _ := x.(string); return tegVhodaDomoy(t) })
 				}
-				if t, _ := vh["default"].(string); t == TegDoma || t == TegMostaDoma {
+				if t, _ := vh["default"].(string); tegVhodaDomoy(t) {
 					delete(vh, "default")
 				}
 			}
@@ -555,6 +650,12 @@ func vyrezatChuzhoyDom(d map[string]any) {
 			}
 		}
 	}
+}
+
+// tegVhodaDomoy — тег, который входу домой ставит сам клиент: такой выход
+// профиля выбрасывается.
+func tegVhodaDomoy(t string) bool {
+	return t == TegDoma || t == TegMostaDoma || t == TegShchelchkaDoma || t == TegZaglushkiDoma
 }
 
 func otfiltrovat(spisok []any, plohoe func(any) bool) []any {

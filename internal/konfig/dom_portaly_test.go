@@ -88,7 +88,7 @@ func TestMostDomaOdinPortal(t *testing.T) {
 	if !k.Dom || k.DomBeda != "" {
 		t.Fatalf("дом не вписан: %+v", k)
 	}
-	if got := endpointDoma(t, d)["detour"]; got != tegFiX {
+	if got := vyhodZaShchelchkom(t, d); got != tegFiX {
 		t.Fatalf("detour = %v, ждали %q (Hysteria2 на том же порту и Vision — не портал)", got, tegFiX)
 	}
 	if vyhodPoTegu(d, TegMostaDoma) != nil {
@@ -108,7 +108,7 @@ func TestMostDomaDvaPortala(t *testing.T) {
 	if !k.Dom || k.DomBeda != "" {
 		t.Fatalf("дом не вписан: %+v", k)
 	}
-	if got := endpointDoma(t, d)["detour"]; got != TegMostaDoma {
+	if got := vyhodZaShchelchkom(t, d); got != TegMostaDoma {
 		t.Fatalf("detour = %v, ждали группу %q", got, TegMostaDoma)
 	}
 	g := vyhodPoTegu(d, TegMostaDoma)
@@ -156,7 +156,7 @@ func TestMostDomaBezPortalovVProfile(t *testing.T) {
 		if !k.Dom {
 			t.Fatalf("%s: дом не вписан: %+v", imya, k)
 		}
-		if got := endpointDoma(t, d)["detour"]; got != "Соединение" {
+		if got := vyhodZaShchelchkom(t, d); got != "Соединение" {
 			t.Fatalf("%s: detour = %v, ждали «Соединение» (как раньше)", imya, got)
 		}
 		if vyhodPoTegu(d, TegMostaDoma) != nil {

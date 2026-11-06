@@ -46,6 +46,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 	"github.com/HRYNdev/kelevra-desktop/internal/zapasnoy"
 	"github.com/HRYNdev/kelevra-desktop/internal/zapisi"
+	"github.com/HRYNdev/kelevra-desktop/internal/zaslon"
 	"github.com/HRYNdev/kelevra-desktop/internal/zhurnaly"
 )
 
@@ -438,6 +439,10 @@ type Sluzhba struct {
 	// dom — вход домой (dom.go). nil — служба собрана мимо Novaya (проверки):
 	// конфиг без входа домой, как до него.
 	dom *domSluzhby
+	// zaslon — запрет трафика мимо туннеля на время перезапуска ядра
+	// (zaslon_perezapuska.go). nil или без системы — ничего не делает
+	// (служба собрана мимо Novaya, стенд, не Windows).
+	zaslon *zaslon.Zaslon
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -499,6 +504,8 @@ func Novaya() (*Sluzhba, error) {
 	s.nachatPult()
 	// Вход домой: ключ устройства и последний проверенный блок с диска.
 	s.nachatDom()
+	// Запрет трафика мимо туннеля на время перезапуска ядра.
+	s.nachatZaslon()
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
@@ -1590,6 +1597,12 @@ func (s *Sluzhba) vybrat(w http.ResponseWriter, r *http.Request) {
 	}
 	if vhod.Gruppa == "" || vhod.Uzel == "" {
 		otdat(w, nil, fmt.Errorf("не сказано, что и на что переключить"))
+		return
+	}
+	// Мостом «Дом» правит служба (dom.go, shchelknutMost): выбор, записанный
+	// отсюда, применялся бы после каждого подъёма и спорил бы со сверкой моста.
+	if vhod.Gruppa == konfig.TegShchelchkaDoma || vhod.Gruppa == konfig.TegMostaDoma {
+		otdat(w, nil, fmt.Errorf("эта группа не переключается вручную"))
 		return
 	}
 	var err error
@@ -2869,6 +2882,9 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
 		// применяем прямо сейчас.
 		s.primenitSohranennyeUzly()
+		// Мост «Дом» — на свой выход, даже если ядро подняло из cache_file
+		// заглушку щелчка (dom.go, vernutMostDoma).
+		s.vernutMostDoma("после подъёма ядра")
 	} else {
 		log.Printf("связь не поднята: %v", err)
 		_ = s.Yadro.Ostanovit()
@@ -3166,6 +3182,9 @@ func (s *Sluzhba) Podklyuchit(ctx context.Context) error {
 // убирает системный прокси, если его оставила старая версия (snyatProksi):
 // чужой прокси уборка не трогает.
 func (s *Sluzhba) OpustitZashchitu() error {
+	// Связь опускают («Отключить», дома, уход копии): запрет на время
+	// перезапуска, если он стоит, снимается — трафик идёт напрямую.
+	s.otkrytMimoTunnelya("связь опущена")
 	err := s.Yadro.Ostanovit()
 	// Связи нет — правило NRPT для имён дома снимается (dom.go).
 	s.soglasovatNrpt()
