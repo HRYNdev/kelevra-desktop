@@ -1599,9 +1599,10 @@ func (s *Sluzhba) vybrat(w http.ResponseWriter, r *http.Request) {
 		otdat(w, nil, fmt.Errorf("не сказано, что и на что переключить"))
 		return
 	}
-	// Мостом «Дом» правит служба (dom.go, shchelknutMost): выбор, записанный
-	// отсюда, применялся бы после каждого подъёма и спорил бы со сверкой моста.
-	if vhod.Gruppa == konfig.TegShchelchkaDoma || vhod.Gruppa == konfig.TegMostaDoma {
+	// Группа моста «Дом» (urltest, konfig/dom.go) выбирает сама, в окне её
+	// нет (yadro.Gruppy): выбор, записанный отсюда, применялся бы после
+	// каждого подъёма и только сыпал бы отказами ядра.
+	if vhod.Gruppa == konfig.TegMostaDoma {
 		otdat(w, nil, fmt.Errorf("эта группа не переключается вручную"))
 		return
 	}
@@ -2882,9 +2883,6 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
 		// применяем прямо сейчас.
 		s.primenitSohranennyeUzly()
-		// Мост «Дом» — на свой выход, даже если ядро подняло из cache_file
-		// заглушку щелчка (dom.go, vernutMostDoma).
-		s.vernutMostDoma("после подъёма ядра")
 	} else {
 		log.Printf("связь не поднята: %v", err)
 		_ = s.Yadro.Ostanovit()

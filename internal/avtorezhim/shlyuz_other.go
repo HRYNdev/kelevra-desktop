@@ -135,3 +135,14 @@ func EstShlyuz() bool {
 	shlyuzy, err := shlyuzyIzTablicyMarshrutov("/proc/net/route")
 	return err == nil && len(shlyuzy) > 0
 }
+
+// OtpechatokSeti — версия для стенда: шлюзы маршрутов по умолчанию не на
+// туннеле, через запятую; пусто — сети нет. Смысл и потребитель — в
+// windows-версии.
+func OtpechatokSeti() string {
+	shlyuzy, err := shlyuzyIzTablicyMarshrutov("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	return strings.Join(shlyuzy, ",")
+}

@@ -5,6 +5,7 @@ package avtorezhim
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"unsafe"
 
@@ -122,6 +123,39 @@ func EstShlyuz() bool {
 		}
 	}
 	return false
+}
+
+// OtpechatokSeti — чем физическая сеть машины отличается от прошлой:
+// индекс адаптера, свой IPv4 и шлюз IPv4 у каждого физического адаптера,
+// у которого есть и то и другое (тот же отбор, что у EstShlyuz), по порядку
+// индексов. Пусто — сети нет (Wi-Fi выключен, кабель вынут).
+//
+// Зачем. Событие смены адресов (SledchikSeti, NotifyAddrChange) приходит и
+// от нашего собственного TUN (подъём и перезапуск ядра), и от адресов IPv6,
+// и пачкой на одну смену. Служба (sluzhba, dom_smena_seti.go) по этому
+// отпечатку отличает «физическая сеть вернулась или сменилась» от прочего
+// шума. Пакетов в сеть не шлёт: одна таблица адаптеров системы.
+func OtpechatokSeti() string {
+	adaptery, err := poluchitSvedeniyaAdapterov()
+	if err != nil {
+		return ""
+	}
+	var chasti []string
+	for a := adaptery; a != nil; a = a.Next {
+		if a.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK || a.Type == windows.IF_TYPE_TUNNEL || a.Type == propVirtual {
+			continue
+		}
+		if svoyPoOpisaniyu(a) {
+			continue
+		}
+		gw, ip := pervyyShlyuzIPv4(&a.GatewayList), pervyyShlyuzIPv4(&a.IpAddressList)
+		if gw == "" || ip == "" {
+			continue
+		}
+		chasti = append(chasti, fmt.Sprintf("%d %s %s", a.Index, ip, gw))
+	}
+	sort.Strings(chasti)
+	return strings.Join(chasti, "|")
 }
 
 // shlyuzFizicheskogoAdaptera — IPv4 шлюза и индекс интерфейса физического
