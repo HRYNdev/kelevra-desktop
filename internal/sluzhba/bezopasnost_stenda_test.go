@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/lzheyadro"
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 )
 
@@ -45,5 +46,7 @@ func TestMain(m *testing.M) {
 	// Установка обновления в этих проверках идёт на заглушках без ключа подписи;
 	// сама подпись проверяется в internal/obnovlenie и internal/podpis.
 	obnovlenie.TrebovatPodpis = false
-	os.Exit(m.Run())
+	kod := m.Run()
+	lzheyadro.Ubrat() // лже-ядро проверок слежки (storozh*_test.go)
+	os.Exit(kod)
 }

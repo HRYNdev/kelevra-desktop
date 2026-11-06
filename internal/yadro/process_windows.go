@@ -69,3 +69,35 @@ func putObrazaProcessa(pid int) (string, bool) {
 	}
 	return syscall.UTF16ToString(bufer[:razmer]), true
 }
+
+// processZhiv — жив ли процесс pid и, если вышел, с каким кодом. znaem=false —
+// ОС не ответила (нет прав): вызывающий решает без этого знания.
+//
+// Нужна сторожу принятого ядра (slezhka.go): дожидаться можно только своего
+// ребёнка, а принятое ядро — чужой процесс. Номер, освободившийся и ещё никому
+// не выданный, ОС не откроет вовсе (ERROR_INVALID_PARAMETER) — это «вышел».
+func processZhiv(pid int) (zhiv bool, kod int, znaem bool) {
+	if pid <= 0 {
+		return false, -1, true
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		if err == windows.ERROR_INVALID_PARAMETER {
+			return false, -1, true
+		}
+		return false, -1, false
+	}
+	defer windows.CloseHandle(h)
+	sobytie, err := windows.WaitForSingleObject(h, 0)
+	if err != nil {
+		return false, -1, false
+	}
+	if sobytie == uint32(windows.WAIT_TIMEOUT) {
+		return true, 0, true
+	}
+	var k uint32
+	if err := windows.GetExitCodeProcess(h, &k); err != nil {
+		return false, -1, true
+	}
+	return false, int(k), true
+}

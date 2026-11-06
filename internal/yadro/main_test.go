@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/lzheyadro"
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
 )
 
@@ -11,5 +12,7 @@ import (
 // podpis_yadra_test.go (там требование включается обратно).
 func TestMain(m *testing.M) {
 	obnovlenie.TrebovatPodpis = false
-	os.Exit(m.Run())
+	kod := m.Run()
+	lzheyadro.Ubrat() // лже-ядро проверок слежки (storozh*_test.go)
+	os.Exit(kod)
 }

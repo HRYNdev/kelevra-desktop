@@ -193,11 +193,28 @@ type Sluzhba struct {
 	// zamokSmenyYadra — замена файла ядра (smena_yadra.go) идёт одна за раз:
 	// два одновременных подключения не должны менять файл друг под другом.
 	zamokSmenyYadra sync.Mutex
-	// zamokPodyoma — подъём связи (PodnyatZashchitu) и перезапуск ядра ради
-	// входа домой (perezapustitDlyaDoma) идут по одному: «погасить и поднять»
-	// не должно пересечься с чужим подъёмом. «Отключить» его не берёт —
-	// остановка прерывает подъём намеренно.
+	// zamokPodyoma — ОДИН замок на все переходы ядра (perehody.go): подъём
+	// связи (PodnyatZashchitu), перезапуск ради входа домой (perezapustit),
+	// перезапуск сторожем после падения (storozh_yadra.go), смена ядра при
+	// обновлении (smenitYadroPlavno), опускание авторежимом, запись config.json
+	// (PerestroitKonfig) и уход копии после установки обновления
+	// (PostavitNaydennoe) — по одному: «погасить и поднять» не должно
+	// пересечься ни с чужим подъёмом, ни с уходом процесса. «Отключить» его не
+	// ждёт — остановка прерывает подъём намеренно, — но после конца идущего
+	// перехода доводит своё (dovestiOtklyuchenie).
 	zamokPodyoma sync.Mutex
+	// uhodit — служба уходит (остановка, уступка места): новые переходы не
+	// начинаются (perehody.go).
+	uhodit atomic.Bool
+	// padeniya — падения работавшего ядра для сторожа (storozh_yadra.go);
+	// nil — служба собрана мимо Novaya, сторожа нет.
+	padeniya chan yadro.Padenie
+	// storozh — лестница перезапусков сторожа.
+	storozh storozhLestnica
+	// podklyucheniy — сколько раз человек нажал «Подключиться» (под
+	// avtorezhimZamok): «Отключить», ждущее конца перехода, не опускает связь,
+	// поднятую уже после него по слову человека (dovestiOtklyuchenie).
+	podklyucheniy uint64
 	// zhurnalStarayaPodpis — когда в журнал писали про сборку ядра с
 	// подписью прежнего формата (не чаще раза в сутки).
 	zhurnalStarayaPodpis time.Time
@@ -513,6 +530,8 @@ func Novaya() (*Sluzhba, error) {
 	s.nachatDom()
 	// Запрет трафика мимо туннеля (намерение на старте, передача прошлой копии).
 	s.nachatZaslon()
+	// Сторож ядра: падения работавшего ядра — в очередь сторожа.
+	s.nachatStorozh()
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
@@ -525,7 +544,18 @@ func Novaya() (*Sluzhba, error) {
 // PerestroitKonfig готовит рабочий конфиг ядра из профиля, который прислал
 // сервер: убирает поля, работающие только на телефоне, и вход прокси. Без
 // этого ядро на компьютере не стартует вообще.
-func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(konfig.Vybor{}) }
+//
+// Под zamokPodyoma: config.json пишут и подъём связи (perestroit под тем же
+// замком), и ежечасный профиль, и вход домой. Без общего замка они писали
+// один config.json.tmp разом (O_EXCL — один получал отказ), а ежечасная
+// пересборка могла перетереть конфиг, только что собранный подъёмом с именем
+// адаптера и правилами из кеша, — ядро стартовало не на том конфиге.
+// Зовущий не должен держать zamokPodyoma (внутри перехода — s.perestroit).
+func (s *Sluzhba) PerestroitKonfig() error {
+	s.zamokPodyoma.Lock()
+	defer s.zamokPodyoma.Unlock()
+	return s.perestroit(konfig.Vybor{})
+}
 
 // perestroit принимает отступления от обычной сборки конфига (имя адаптера,
 // правила с диска).
@@ -1202,6 +1232,13 @@ func (s *Sluzhba) PostavitNaydennoe() (versiya string, oshibka error) {
 		// ядро, жив и он.
 		//
 		// Записка уже на диске: её пишет Zapustit, когда ядро ответило.
+		//
+		// Уходим только между переходами ядра (perehody.go): посреди
+		// перезапуска («Дом», сторож, подъём) ядро погашено, запрет WFP живёт
+		// в сессии этого процесса, и уход оставил бы человека без туннеля и
+		// без запрета до подъёма службы диспетчером (Г1). Замок держится до
+		// самого выхода — новый переход не начнётся.
+		vzyal := s.zanyatPerehodyPeredVyhodom(srokPerehodaPeredVyhodom)
 		// Место чтения журнала ядра — до запуска новой копии: она начнёт
 		// с него, а эта уйдёт через os.Exit, не дожидаясь своей слежки.
 		s.ZapomnitMestoChteniyaYadra()
@@ -1218,6 +1255,9 @@ func (s *Sluzhba) PostavitNaydennoe() (versiya string, oshibka error) {
 			s.zamok.Lock()
 			s.postavlenoObnovlenie = ""
 			s.zamok.Unlock()
+			if vzyal {
+				s.zamokPodyoma.Unlock()
+			}
 			s.prodolzhitSlezhkuZaYadrom()
 			return
 		}
@@ -2233,6 +2273,9 @@ func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
 		// больше не включала автомат за него: с этой минуты решает он.
 		s.Nastroyki.Avtorezhim = false
 		s.Nastroyki.RuchnoyVybor = true
+		// С этой минуты связь после перезагрузки решает автоподключение:
+		// поднята сейчас — человек подключён (avtopodklyuch.go).
+		s.Nastroyki.Avtopodklyuch = s.zashchitaPodnyata()
 		if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 			otdat(w, nil, err)
 			return
@@ -2480,19 +2523,24 @@ func (s *Sluzhba) avtorezhimKolbek(ctx context.Context, sost avtorezhim.Sostoyan
 		} else {
 			log.Printf("авторежим: обстановка «дома» — опускаю туннель")
 		}
+		// Переход ядра в работе (подъём, перезапуск «Дома», перезапуск
+		// сторожем) — не дёргаем его на полпути. Обстановка никуда не
+		// денется: авторежим ходит по кругу и опустит защиту следующим же
+		// заходом, когда переход кончится (ветка «приведение» выше как раз
+		// про это). А погасив ядро сейчас, мы получили бы провал подъёма и
+		// красную беду на ровном месте — замер 08.09. Раньше смотрели только
+		// podyomIdet, и перезапуск «Дома» между своим «погасить» и «поднять»
+		// был виден как «связи нет» (Г2): опустили бы, а он поднял бы снова.
 		s.zamok.Lock()
 		idet := s.podyomIdet
 		s.zamok.Unlock()
-		if idet {
-			// Подъём в работе — не дёргаем его на полпути. Обстановка никуда
-			// не денется: авторежим ходит по кругу и опустит защиту
-			// следующим же заходом, когда подъём кончится (ветка «приведение»
-			// выше как раз про это). А погасив ядро сейчас, мы получили бы
-			// провал подъёма и красную беду на ровном месте — замер 08.09.
-			log.Printf("авторежим: обстановка «дома», но связь сейчас поднимается — не мешаю, опущу следующим заходом")
+		if idet || !s.zamokPodyoma.TryLock() {
+			log.Printf("авторежим: обстановка «дома», но связь сейчас поднимается или перезапускается — не мешаю, опущу следующим заходом")
 			return
 		}
-		if err := s.OpustitZashchitu(); err != nil {
+		err := s.OpustitZashchitu()
+		s.zamokPodyoma.Unlock()
+		if err != nil {
 			log.Printf("авторежим: не опустил туннель: %v", err)
 		}
 	case avtorezhim.Podnyat:
@@ -2791,9 +2839,16 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 	// отменяемым ctx, см. avtorezhimKolbek). Кнопкам это ничего не меняет:
 	// podklyuchit зовёт PodnyatZashchitu с context.Background().
 	iskhodnyyZapusk := zapustit
+	otklyucheniyNaVhode := s.chisloOtklyucheniy()
 	zapustit = func(c context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("подъём связи прерван: %w", err)
+		}
+		// «Отключить», нажатое посреди перехода (в том числе в секунды
+		// подбора имени адаптера), — ядро не запускаем (Г4).
+		if s.chisloOtklyucheniy() != otklyucheniyNaVhode {
+			log.Printf("подъём связи прерван: нажато «Отключить»")
+			return OshibkaReshenieSmenilos
 		}
 		// Отказ самого запуска ядра помечается: только за него замена ядра
 		// может винить новую сборку (smena_yadra.go, novoeYadroVinovato).
@@ -3146,6 +3201,9 @@ func (s *Sluzhba) Podklyuchit(ctx context.Context) error {
 	// Нажатие — слово «подключено»: запрет мимо туннеля встаёт сразу, ещё до
 	// захода обстановки и подъёма ядра (дома его снимет решение «дома»).
 	s.ustanovitNamerenie(true, "«Подключиться»")
+	// Слово человека «хочу связь»: его же служба повторит после перезагрузки
+	// в ручном режиме (avtopodklyuch.go).
+	s.zapomnitPodklyuchenie()
 	// Заказанная схема (27.08): нажатие «Подключить» → программа сама
 	// определяет обстановку → дома «режим ожидания», вне дома включается.
 	// Одно нажатие — и дальше
@@ -3271,6 +3329,9 @@ func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 	// «Подключиться»), обязано после него замолчать.
 	s.avtorezhimPokolenie++
 	s.otklyucheniy++
+	// Отключился сам — после перезагрузки туннель сам не встаёт
+	// (avtopodklyuch.go).
+	s.Nastroyki.Avtopodklyuch = false
 	nastroyki := s.Nastroyki
 	s.avtorezhimZamok.Unlock()
 
@@ -3281,16 +3342,24 @@ func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 	if bylVklyuchen {
 		log.Printf("«Отключить»: автомат приостановлен до следующего «Подключиться»")
 		s.OstanovitAvtorezhim()
-		if err := hranenie.Sohranit(nastroyki); err != nil {
-			// Настройку не сохранили — но автомат уже остановлен в этом
-			// процессе, а значит нажатие сработало здесь и сейчас. Валить
-			// из-за этого весь ответ нельзя: человек нажал «Отключить», и
-			// главное для него — что защита опустилась.
-			log.Printf("«Отключить»: не сохранил остановку автомата: %v", err)
-		}
+	}
+	if err := hranenie.Sohranit(nastroyki); err != nil {
+		// Настройку не сохранили — но автомат уже остановлен в этом
+		// процессе, а значит нажатие сработало здесь и сейчас. Валить
+		// из-за этого весь ответ нельзя: человек нажал «Отключить», и
+		// главное для него — что защита опустилась.
+		log.Printf("«Отключить»: не сохранил настройку: %v", err)
 	}
 
+	// Поколение и число подключений — ПОСЛЕ остановки автомата (она тоже
+	// растит поколение): по ним доведение ниже узнаёт, не сказал ли человек
+	// с тех пор чего-то нового.
+	pokolenie := s.pokolenieAvtorezhima()
+	podkl := s.chisloPodklyucheniy()
 	err := s.OpustitZashchitu()
+	// Переход ядра шёл (перезапуск «Дома», сторож, подъём) — после его конца
+	// опустить и то, что он успел поднять (perehody.go).
+	s.dovestiOtklyuchenie(pokolenie, podkl)
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
 
@@ -3897,7 +3966,14 @@ func (s *Sluzhba) ustupitMestoRuchka(w http.ResponseWriter, r *http.Request) {
 		s.ZapomnitMestoChteniyaYadra()
 		// Пауза — чтобы ответ успел уйти: тот же приём, что в PostavitNaydennoe.
 		time.Sleep(300 * time.Millisecond)
-		// Место за новой копией: свой запрет снимаем, её поставит она.
+		// Новых переходов не будет, идущий оборван и дождан (perehody.go):
+		// иначе перезапуск, шедший в эту секунду, поднял бы ядро уже после
+		// ухода — без хозяина. Замок переходов остаётся у уходящего.
+		s.zavershitPerehody(srokZavershitPerehody)
+		// Место за новой копией: свой запрет снимаем, её поставит она. После
+		// zavershitPerehody — временный запрет оборванного перезапуска уже
+		// снят им самим по итогу. Методы запрета берут s.zamok и
+		// s.avtorezhimZamok сами; zamokPodyoma им не мешает.
 		s.ustanovitNamerenie(false, "место уступлено новой копии")
 		_ = s.OpustitZashchitu()
 		if s.vyhod != nil {
