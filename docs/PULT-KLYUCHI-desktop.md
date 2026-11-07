@@ -53,3 +53,4 @@
 | `vykl.srochnyy_zhurnal` | bool | — | false | выключатель: срочная посылка журнала после неудачи связи |
 | `vykl.zapisi_yadra` | bool | — | false | выключатель: записи с полями из журнала ядра |
 | `vykl.zapret_anthropic` | bool | — | false | выключатель: уровень 1 запрета мимо туннеля (Anthropic только через туннель) |
+| `vykl.samopodyom` | bool | — | false | выключатель: перезапуск ядра, когда сеть есть, а туннель мёртв (samopodyom.go) |

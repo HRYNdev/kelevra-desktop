@@ -288,6 +288,9 @@ func (sl *slezhkaOtlozh) posmotretSet() {
 		return
 	}
 	sl.proshlayaSet, sl.propadala = tek, false
+	// Ступень самоподъёма (samopodyom.go): после смены сети туннель, который
+	// так и не ожил, лечится раньше обычного.
+	sl.s.otmetitSmenuSeti()
 	sl.naznachitMoment("сеть сменилась")
 }
 

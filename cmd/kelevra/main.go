@@ -1015,6 +1015,9 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// ядро), — при смене сети, пробуждении, в тихое окно или по сроку
 	// (internal/sluzhba/otlozhennyy_perezapusk.go).
 	go s.VestiOtlozhennyyPerezapusk(ctx)
+	// Сеть есть (доказано мимо ядра), а туннель мёртв — перезапуск ядра по
+	// лестнице 45 с / 2 / 5 / 15 мин (internal/sluzhba/samopodyom.go).
+	go s.VestiSamopodyom(ctx)
 	// Раз в сутки, в конце дня, копия отдаёт свои журналы разработчику
 	// (internal/zhurnaly). Тот же ctx, что у двух горутин выше — defer
 	// otmena() гасит всех троих разом. Тумблер человека проверяется внутри,

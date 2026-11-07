@@ -483,6 +483,8 @@ type Sluzhba struct {
 	// старте (до своей пересборки): конфиг живого ядра прошлой копии, если
 	// снимка нет.
 	konfigDoPeresborki []byte
+	// samo — ступень самоподъёма «сеть есть, туннель мёртв» (samopodyom.go).
+	samo samopodyomSost
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -1864,7 +1866,11 @@ type otvetSostoyaniya struct {
 	Sost    string `json:"sost"`
 	// Zapret — какой запрет мимо туннеля стоит: «anthropic», «polnyy» или
 	// пусто (zaslon_perezapuska.go). Поле для диагностики, не надпись.
-	Zapret     string `json:"zapret,omitempty"`
+	Zapret string `json:"zapret,omitempty"`
+	// Diagnoz — диагноз канала ступени самоподъёма: ok, tunnel_mertv,
+	// uzly_nedostupny, net_seti или пусто (samopodyom.go). Поле для
+	// диагностики, не надпись.
+	Diagnoz    string `json:"diagnoz,omitempty"`
 	KodEst     bool   `json:"kod_est"`
 	YadroEst   bool   `json:"yadro_est"`
 	KachaemBin bool   `json:"kachaem_yadro"`
@@ -2144,6 +2150,7 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		Beda:     s.Yadro.PoslednyayaBeda(),
 		PID:      s.Yadro.PID(),
 		Zapret:   s.zapretDlyaOkna(),
+		Diagnoz:  s.Diagnoz(),
 	}
 	if t, err := s.Yadro.Trafik(); err == nil {
 		o.VverhBayt, o.VnizBayt = t.VverhBayt, t.VnizBayt

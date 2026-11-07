@@ -146,3 +146,18 @@ func OtpechatokSeti() string {
 	}
 	return strings.Join(shlyuzy, ",")
 }
+
+// FizicheskieAdaptery — версия для стенда: по адаптеру на каждый шлюз
+// маршрутов по умолчанию, без индекса и своего адреса (проба соединяется
+// обычным сокетом). Смысл и потребитель — в windows-версии.
+func FizicheskieAdaptery() []FizAdapter {
+	shlyuzy, err := shlyuzyIzTablicyMarshrutov("/proc/net/route")
+	if err != nil {
+		return nil
+	}
+	itog := make([]FizAdapter, 0, len(shlyuzy))
+	for _, sh := range shlyuzy {
+		itog = append(itog, FizAdapter{Shlyuz: sh})
+	}
+	return itog
+}

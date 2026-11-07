@@ -42,6 +42,7 @@ const (
 	vyklUchetTrafika    = "vykl.uchet_trafika"
 	vyklSrochnyyZhurnal = "vykl.srochnyy_zhurnal"
 	vyklZapisiYadra     = "vykl.zapisi_yadra"
+	vyklSamopodyom      = "vykl.samopodyom"
 )
 
 // ChastoZhurnal — период журнала до zhurnal.chasto_do (договор: каждые 10 минут).
@@ -113,6 +114,7 @@ func reestrDesktop() pult.Reestr {
 		vykl(vyklSrochnyyZhurnal, "срочная посылка журнала после неудачи связи"),
 		vykl(vyklZapisiYadra, "записи с полями из журнала ядра"),
 		vykl(vyklZapretAnthropic, "уровень 1 запрета мимо туннеля (Anthropic только через туннель)"),
+		vykl(vyklSamopodyom, "перезапуск ядра, когда сеть есть, а туннель мёртв (samopodyom.go)"),
 	}
 }
 
@@ -516,6 +518,7 @@ func (s *Sluzhba) Diagnostika() string {
 	dob("profil", yadro.OtpechatokKonfiga(hranenie.PutProfilya()))
 	dob("rezhim_kartiny", fmt.Sprint(s.rezhimKartiny()))
 	dob("set", fmt.Sprint(s.estSet()))
+	dob("diagnoz", s.Diagnoz())
 	// Запрет мимо туннеля — до avtorezhimZamok: zaslon сам берёт его через vhodZaslona.
 	vz := s.vhodZaslona()
 	dob("zapret", fmt.Sprintf("%s namerenie:%v doma:%v strogiy:%v perezapusk:%v",

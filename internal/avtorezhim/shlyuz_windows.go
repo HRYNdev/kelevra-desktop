@@ -383,3 +383,33 @@ func makStrokoy(b []byte) string {
 	}
 	return strings.Join(chasti, ":")
 }
+
+// FizicheskieAdaptery — физические адаптеры, у которых есть и свой IPv4, и
+// шлюз IPv4 (тот же отбор, что у OtpechatokSeti): индекс интерфейса, свой
+// адрес и шлюз. Пусто — сети нет.
+//
+// Зачем. Проба «физическая сеть есть» (internal/fizset) открывает соединение
+// сокетом, привязанным к такому адаптеру (IP_UNICAST_IF + свой адрес), — мимо
+// TUN и мимо ядра, так же, как ядро само ходит к узлам. Пакетов не шлёт:
+// одна таблица адаптеров системы.
+func FizicheskieAdaptery() []FizAdapter {
+	adaptery, err := poluchitSvedeniyaAdapterov()
+	if err != nil {
+		return nil
+	}
+	var itog []FizAdapter
+	for a := adaptery; a != nil; a = a.Next {
+		if a.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK || a.Type == windows.IF_TYPE_TUNNEL || a.Type == propVirtual {
+			continue
+		}
+		if svoyPoOpisaniyu(a) {
+			continue
+		}
+		gw, ip := pervyyShlyuzIPv4(&a.GatewayList), pervyyShlyuzIPv4(&a.IpAddressList)
+		if gw == "" || ip == "" {
+			continue
+		}
+		itog = append(itog, FizAdapter{Indeks: a.Index, IP: ip, Shlyuz: gw})
+	}
+	return itog
+}
