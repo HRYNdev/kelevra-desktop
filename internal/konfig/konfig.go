@@ -104,6 +104,9 @@ type Kartina struct {
 	// уводил. Ради журнала: «missing fakeip record» без этой строки не с чем
 	// сверить.
 	FakeipBylo string `json:"fakeip_bylo,omitempty"`
+	// UzlovBezDns — скольким выходам узлов поставлен резолвер hosts профиля
+	// (uzly_bez_dns.go): их имена ядро разрешает без DNS. Ради журнала.
+	UzlovBezDns int `json:"uzlov_bez_dns,omitempty"`
 	// Dom — в конфиге есть вход домой (эндпоинт «Дом», dom.go).
 	Dom bool `json:"dom,omitempty"`
 	// DomBeda — блок дома был, но вписан не целиком или не вписан; почему.
@@ -428,6 +431,8 @@ func Prigotovit(syroy []byte, v Vybor) ([]byte, Kartina, error) {
 	// сервер fakeip пережил согласование. Разбор — dns.go, DiapazonFakeipKlienta.
 	k.FakeipBylo = razvestiFakeipSRouterom(d)
 	okrepitPryamoyResolverVTunnele(d)
+	// Узлы — резолвером hosts профиля, без DNS (uzly_bez_dns.go).
+	k.UzlovBezDns = uzlamResolverIzProfilya(d)
 	// Вход домой — после всех правок правил и DNS: его правило обязано стоять
 	// раньше правила локальной сети и hijack-dns (их вставляют шаги выше, и
 	// soglasovatFakeip ставит hijack-dns в самое начало, если его не было).

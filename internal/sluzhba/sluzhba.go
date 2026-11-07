@@ -630,8 +630,8 @@ func (s *Sluzhba) primenitSobrannyy(gotovyy []byte, k konfig.Kartina) error {
 	// слова «mtu» в нём не было ни разу за всю историю, про наборы правил он
 	// не писал ничего вовсе, и разбирать жалобы «сайты по 10 секунд» и
 	// «списки не обновляются» было буквально нечем.
-	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s%s%s",
-		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), pripiskaVhoda(k), pripiskaFakeip(k), zametka(k.Zametka))
+	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s%s%s%s",
+		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), pripiskaVhoda(k), pripiskaFakeip(k), pripiskaUzlov(k), zametka(k.Zametka))
 	// Адреса туннеля и путь ядра могли смениться — запрет по ним же.
 	s.obnovitZaslon("конфиг собран")
 	return nil
@@ -647,6 +647,15 @@ func pripiskaFakeip(k konfig.Kartina) string {
 		return ""
 	}
 	return ", fakeip " + konfig.DiapazonFakeipKlienta + " (в профиле " + k.FakeipBylo + ")"
+}
+
+// pripiskaUzlov — сколько узлов ядро разрешает адресами из профиля, без DNS
+// (konfig, uzly_bez_dns.go).
+func pripiskaUzlov(k konfig.Kartina) string {
+	if k.UzlovBezDns == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", узлов без DNS %d", k.UzlovBezDns)
 }
 
 func pripiskaVhoda(k konfig.Kartina) string {
