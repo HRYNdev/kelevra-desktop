@@ -3182,7 +3182,8 @@ $("oplata-kopir-nomer").onclick = (e) => kopirovatOplatu(e.currentTarget, oplata
 // (фокус и видимость приходят парой).
 let oplataSilaKogda = 0;
 function oplataVernulis() {
-  const sila = !!(oplata.est && oplata.zhdet) && Date.now() - oplataSilaKogda > 5000;
+  // Вернулись к окну — срок могли поменять в панели: к серверу сразу (ждёт заявка — не чаще 5 с, иначе — минуты).
+  const sila = Date.now() - oplataSilaKogda > (oplata.est && oplata.zhdet ? 5000 : 60000);
   if (sila) oplataSilaKogda = Date.now();
   obnovitOplatu(sila);
 }
