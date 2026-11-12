@@ -105,6 +105,20 @@ func main() {
 		return
 	}
 
+	// --derzhat-zapret: держатель запрета мимо туннеля, пока обновлённая служба
+	// не поставит свой (zapret.go). Ни окна, ни ядра, ни трея.
+	if estArg(argDerzhatZapret) {
+		derzhatZapret(papka)
+		return
+	}
+
+	// --snyat-zapret: аварийный выход руками — снять запрет мимо туннеля
+	// (zapret.go). От администратора.
+	if estArg(argSnyatZapret) {
+		snyatZapretAvariyno(papka)
+		return
+	}
+
 	// --postavit-sluzhbu: эта копия поднята через UAC ровно ради одного дела —
 	// завести общую папку, перенести данные и зарегистрировать службу. Сделала
 	// и ушла; ни окна, ни ядра, ни трея тут не бывает.
@@ -771,6 +785,10 @@ func zhitZnachkom(papka, putZhurnala string) {
 	// этого процесса нет, без опроса она вечно «отключено».
 	go oprashivatSostoyanie(shagOprosaZnachka, func() (string, bool) { return kopiya.Nayti(papka) },
 		sostoyanieSluzhby, pometitZashchitu, stop)
+	// Напоминание об оплате пузырём (napominanie_oplaty.go).
+	go oprashivatNapominaniya(pervyyZahodNapominaniya, shagNapominaniya,
+		func() (string, bool) { return kopiya.Nayti(papka) },
+		napominanieSluzhby, pokazatOblachkoOplaty, otmetitNapominanieSluzhby, stop)
 	for {
 		versiya, nado := zhdatSignalIliPerezapusk(vyhod, perezapusk)
 		if !nado {
@@ -964,6 +982,11 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// состояние, и запусти мы приём параллельно, он успел бы увидеть
 	// «ничего не поднято» и поднять второе ядро рядом с живым.
 	s.PrinyatZhivoeYadro(ctx, sledTunnelyaPriStarte)
+	// Сторож ядра: работавшее ядро упало или зависло — поднять снова, под
+	// запретом и с отсечкой частоты, независимо от авторежима
+	// (internal/sluzhba/storozh_yadra.go). Сразу после приёма: принятое ядро
+	// тоже под его присмотром.
+	go s.StorozhYadra(ctx)
 	// Пульс X-Sostoyanie — до первого запроса к выдаче (подключение и
 	// профиль ниже уходят сразу): иначе первый /info едет без пульса, а
 	// следующий запрос бывает через час (internal/sluzhba PervyyPuls).
@@ -992,6 +1015,13 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// Ядро тоже сверяется со свежей подписанной сборкой и меняется при
 	// следующем подключении (internal/sluzhba/smena_yadra.go).
 	go s.SveryatYadro(ctx, periodFonovoyProverki())
+	// Перезапуск ядра, который нужен, но не срочно (новый профиль, новое
+	// ядро), — при смене сети, пробуждении, в тихое окно или по сроку
+	// (internal/sluzhba/otlozhennyy_perezapusk.go).
+	go s.VestiOtlozhennyyPerezapusk(ctx)
+	// Сеть есть (доказано мимо ядра), а туннель мёртв — перезапуск ядра по
+	// лестнице 45 с / 2 / 5 / 15 мин (internal/sluzhba/samopodyom.go).
+	go s.VestiSamopodyom(ctx)
 	// Раз в сутки, в конце дня, копия отдаёт свои журналы разработчику
 	// (internal/zhurnaly). Тот же ctx, что у двух горутин выше — defer
 	// otmena() гасит всех троих разом. Тумблер человека проверяется внутри,
@@ -1025,6 +1055,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	if s.Nastroyki.Avtorezhim {
 		s.ZapustitAvtorezhim(ctx)
 	}
+	// Без авторежима (ручной режим, автомат выключен пультом) связь на
+	// старте поднимает автоподключение — если человек был подключён до
+	// перезагрузки (internal/sluzhba/avtopodklyuch.go).
+	go s.PodklyuchitPriStarte(ctx)
 
 	log.Printf("служба слушает %s", url)
 	fmt.Println("KELEVRA-SLUZHBA", url)
@@ -1043,6 +1077,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 			}()
 			zapustitTrey(vyhodIzTreya)
 		}()
+		// Напоминание об оплате пузырём (napominanie_oplaty.go): значок в этом же процессе.
+		go oprashivatNapominaniya(pervyyZahodNapominaniya, shagNapominaniya,
+			func() (string, bool) { return url, true },
+			napominanieSluzhby, pokazatOblachkoOplaty, otmetitNapominanieSluzhby, nil)
 
 		zhdatSignal(vyhodIzTreya)
 	} else {
@@ -1064,7 +1102,11 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 	// защитой (см. ubratZnachokPriZavershenii в trey_windows.go/other.go).
 	ubratZnachokPriZavershenii()
 
-	_ = s.Yadro.Ostanovit()
+	// Не голый Ostanovit: перезапуск, шедший в эту секунду (самоизлечение
+	// «Дома», сторож), поднял бы ядро уже после ухода службы — сирота с
+	// туннелем без хозяина. Здесь ядро больше не запускается вовсе, идущий
+	// переход обрывается и дожидается (internal/sluzhba/perehody.go).
+	s.OstanovitYadroPriVyhode()
 	if sTreem {
 		// Системный прокси старой версии (прокси-режим до 0.6.77), если он
 		// ещё висит: уборка в сеансе человека. Чужой прокси не трогается.

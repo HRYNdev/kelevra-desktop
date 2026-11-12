@@ -25,6 +25,14 @@ func pokazatOblachkoObnovleniya(versiya string) bool {
 	return true
 }
 
+// pokazatOblachkoOplaty вне Windows — только след в журнале (см.
+// pokazatOblachkoObnovleniya выше).
+func pokazatOblachkoOplaty(tekst string) bool {
+	puzyrOplatyPoslednim.Store(true)
+	log.Printf("трей (не-Windows заглушка): пузырь об оплате: %s", tekst)
+	return true
+}
+
 // obnovitPodskazkuTreya вне Windows рисовать негде — значка нет. Строка в
 // журнале не формальность: метка «обновление ждёт» (metka_obnovleniya.go)
 // сама по себе от платформы не зависит, и живой linux-стенд

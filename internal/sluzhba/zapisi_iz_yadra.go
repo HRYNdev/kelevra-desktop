@@ -297,6 +297,11 @@ func (n *nablyudatelYadra) prochitatNovoe() ([]string, error) {
 
 // uchest — одна строка журнала ядра в счётчики и, если это отказ, в запись.
 func (n *nablyudatelYadra) uchest(stroka string) {
+	// Ядро пишет журнал само, без фильтра на трубе службы: шум обычного
+	// закрытия http2 отсеивается здесь (yadro.ShumVZhurnale).
+	if yadro.ShumVZhurnale(stroka) {
+		return
+	}
 	s := zapisi.Razobrat(stroka)
 	switch {
 	case s.Otkaz:

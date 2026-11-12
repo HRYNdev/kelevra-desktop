@@ -1,10 +1,13 @@
 package sluzhba
 
 import (
+	"context"
 	"os"
 	"testing"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/lzheyadro"
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 )
 
 // Ни одна проверка этого пакета не имеет права трогать настройки сети машины,
@@ -45,5 +48,11 @@ func TestMain(m *testing.M) {
 	// Установка обновления в этих проверках идёт на заглушках без ключа подписи;
 	// сама подпись проверяется в internal/obnovlenie и internal/podpis.
 	obnovlenie.TrebovatPodpis = false
-	os.Exit(m.Run())
+	// И ни одна не запускает «ядро» для проверки конфига (`check`): на месте
+	// ядра в проверках бывает сам тестовый exe. Проверки, которым нужна
+	// проверка конфига, ставят Sluzhba.proverkaKonfiga.
+	proveritYadrom = func(*yadro.Yadro, context.Context, []byte) error { return yadro.ErrProverkaNeSostoyalas }
+	kod := m.Run()
+	lzheyadro.Ubrat() // лже-ядро проверок слежки (storozh*_test.go)
+	os.Exit(kod)
 }

@@ -197,6 +197,10 @@ func pokazatOkno(url string) {
 	if err := w.Bind("kelevraPanel", zapustitOknoPaneli); err != nil {
 		log.Printf("кнопка панели сети не привязана: %v", err)
 	}
+	// «Открыть ссылку» в шторке оплаты — системным браузером человека.
+	if err := w.Bind("kelevraOtkrytSsylku", otkrytSsylkuOplaty); err != nil {
+		log.Printf("кнопка ссылки оплаты не привязана: %v", err)
+	}
 	// Кнопка «Дать права»: окно Windows с запросом прав просит ПРОЦЕСС ОКНА,
 	// а не служебное. Запрос от процесса без переднего плана Windows прячет
 	// мигающей кнопкой на панели задач, и человек его не видит; окно же у

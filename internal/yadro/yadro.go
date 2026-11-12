@@ -61,6 +61,14 @@ type Yadro struct {
 	// probaVydana — Smena уже у одного вызывающего (под zamokSmeny).
 	probaVydana bool
 	Klient      *http.Client
+	// PriPadenii — ядро, которое РАБОТАЛО, ушло само: процесс вышел или завис
+	// и погашен слежкой (slezhka.go). Зовётся в своей горутине и только после
+	// выхода процесса. nil — никто не слушает. Ставится до первого запуска.
+	PriPadenii func(Padenie)
+	// PorogZavisaniya, ShagSlezhki — слежка за Clash API работающего ядра;
+	// 0 — по умолчанию (PorogZavisaniyaPoUmolchaniyu, ShagSlezhkiPoUmolchaniyu).
+	PorogZavisaniya time.Duration
+	ShagSlezhki     time.Duration
 
 	zamok   sync.Mutex
 	derzh   *derzhatel
@@ -70,6 +78,12 @@ type Yadro struct {
 	// vhodSluzhby — адрес входа службы в конфиге ЖИВОГО ядра (см.
 	// VhodSluzhby): свой — из конфига на старте, принятый — из записки.
 	vhodSluzhby string
+	// zapreshcheno — ZapretitZapusk: служба уходит, новых ядер не будет.
+	zapreshcheno bool
+	// otpechatokRaboty — отпечаток конфига, по которому работает живое ядро
+	// (свой — из байтов, прочитанных до старта; принятый — из записки).
+	// По нему сверяется снимок konfig_v_rabote.json (KonfigVRabote).
+	otpechatokRaboty string
 }
 
 // VhodSluzhby — адрес входа службы (internal/zapasnoy) у работающего ядра;
@@ -98,6 +112,10 @@ type derzhatel struct {
 	cmd *exec.Cmd
 	// proc — дескриптор принятого процесса. У своего не нужен: им командует cmd.
 	proc *os.Process
+	// zavislo, molchal — слежка признала ядро зависшим и гасит его
+	// (slezhka.go); под Yadro.zamok.
+	zavislo bool
+	molchal time.Duration
 }
 
 // svoy — запускала ли ядро эта копия.
@@ -107,6 +125,11 @@ func (d *derzhatel) svoy() bool { return d != nil && d.cmd != nil }
 func (d *derzhatel) ubit() error {
 	if d == nil {
 		return nil
+	}
+	if d.pid == os.Getpid() {
+		// Принятое «ядро» под собственным номером — только в проверках
+		// (peredacha_test.go выдаёт себя за ядро). Гасить себя нельзя никогда.
+		return fmt.Errorf("pid %d — это сама служба, не гашу", d.pid)
 	}
 	if d.cmd != nil {
 		if d.cmd.Process == nil {
@@ -193,6 +216,11 @@ func (y *Yadro) EstBinar() bool {
 // пользователю нечего сказать, кроме «не работает».
 func (y *Yadro) Zapustit(ctx context.Context) error {
 	y.zamok.Lock()
+	if y.zapreshcheno {
+		y.zamok.Unlock()
+		log.Printf("запуск ядра не начат: служба останавливается")
+		return ErrOstanovleno
+	}
 	if y.derzh != nil {
 		// Два окна опрашивают /api/sostoyanie независимо и оба могут решить
 		// «надо подключиться» одновременно (см. internal/sluzhba/oblik). Цель
@@ -212,10 +240,14 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 		return fmt.Errorf("%w: нет конфига: сначала введите код доступа", ErrNeZapuskalos)
 	}
 
-	// Вход службы — из того самого конфига, с которым ядро стартует.
+	// Вход службы — из того самого конфига, с которым ядро стартует. Байты
+	// читаются один раз ДО старта: из них же отпечаток в записке и снимок
+	// конфига живого ядра (konfig_v_rabote.json). Читать файл снова после
+	// ответа API нельзя — его успевает переписать ежечасная пересборка.
 	var vhod string
-	if b, err := os.ReadFile(y.PutKonfiga()); err == nil {
-		vhod = zapasnoy.AdresVhoda(b)
+	telo, _ := os.ReadFile(y.PutKonfiga())
+	if len(telo) > 0 {
+		vhod = zapasnoy.AdresVhoda(telo)
 	}
 	cmd := exec.Command(y.Bin, "run", "-c", y.PutKonfiga(), "-D", y.Papka)
 	cmd.Dir = y.Papka
@@ -224,20 +256,24 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 		y.zamok.Unlock()
 		return err
 	}
-	// Вывод ядра идёт не прямо в файл, а через фильтр (filtr.go): он вырезает
-	// шум «http2: response body closed» (handoff 23.10, ~1000 строк в час) и
-	// пишет вместо него редкий итог, остальное — как есть и в том же порядке.
-	pr, pw := io.Pipe()
-	cmd.Stdout, cmd.Stderr = pw, pw
+	// Вывод ядра идёт ПРЯМО в файл: ядро получает описатель yadro.log и пишет
+	// в него само, без трубы через процесс службы. Раньше вывод шёл через
+	// io.Pipe и фильтр шума (filtr.go) в службе, и после обновления службы
+	// принятое ядро писало в трубу умершего процесса: yadro.log молчал до
+	// следующего перезапуска, а причина падения показывала хвост ПРОШЛОЙ жизни
+	// ядра (handoff 06.11). Шум «http2: response body closed» теперь
+	// отсеивается при чтении (ShumVZhurnale).
+	cmd.Stdout, cmd.Stderr = zhurnalYadra, zhurnalYadra
 	spryatatOkno(cmd) // на Windows у ядра не должно мигать чёрное окно
 	if err := cmd.Start(); err != nil {
-		pr.Close()
-		pw.Close()
 		zhurnalYadra.Close()
 		y.zamok.Unlock()
 		log.Printf("ядро не запустилось: %v", err)
 		return fmt.Errorf("ядро не запустилось: %w", err)
 	}
+	// Описатель уже у ядра (унаследован); свой экземпляр службе не нужен.
+	fmt.Fprintf(zhurnalYadra, "--- %s kelevra: ядро запущено, pid %d ---\n", time.Now().Format("2006-01-02 15:04:05"), cmd.Process.Pid)
+	zhurnalYadra.Close()
 	log.Printf("ядро запущено: pid %d, конфиг %s, Clash API %s", cmd.Process.Pid, y.PutKonfiga(), y.api())
 	svoy := &derzhatel{pid: cmd.Process.Pid, cmd: cmd}
 	y.derzh, y.sost, y.umer = svoy, Podnimaem, make(chan struct{})
@@ -245,26 +281,36 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 	umer := y.umer
 	y.zamok.Unlock()
 
-	filtrGotov := make(chan struct{})
-	go func() {
-		filtrLogYadra(pr, zhurnalYadra, time.Hour)
-		close(filtrGotov)
-	}()
-
 	go func() {
 		_ = cmd.Wait()
-		pw.Close()   // ядро умерло — фильтр дочитает хвост пайпа и завершится
-		<-filtrGotov // дождаться, чтобы итог «пропущено N» успел попасть в файл
-		pr.Close()
-		zhurnalYadra.Close()
+		kod := -1
+		if cmd.ProcessState != nil {
+			kod = cmd.ProcessState.ExitCode()
+		}
+		var padenie *Padenie
 		y.zamok.Lock()
-		if y.derzh == svoy { // не мы его остановили — значит упал
+		if y.derzh == svoy { // не мы его остановили — значит упал (или погашен зависшим)
+			rabotalo := y.sost == Rabotaet
 			y.derzh, y.sost = nil, Slomalos
-			y.poslLog = hvostLoga(filepath.Join(y.Papka, "yadro.log"))
-			log.Printf("ядро упало само: %s", y.poslLog)
+			y.poslLog = hvostLoga(filepath.Join(y.Papka, imyaZhurnala))
+			p := Padenie{PID: svoy.pid, Svoyo: true, Kod: kod, Zavislo: svoy.zavislo,
+				Molchal: svoy.molchal, Hvost: y.poslLog, Kogda: time.Now()}
+			if svoy.zavislo {
+				p.Kod = -1
+			}
+			log.Printf("%s: %s", p.Opisanie(), y.poslLog)
+			// Падение на старте (ещё «поднимаем») разбирает сам Zapustit —
+			// это отказ подъёма, а не смерть работавшего ядра.
+			if rabotalo {
+				padenie = &p
+			}
 		}
 		y.zamok.Unlock()
+		pripisatVZhurnal(y.Papka, fmt.Sprintf("процесс ядра pid %d вышел, код %d", svoy.pid, kod))
 		close(umer)
+		if padenie != nil {
+			y.soobshchitPadenie(*padenie)
+		}
 	}()
 
 	// Ждём API: раньше него ядро ещё ничего не проксирует.
@@ -280,12 +326,13 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 				log.Printf("запуск ядра прерван: ядро остановили посреди старта")
 				return ErrOstanovleno
 			}
-			hvost := hvostLoga(filepath.Join(y.Papka, "yadro.log"))
+			// Хвост снят горутиной Wait ДО строки службы о выходе.
+			hvost := y.PoslednyayaBeda()
 			log.Printf("ядро упало при старте: %s", hvost)
 			return fmt.Errorf("ядро упало при старте: %s", hvost)
 		case <-srok.Done():
 			_ = y.Ostanovit()
-			hvost := hvostLoga(filepath.Join(y.Papka, "yadro.log"))
+			hvost := hvostLoga(filepath.Join(y.Papka, imyaZhurnala))
 			log.Printf("ядро не ответило за 45 секунд: %s", hvost)
 			return fmt.Errorf("ядро не ответило за 45 секунд: %s", hvost)
 		case <-time.After(300 * time.Millisecond):
@@ -299,12 +346,17 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 				// работает. Записать её при старте процесса значило бы
 				// оставить преемнице приглашение принять ядро, которое ещё
 				// может упасть на подъёме.
+				otpechatok := OtpechatokKonfigaBayt(telo)
+				zapisatSnimok(y.Papka, telo)
+				y.zamok.Lock()
+				y.otpechatokRaboty = otpechatok
+				y.zamok.Unlock()
 				ZapisatPeredachu(y.Papka, Peredacha{
 					PID:         cmd.Process.Pid,
 					Bin:         y.Bin,
 					Api:         y.api(),
-					Otpechatok:  OtpechatokKonfiga(y.PutKonfiga()),
-					Adapter:     ImyaAdapteraIzKonfiga(y.PutKonfiga()),
+					Otpechatok:  otpechatok,
+					Adapter:     imyaAdapteraIzBayt(telo),
 					VhodSluzhby: vhod,
 					Kogda:       time.Now(),
 				})
@@ -312,6 +364,8 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 				if y.SbrasyvatKeshDns {
 					sbrositKeshDns("ядро встало")
 				}
+				// С этой минуты молчание Clash API — зависание (slezhka.go).
+				go y.sleditZaApi(svoy, umer)
 				return nil
 			}
 		}
@@ -322,7 +376,7 @@ func (y *Yadro) Zapustit(ctx context.Context) error {
 func (y *Yadro) Ostanovit() error {
 	y.zamok.Lock()
 	d, umer := y.derzh, y.umer
-	y.derzh, y.sost = nil, Stoit
+	y.derzh, y.sost, y.otpechatokRaboty = nil, Stoit, ""
 	y.zamok.Unlock()
 	if d == nil {
 		return nil
@@ -336,6 +390,7 @@ func (y *Yadro) Ostanovit() error {
 	// Записку снимаем ДО того, как гасим: если нас убьют посреди остановки,
 	// преемница не должна получить приглашение принять ядро, которого уже нет.
 	UbratPeredachu(y.Papka)
+	ubratSnimok(y.Papka)
 	if err := d.ubit(); err != nil {
 		log.Printf("не смог остановить ядро: %v", err)
 		return err
@@ -351,7 +406,15 @@ func (y *Yadro) Ostanovit() error {
 		}
 		return nil
 	}
-	srok := time.After(5 * time.Second)
+	// Принятое: ждём выхода процесса по ОС — пока он жив, жив и его адаптер
+	// с маршрутами (#168). ОС не отвечает — как раньше, по молчанию порта.
+	if _, _, znaem := processZhiv(d.pid); znaem {
+		if !zhdatVyhodaChuzhogo(d.pid, srokVyhoda) {
+			log.Printf("принятое ядро (pid %d) не вышло за %s после сигнала", d.pid, srokVyhoda)
+		}
+		return nil
+	}
+	srok := time.After(srokVyhoda)
 	for {
 		select {
 		case <-srok:
@@ -362,6 +425,16 @@ func (y *Yadro) Ostanovit() error {
 			}
 		}
 	}
+}
+
+// ZapretitZapusk — служба уходит (остановка, выключение Windows): с этой
+// минуты Zapustit ядро не запускает. Без этого перезапуск, шедший в миг
+// остановки, поднимал ядро уже после финального Ostanovit — сирота с
+// туннелем без хозяина. Обратного действия нет: процесс уходит.
+func (y *Yadro) ZapretitZapusk() {
+	y.zamok.Lock()
+	y.zapreshcheno = true
+	y.zamok.Unlock()
 }
 
 // rodYadra — «своё» или «принятое», одним словом для журнала. Разбирая
@@ -402,6 +475,14 @@ type ItogPriyoma struct {
 // Пустая строка — посчитать не вышло, тогда конфиг не сверяем вовсе: принять
 // работающее ядро всё равно лучше, чем оборвать связь из-за неизвестности.
 func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
+	ustarel := p.Otpechatok != "" && zhelaemyyOtpechatok != "" && p.Otpechatok != zhelaemyyOtpechatok
+	return y.PrinyatSResheniem(p, ustarel)
+}
+
+// PrinyatSResheniem — Prinyat, где «конфиг устарел, менять сейчас» решил
+// вызывающий (служба сверяет конфиги по смыслу, yadro.SravnitKonfigi):
+// smenit — вернуть KonfigUstarel вместо приёма живого ядра.
+func (y *Yadro) PrinyatSResheniem(p Peredacha, smenit bool) ItogPriyoma {
 	y.zamok.Lock()
 	zanyato := y.derzh != nil
 	y.zamok.Unlock()
@@ -433,7 +514,7 @@ func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
 	// Конфиг сверяем последним: две проверки выше отвечают «наше ли это
 	// ядро», а эта — «годится ли оно как есть». Разные вопросы и разные
 	// ответы вызывающему.
-	if p.Otpechatok != "" && zhelaemyyOtpechatok != "" && p.Otpechatok != zhelaemyyOtpechatok {
+	if smenit {
 		return ItogPriyoma{KonfigUstarel: true,
 			Pochemu: "ядро живо, но работает по прежнему конфигу"}
 	}
@@ -446,46 +527,14 @@ func (y *Yadro) Prinyat(p Peredacha, zhelaemyyOtpechatok string) ItogPriyoma {
 	prinyatoe := &derzhatel{pid: p.PID, proc: proc}
 	y.derzh, y.sost, y.umer = prinyatoe, Rabotaet, make(chan struct{})
 	y.vhodSluzhby = p.VhodSluzhby
+	y.otpechatokRaboty = p.Otpechatok
 	umer := y.umer
 	y.zamok.Unlock()
 
 	log.Printf("принял живое ядро прошлой копии: pid %d, адаптер %q — туннель не прерывался",
 		p.PID, p.Adapter)
-	go y.sleditZaPrinyatym(prinyatoe, umer)
+	go y.sleditZaApi(prinyatoe, umer)
 	return ItogPriyoma{Prinyato: true}
-}
-
-// sleditZaPrinyatym замечает смерть принятого ядра.
-//
-// Опросом, а не ожиданием: дожидаться можно только своего ребёнка, а принятое
-// ядро этой копии не ребёнок. Спрашиваем служебный порт, а не наличие процесса:
-// живой процесс с мёртвым портом для человека — то же самое, что мёртвое ядро,
-// трафик через него всё равно не идёт.
-func (y *Yadro) sleditZaPrinyatym(d *derzhatel, umer chan struct{}) {
-	const shag = 2 * time.Second
-	for {
-		time.Sleep(shag)
-		y.zamok.Lock()
-		nashe := y.derzh == d
-		y.zamok.Unlock()
-		if !nashe {
-			return // сами остановили или сменили — следить больше не за чем
-		}
-		if y.Zhivo() {
-			continue
-		}
-		y.zamok.Lock()
-		if y.derzh != d { // умерло ровно в тот миг, когда его меняли
-			y.zamok.Unlock()
-			return
-		}
-		y.derzh, y.sost = nil, Slomalos
-		y.poslLog = hvostLoga(filepath.Join(y.Papka, "yadro.log"))
-		y.zamok.Unlock()
-		log.Printf("принятое ядро (pid %d) перестало отвечать: %s", d.pid, y.poslLog)
-		close(umer)
-		return
-	}
 }
 
 // odinItotZhe — один ли это файл. Сравнение по чистому пути, а не по строке:
@@ -640,16 +689,31 @@ var cveta = regexp.MustCompile("\x1b\\[[0-9;]*m")
 // Если ядро само назвало причину падения строкой FATAL или ERROR — показываются
 // именно они: остальное в его логе INFO-шум про интерфейсы и порты, а человеку
 // в окне нужна одна строка, по которой видно, что случилось.
+//
+// Читается только конец файла: ядро пишет журнал само и неделями (до
+// PredelZhurnala), читать его целиком ради шести строк незачем. Шум
+// (ShumVZhurnale) в причину не берётся.
 func hvostLoga(put string) string {
-	b, err := os.ReadFile(put)
+	const dlina = 8192
+	f, err := os.Open(put)
 	if err != nil {
 		return ""
 	}
-	if len(b) > 8192 {
-		b = b[len(b)-8192:]
+	defer f.Close()
+	if st, err := f.Stat(); err == nil && st.Size() > dlina {
+		_, _ = f.Seek(st.Size()-dlina, io.SeekStart)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, dlina))
+	if err != nil {
+		return ""
 	}
 	chistyy := cveta.ReplaceAllString(strings.TrimSpace(string(b)), "")
-	stroki := strings.Split(chistyy, "\n")
+	var stroki []string
+	for _, str := range strings.Split(chistyy, "\n") {
+		if !ShumVZhurnale(str) {
+			stroki = append(stroki, str)
+		}
+	}
 	var vazhnye []string
 	for _, str := range stroki {
 		if strings.Contains(str, "FATAL") || strings.Contains(str, "ERROR") {

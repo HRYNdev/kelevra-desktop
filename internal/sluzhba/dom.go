@@ -334,8 +334,9 @@ func (s *Sluzhba) perezapustit(prichina string, pokolenie uint64, zhdat bool) {
 		s.zamokPodyoma.Lock()
 	}
 	defer s.zamokPodyoma.Unlock()
-	// Пока ждали очереди, человек мог отключить связь или она упала сама.
-	if !s.zashchitaPodnyata() {
+	// Пока ждали очереди, человек мог отключить связь или она упала сама;
+	// служба могла начать уход (perehody.go).
+	if s.uhodit.Load() || !s.zashchitaPodnyata() {
 		return
 	}
 	s.zamok.Lock()
@@ -349,21 +350,15 @@ func (s *Sluzhba) perezapustit(prichina string, pokolenie uint64, zhdat bool) {
 		log.Printf("дом: решение о связи сменилось — ядро не перезапускаю")
 		return
 	}
+	// Новый конфиг (блок «Дома», свежий профиль) ядро сперва проверяет само:
+	// отвергло — рабочее ядро не гасим (perezapusk_yadra.go).
+	if !s.konfigGodenDlyaPerezapuska("дом") {
+		return
+	}
 	log.Printf("дом: %s", prichina)
 	// От «погасить» до «туннель поднят» трафик мимо туннеля закрыт
 	// (zaslon_perezapuska.go): иначе программы в эти секунды уходят напрямую.
-	s.zakrytMimoTunnelya()
-	_ = s.Yadro.Ostanovit()
-	if s.pokolenieAvtorezhima() != pokolenie {
-		log.Printf("дом: пока гасил ядро, решение о связи сменилось — не поднимаю")
-		s.otkrytMimoTunnelya("решение о связи сменилось, ядро не поднимаю")
-		return
-	}
-	err := s.podnyatZashchituPodZamkom(context.Background())
-	if err != nil {
-		log.Printf("дом: связь после перезапуска ядра не поднялась: %v", err)
-	}
-	s.otkrytMimoTunnelyaPoItogu(err)
+	s.perezapustitPodZamkom(context.Background(), "дом", pokolenie)
 }
 
 // SleditZaDomom — отправка открытого ключа (пока сервер его не принял) и
@@ -697,10 +692,7 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 	if lechim {
 		return
 	}
-	if most == nil {
-		most = s.mostOtvechaet
-	}
-	zhiv, teg := most(ctx)
+	zhiv, teg := s.tunnelDlyaDoma(ctx, most)
 	t := s.chasyDoma()
 	d.mu.Lock()
 	zamolchal, ozhil := false, false
@@ -720,17 +712,17 @@ func (s *Sluzhba) lechitDom(ctx context.Context, neudach int) {
 		}
 	}
 	if !zhiv {
-		ot := d.mostMolchitS
-		if d.kogdaLechili.After(ot) {
-			ot = d.kogdaLechili
+		// Обычный туннель тоже плох (сеть, узлы): перезапуск ядра «Дом» не
+		// вернёт, только моргнёт TUN. Неделя 31.10–07.11 на ноуте: в 21 из
+		// 33 серий «Дом: нет связи» туннель в то же время был плох, а
+		// самолечение перезапускало ядро 23 раза. Ждём, пока туннель
+		// оживёт (тогда лестница с начала и лечение на ближайшей неудачной
+		// пробе «Дома»); раньше по часу молчания лечили всё равно — больше нет.
+		d.mu.Unlock()
+		if zamolchal {
+			log.Printf("дом: нет связи, и мост «%s» не отвечает — не лечу, пока не оживёт обычный туннель", teg)
 		}
-		if t.Sub(ot) < potolokLecheniyaDoma {
-			d.mu.Unlock()
-			if zamolchal {
-				log.Printf("дом: нет связи, и мост «%s» не отвечает — не лечу, пока не вернётся сеть", teg)
-			}
-			return
-		}
+		return
 	}
 	if d.pauzaLecheniya > 0 && t.Before(d.kogdaLechili.Add(d.pauzaLecheniya)) {
 		otpustit()
@@ -792,9 +784,12 @@ func (s *Sluzhba) yadroRabotaetDlyaDoma() bool {
 }
 
 // mostOtvechaet — жив ли выход, через который идёт мост «Дом» (detour
-// эндпоинта в конфиге на диске): замер ядра через этот выход, как у очереди
-// узлов. Не узнать (конфига или эндпоинта нет, Clash API не ответил —
-// ядро могло и зависнуть) — «жив»: тогда решает одна проба дома.
+// эндпоинта в конфиге на диске; в боевом профиле это селектор «Соединение»,
+// то есть обычный туннель): замер ядра через этот выход, как у очереди
+// узлов, ДВА раза подряд — один удачный замер посреди плохой сети не повод
+// рвать TUN (поле 31.10–07.11). Не узнать (конфига или эндпоинта нет,
+// Clash API не ответил — ядро могло и зависнуть, тогда перезапуск лечит и
+// его) — «жив»: тогда решает одна проба дома.
 func (s *Sluzhba) mostOtvechaet(ctx context.Context) (bool, string) {
 	if s.Yadro == nil {
 		return true, ""
@@ -807,15 +802,24 @@ func (s *Sluzhba) mostOtvechaet(ctx context.Context) (bool, string) {
 	if teg == "" {
 		return true, ""
 	}
-	zctx, otmena := context.WithTimeout(ctx, 12*time.Second)
-	defer otmena()
-	_, err = s.Yadro.ZameritZa(zctx, teg, 6*time.Second)
-	var mimo *url.Error
-	if err == nil || errors.As(err, &mimo) {
-		return true, teg
+	for i := 0; i < zamerovTunnelyaDlyaDoma; i++ {
+		zctx, otmena := context.WithTimeout(ctx, 12*time.Second)
+		_, err = s.Yadro.ZameritZa(zctx, teg, 6*time.Second)
+		otmena()
+		var mimo *url.Error
+		if errors.As(err, &mimo) {
+			return true, teg
+		}
+		if err != nil {
+			return false, teg
+		}
 	}
-	return false, teg
+	return true, teg
 }
+
+// zamerovTunnelyaDlyaDoma — сколько удачных замеров обычного туннеля подряд
+// нужно, чтобы лечить «Дом» перезапуском ядра.
+const zamerovTunnelyaDlyaDoma = 2
 
 // posleSna — машина проснулась: сбой до сна не в счёт. Пробы считаются
 // заново, а первое лечение после сна не ждёт паузы с прошлого сбоя.

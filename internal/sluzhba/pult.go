@@ -21,6 +21,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/pult"
 	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
+	"github.com/HRYNdev/kelevra-desktop/internal/zaslon"
 )
 
 // Пульт (договор KelevraServer docs/PULT.md): служба принимает настройки и
@@ -41,6 +42,7 @@ const (
 	vyklUchetTrafika    = "vykl.uchet_trafika"
 	vyklSrochnyyZhurnal = "vykl.srochnyy_zhurnal"
 	vyklZapisiYadra     = "vykl.zapisi_yadra"
+	vyklSamopodyom      = "vykl.samopodyom"
 )
 
 // ChastoZhurnal — период журнала до zhurnal.chasto_do (договор: каждые 10 минут).
@@ -66,6 +68,8 @@ func reestrDesktop() pult.Reestr {
 		{Imya: "funkcii.avtorezhim", Tip: pult.Flag, Umolchanie: "true", Gde: "автомат дома/не дома (выключатель, сразу)"},
 		{Imya: klyuchProbnyeYadra, Tip: pult.Flag, Umolchanie: "false", Gde: "брать пробные (prerelease) сборки ядра на сверке ядра (bratProbnyeYadra); выпуск ядра кольцом"},
 		{Imya: "kanal.dolgiy_opros", Tip: pult.Flag, Umolchanie: "false", Gde: "долгий опрос …/pult/zhdat (SleditZaDolgimOprosom)"},
+		{Imya: klyuchStrogiy, Tip: pult.Flag, Umolchanie: "false", Gde: "уровень 2: всё исходящее мимо туннеля закрыто, пока «подключено» вне дома, с момента старта службы (zaslon_perezapuska.go)"},
+		{Imya: klyuchAnthropicSeti, Tip: pult.Spisok, Min: 1, Max: 20, Umolchanie: strings.Join(zaslon.AnthropicPoUmolchaniyu, ", "), Gde: "адреса Anthropic (подсети) для уровня 1: к ним только из туннеля; негодные строки отбрасываются"},
 
 		// Периоды и сроки службы.
 		{Imya: "profil.period_min", Tip: pult.Celoe, Min: 15, Max: 1440, Umolchanie: "obnovlyat_min из настроек (60), не меньше 15", Gde: "плановое обновление профиля и сводки (ObnovlyatProfil)"},
@@ -96,6 +100,9 @@ func reestrDesktop() pult.Reestr {
 
 		// Очередь узлов своей сети (internal/ochered).
 		{Imya: "uzel.porog_otkazov", Tip: pult.Celoe, Min: 1, Max: 20, Umolchanie: fmt.Sprint(ochered.ProvalovDoPerehoda), Gde: "провалов подряд до перехода на следующий узел"},
+		// Отложенный перезапуск ядра (otlozhennyy_perezapusk.go).
+		{Imya: "yadro.otlozhit_ne_dolshe_ch", Tip: pult.Celoe, Min: 1, Max: 72, Umolchanie: fmt.Sprint(int(srokPoUmolchaniyu / time.Hour)), Gde: "отложенный перезапуск ядра — не позже, ч"},
+		{Imya: "yadro.tishina_min", Tip: pult.Celoe, Min: 1, Max: 240, Umolchanie: m(tishinaPoUmolchaniyu), Gde: "тихое окно для отложенного перезапуска ядра, мин"},
 		{Imya: "uzel.vozvrat_na_pervyy_min", Tip: pult.Celoe, Min: 1, Max: 120, Umolchanie: m(ochered.VozvratCherez), Gde: "сколько первый узел жив до возврата на него"},
 
 		// Выключатели подсистем, выключение которых безопасно.
@@ -106,6 +113,8 @@ func reestrDesktop() pult.Reestr {
 		vykl(vyklUchetTrafika, "учёт расхода этой машины (X-Device-Traffic)"),
 		vykl(vyklSrochnyyZhurnal, "срочная посылка журнала после неудачи связи"),
 		vykl(vyklZapisiYadra, "записи с полями из журнала ядра"),
+		vykl(vyklZapretAnthropic, "уровень 1 запрета мимо туннеля (Anthropic только через туннель)"),
+		vykl(vyklSamopodyom, "перезапуск ядра, когда сеть есть, а туннель мёртв (samopodyom.go)"),
 	}
 }
 
@@ -208,6 +217,9 @@ func (s *Sluzhba) prinyatSvodku(sv *podpiska.Svedeniya) {
 // primenitPult — то, что действует сразу при смене настроек (выключатели).
 // Остальное читается на своей границе (следующий цикл, следующий заход).
 func (s *Sluzhba) primenitPult() {
+	// Строгий режим, адреса Anthropic, выключатель уровня 1 и автомат — вход
+	// запрета мимо туннеля.
+	defer s.obnovitZaslon("пульт")
 	s.avtorezhimZamok.Lock()
 	idet := s.avtorezhimOtmena != nil
 	byl := s.avtorezhimOtpechatok
@@ -506,6 +518,11 @@ func (s *Sluzhba) Diagnostika() string {
 	dob("profil", yadro.OtpechatokKonfiga(hranenie.PutProfilya()))
 	dob("rezhim_kartiny", fmt.Sprint(s.rezhimKartiny()))
 	dob("set", fmt.Sprint(s.estSet()))
+	dob("diagnoz", s.Diagnoz())
+	// Запрет мимо туннеля — до avtorezhimZamok: zaslon сам берёт его через vhodZaslona.
+	vz := s.vhodZaslona()
+	dob("zapret", fmt.Sprintf("%s namerenie:%v doma:%v strogiy:%v perezapusk:%v",
+		s.zaslon.Primeneno().Kratko(), vz.Namerenie, vz.Doma, vz.Strogiy, s.zaslon.Perezapusk()))
 	s.avtorezhimZamok.Lock()
 	dob("avtomat", fmt.Sprintf("vkl:%v ruchnoy:%v razreshen:%v", s.Nastroyki.Avtorezhim, s.Nastroyki.RuchnoyVybor, s.avtomatRazreshen()))
 	if s.avtorezhimEkz != nil {

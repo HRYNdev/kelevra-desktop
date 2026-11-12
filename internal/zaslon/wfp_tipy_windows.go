@@ -2,7 +2,7 @@
 
 // Типы и константы WFP перенесены из wireguard-windows, пакет tunnel/firewall,
 // файл types_windows.go, тег v0.5.3 (golang.zx2c4.com/wireguard/windows):
-// только то, что нужно запрету на время перезапуска ядра.
+// только то, что нужно запрету мимо туннеля.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2019-2021 WireGuard LLC. All Rights Reserved.
@@ -43,6 +43,8 @@ type wtFwpmAction0 struct {
 
 // Поля условий (fwpmu.h).
 var (
+	// d9ee00de-c1ef-4617-bfe3-ffd8f5a08957
+	cFWPM_CONDITION_IP_LOCAL_ADDRESS = windows.GUID{Data1: 0xd9ee00de, Data2: 0xc1ef, Data3: 0x4617, Data4: [8]byte{0xbf, 0xe3, 0xff, 0xd8, 0xf5, 0xa0, 0x89, 0x57}}
 	// b235ae9a-1d64-49b8-a44c-5ff3d9095045
 	cFWPM_CONDITION_IP_REMOTE_ADDRESS = windows.GUID{Data1: 0xb235ae9a, Data2: 0x1d64, Data3: 0x49b8, Data4: [8]byte{0xa4, 0x4c, 0x5f, 0xf3, 0xd9, 0x09, 0x50, 0x45}}
 	// 3971ef2b-623e-4f9a-8cb1-6e79b806b9a7

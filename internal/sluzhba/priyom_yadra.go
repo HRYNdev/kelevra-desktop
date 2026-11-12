@@ -39,11 +39,22 @@ var nashiYadra = yadro.NashiYadra
 //
 // Три исхода, и каждый ведёт себя по-своему:
 //   - приняли: связь не прерывалась, эта копия теперь ей хозяин;
-//   - конфиг ядра устарел: связь тоже не прерываем, но меняем ядро ПЛАВНО —
-//     поднимаем новое рядом и гасим старое только после того, как новое
-//     заработало;
+//   - конфиг ядра устарел СРОЧНО (узел, на котором сидим, пропал; «Дом»;
+//     служебный порт — perezapusk_yadra.go): ядро меняется сразу
+//     (smenitYadroPlavno), если ядро новый конфиг принимает (check);
+//     устарел не срочно — принимаем, перезапуск отложен до естественного
+//     момента; разница ядру не важна (имя адаптера, сдвиг адресов, наборы
+//     правил) — просто принимаем;
 //   - принимать нечего или не наше: молча уходим, дальше всё как раньше.
 func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
+	// Ядро прошлой копии принято или поднято заново — служба держит
+	// «подключено» (запрет мимо туннеля, zaslon_perezapuska.go), даже в ручном
+	// режиме: иначе после обновления у ручного режима запрета не было бы.
+	defer func() {
+		if s.zashchitaPodnyata() {
+			s.ustanovitNamerenie(true, "ядро прошлой копии принято")
+		}
+	}()
 	// Какая версия работала до нас — запоминаем СРАЗУ, до всех развилок:
 	// ответить на этот вопрос можно только один раз, и любой выход ниже не
 	// должен оставить запись вчерашней.
@@ -78,14 +89,24 @@ func (s *Sluzhba) PrinyatZhivoeYadro(ctx context.Context, sledTunnelya string) {
 		return
 	}
 
-	itog := s.Yadro.Prinyat(p, s.otpechatokZhelaemogoKonfiga())
+	// Менять ли ядро сразу — по смыслу конфигов (perezapusk_yadra.go), а не
+	// по отпечатку: имя адаптера, сдвиг адресов, наборы правил и прочее, что
+	// ядру не важно, связь больше не рвут.
+	smenit, reshenie, rabota := s.reshenieDlyaPriyoma(p)
+	itog := s.Yadro.PrinyatSResheniem(p, smenit)
 	switch {
 	case itog.Prinyato:
-		// Принятое ядро работает ровно по желаемому конфигу (иначе его бы не
-		// приняли), значит и наборы читает из тех же файлов.
-		var zhelaemyy konfig.Vybor
-		s.dobavitPravilaIzKesha(&zhelaemyy, false)
-		s.zapomnitPravilaVRabote(zhelaemyy.PravilaIzKomplekta)
+		s.planirovatPoslePriyoma(reshenie)
+		// Из каких файлов принятое ядро читает наборы: по его конфигу, если
+		// он известен (с 07.11 ядро принимается и на не совпавшем по смыслу
+		// конфиге); иначе — по желаемому, как раньше.
+		if puti := pravilaIzKonfiga(rabota); puti != nil {
+			s.zapomnitPravilaVRabote(puti)
+		} else {
+			var zhelaemyy konfig.Vybor
+			s.dobavitPravilaIzKesha(&zhelaemyy, false)
+			s.zapomnitPravilaVRabote(zhelaemyy.PravilaIzKomplekta)
+		}
 		// Метку туннеля перезаписываем СВОИМ номером процесса: она отвечает
 		// на вопрос «чья это связь», и оставить в ней номер умершей копии
 		// значит соврать следующему запуску, который по ней решает, сирота
@@ -201,9 +222,11 @@ func (s *Sluzhba) prinyatSirotuPoObrazu(ctx context.Context, p yadro.Peredacha) 
 		if naydennoe.Bin == "" {
 			naydennoe.Bin = s.Yadro.Bin
 		}
-		itog := s.Yadro.Prinyat(naydennoe, s.otpechatokZhelaemogoKonfiga())
+		smenit, reshenie, _ := s.reshenieDlyaPriyoma(naydennoe)
+		itog := s.Yadro.PrinyatSResheniem(naydennoe, smenit)
 		switch {
 		case itog.Prinyato:
+			s.planirovatPoslePriyoma(reshenie)
 			log.Printf("своё ядро нашлось по образу под другим номером (pid %d, в записке %d) — принято", naydennoe.PID, p.PID)
 			// Записку переписываем на правду: следующая копия будет искать
 			// ядро по этому номеру.
@@ -438,10 +461,17 @@ func (s *Sluzhba) otpechatokZhelaemogoKonfiga() string {
 // Новое не поднялось — запрет снят, дальше поднимает авторежим, как после
 // любой неудачи подъёма.
 func (s *Sluzhba) smenitYadroPlavno(ctx context.Context, p yadro.Peredacha) {
+	// Смена — переход ядра, как любой другой (perehody.go): «погасить
+	// прежнее — поднять новое» целиком под общим замком.
+	if _, err := s.vzyatZamokPodyoma(ctx); err != nil {
+		log.Printf("ядро прошлой копии живо (pid %d), но конфиг сменился — смену не начал: %v", p.PID, err)
+		return
+	}
+	defer s.zamokPodyoma.Unlock()
 	log.Printf("ядро прошлой копии живо (pid %d), но конфиг сменился — меняю ядро: трафик мимо туннеля закрыт до подъёма нового", p.PID)
 	s.zakrytMimoTunnelya()
 	pogasitChuzhoe(p.PID)
-	err := s.PodnyatZashchitu(ctx)
+	err := s.podnyatZashchituPodZamkom(ctx)
 	s.otkrytMimoTunnelyaPoItogu(err)
 	if err != nil {
 		log.Printf("новое ядро после смены не поднялось (%v) — дальше поднимет авторежим", err)

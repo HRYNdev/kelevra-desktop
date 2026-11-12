@@ -193,11 +193,28 @@ type Sluzhba struct {
 	// zamokSmenyYadra — замена файла ядра (smena_yadra.go) идёт одна за раз:
 	// два одновременных подключения не должны менять файл друг под другом.
 	zamokSmenyYadra sync.Mutex
-	// zamokPodyoma — подъём связи (PodnyatZashchitu) и перезапуск ядра ради
-	// входа домой (perezapustitDlyaDoma) идут по одному: «погасить и поднять»
-	// не должно пересечься с чужим подъёмом. «Отключить» его не берёт —
-	// остановка прерывает подъём намеренно.
+	// zamokPodyoma — ОДИН замок на все переходы ядра (perehody.go): подъём
+	// связи (PodnyatZashchitu), перезапуск ради входа домой (perezapustit),
+	// перезапуск сторожем после падения (storozh_yadra.go), смена ядра при
+	// обновлении (smenitYadroPlavno), опускание авторежимом, запись config.json
+	// (PerestroitKonfig) и уход копии после установки обновления
+	// (PostavitNaydennoe) — по одному: «погасить и поднять» не должно
+	// пересечься ни с чужим подъёмом, ни с уходом процесса. «Отключить» его не
+	// ждёт — остановка прерывает подъём намеренно, — но после конца идущего
+	// перехода доводит своё (dovestiOtklyuchenie).
 	zamokPodyoma sync.Mutex
+	// uhodit — служба уходит (остановка, уступка места): новые переходы не
+	// начинаются (perehody.go).
+	uhodit atomic.Bool
+	// padeniya — падения работавшего ядра для сторожа (storozh_yadra.go);
+	// nil — служба собрана мимо Novaya, сторожа нет.
+	padeniya chan yadro.Padenie
+	// storozh — лестница перезапусков сторожа.
+	storozh storozhLestnica
+	// podklyucheniy — сколько раз человек нажал «Подключиться» (под
+	// avtorezhimZamok): «Отключить», ждущее конца перехода, не опускает связь,
+	// поднятую уже после него по слову человека (dovestiOtklyuchenie).
+	podklyucheniy uint64
 	// zhurnalStarayaPodpis — когда в журнал писали про сборку ядра с
 	// подписью прежнего формата (не чаще раза в сутки).
 	zhurnalStarayaPodpis time.Time
@@ -439,10 +456,37 @@ type Sluzhba struct {
 	// dom — вход домой (dom.go). nil — служба собрана мимо Novaya (проверки):
 	// конфиг без входа домой, как до него.
 	dom *domSluzhby
-	// zaslon — запрет трафика мимо туннеля на время перезапуска ядра
+	// zaslon — запрет трафика мимо туннеля, которым владеет служба
 	// (zaslon_perezapuska.go). nil или без системы — ничего не делает
 	// (служба собрана мимо Novaya, стенд, не Windows).
 	zaslon *zaslon.Zaslon
+	// namerenie — служба держит «подключено»; zaslonDoma — автомат последним
+	// решил «дома». Вход запрета (vhodZaslona). Под avtorezhimZamok.
+	namerenie  bool
+	zaslonDoma bool
+	// zapustitDerzhatelya — точка подмены запуска держателя запрета при
+	// обновлении (peredatZapretNovoyKopii). nil в бою — новый exe с флагом.
+	zapustitDerzhatelya func(put string) (snyat func(), err error)
+	// otlozh — отложенный перезапуск ядра (otlozhennyy_perezapusk.go).
+	otlozh otlozhennyyPerezapusk
+	// proverkaKonfiga — подмена `sing-box check` для проверок; nil —
+	// s.Yadro.Proverit (perezapusk_yadra.go).
+	proverkaKonfiga func(ctx context.Context, telo []byte) error
+	// vybranoDlyaStenda — подмена «что выбрано в группах живого ядра»; nil —
+	// Clash API.
+	vybranoDlyaStenda func(rabota []byte) map[string]string
+	// ocheredZhiv, ocheredKogda — последний замер текущего узла очередью
+	// узлов (под zamok): жив ли обычный туннель (dom_tunnel.go).
+	ocheredZhiv  bool
+	ocheredKogda time.Time
+	// konfigDoPeresborki — config.json, каким его застала эта копия на
+	// старте (до своей пересборки): конфиг живого ядра прошлой копии, если
+	// снимка нет.
+	konfigDoPeresborki []byte
+	// samo — ступень самоподъёма «сеть есть, туннель мёртв» (samopodyom.go).
+	samo samopodyomSost
+	// oplata — оплата подписки для окна (oplata.go).
+	oplata oplataSost
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -504,22 +548,53 @@ func Novaya() (*Sluzhba, error) {
 	s.nachatPult()
 	// Вход домой: ключ устройства и последний проверенный блок с диска.
 	s.nachatDom()
-	// Запрет трафика мимо туннеля на время перезапуска ядра.
+	// Запрет трафика мимо туннеля (намерение на старте, передача прошлой копии).
 	s.nachatZaslon()
+	// Сторож ядра: падения работавшего ядра — в очередь сторожа.
+	s.nachatStorozh()
+	// Конфиг, с которым, возможно, работает живое ядро прошлой копии, — до
+	// пересборки: по нему приём ядра судит, нужен ли перезапуск, если
+	// снимка konfig_v_rabote.json нет (perezapusk_yadra.go).
+	s.konfigDoPeresborki, _ = os.ReadFile(s.Yadro.PutKonfiga())
 	// Профиль мог остаться с прошлого запуска: пересобираем его под нынешние
 	// права, чтобы состояние в окне было правдой ещё до первого нажатия.
 	_ = s.PerestroitKonfig()
+	// Запрет — сразу, до приёма ядра и до автомата (адреса туннеля уже из
+	// собранного конфига); держатель прошлой копии отпускается после этого.
+	s.zaslonPosleStarta()
 	return s, nil
 }
 
 // PerestroitKonfig готовит рабочий конфиг ядра из профиля, который прислал
 // сервер: убирает поля, работающие только на телефоне, и вход прокси. Без
 // этого ядро на компьютере не стартует вообще.
-func (s *Sluzhba) PerestroitKonfig() error { return s.perestroit(konfig.Vybor{}) }
+//
+// Под zamokPodyoma: config.json пишут и подъём связи (perestroit под тем же
+// замком), и ежечасный профиль, и вход домой. Без общего замка они писали
+// один config.json.tmp разом (O_EXCL — один получал отказ), а ежечасная
+// пересборка могла перетереть конфиг, только что собранный подъёмом с именем
+// адаптера и правилами из кеша, — ядро стартовало не на том конфиге.
+// Зовущий не должен держать zamokPodyoma (внутри перехода — s.perestroit).
+func (s *Sluzhba) PerestroitKonfig() error {
+	s.zamokPodyoma.Lock()
+	defer s.zamokPodyoma.Unlock()
+	return s.perestroit(konfig.Vybor{})
+}
 
 // perestroit принимает отступления от обычной сборки конфига (имя адаптера,
 // правила с диска).
 func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
+	gotovyy, k, err := s.sobratKonfig(dop)
+	if err != nil {
+		return err
+	}
+	return s.primenitSobrannyy(gotovyy, k)
+}
+
+// sobratKonfig — конфиг ядра из профиля с отступлениями dop, в памяти, без
+// записи на диск (perestroit пишет; сверка «нужен ли перезапуск» и проверка
+// ядром — perezapusk_yadra.go — только смотрят).
+func (s *Sluzhba) sobratKonfig(dop konfig.Vybor) ([]byte, konfig.Kartina, error) {
 	dop.ClashSekret = sekretClash()
 	if dop.VhodSluzhby == nil {
 		dop.VhodSluzhby = vhodSluzhbyDlyaSborki()
@@ -532,12 +607,13 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	}
 	syroy, err := os.ReadFile(hranenie.PutProfilya())
 	if err != nil {
-		return err
+		return nil, konfig.Kartina{}, err
 	}
-	gotovyy, k, err := konfig.Prigotovit(syroy, dop)
-	if err != nil {
-		return err
-	}
+	return konfig.Prigotovit(syroy, dop)
+}
+
+// primenitSobrannyy — собранный конфиг на диск и в картину службы.
+func (s *Sluzhba) primenitSobrannyy(gotovyy []byte, k konfig.Kartina) error {
 	if err := s.Yadro.ZapisatKonfig(gotovyy); err != nil {
 		return err
 	}
@@ -556,8 +632,10 @@ func (s *Sluzhba) perestroit(dop konfig.Vybor) error {
 	// слова «mtu» в нём не было ни разу за всю историю, про наборы правил он
 	// не писал ничего вовсе, и разбирать жалобы «сайты по 10 секунд» и
 	// «списки не обновляются» было буквально нечем.
-	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s%s%s",
-		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), pripiskaVhoda(k), pripiskaFakeip(k), zametka(k.Zametka))
+	log.Printf("конфиг собран: режим %s, права %v, туннель в профиле %v, Clash API %s%s%s%s%s%s%s",
+		k.Rezhim, s.estPrava(), k.EstTunnel, k.ClashAdres, pripiskaMtu(k.MtuTun), pripiskaPravil(k), pripiskaVhoda(k), pripiskaFakeip(k), pripiskaUzlov(k), zametka(k.Zametka))
+	// Адреса туннеля и путь ядра могли смениться — запрет по ним же.
+	s.obnovitZaslon("конфиг собран")
 	return nil
 }
 
@@ -571,6 +649,15 @@ func pripiskaFakeip(k konfig.Kartina) string {
 		return ""
 	}
 	return ", fakeip " + konfig.DiapazonFakeipKlienta + " (в профиле " + k.FakeipBylo + ")"
+}
+
+// pripiskaUzlov — сколько узлов ядро разрешает адресами из профиля, без DNS
+// (konfig, uzly_bez_dns.go).
+func pripiskaUzlov(k konfig.Kartina) string {
+	if k.UzlovBezDns == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", узлов без DNS %d", k.UzlovBezDns)
 }
 
 func pripiskaVhoda(k konfig.Kartina) string {
@@ -611,7 +698,13 @@ func (s *Sluzhba) SohranitProfil(syroy []byte) error {
 	if naboryProfilya() != staryeNabory {
 		s.pnutSverku()
 	}
-	return s.PerestroitKonfig()
+	if err := s.PerestroitKonfig(); err != nil {
+		return err
+	}
+	// Ядро работает — нужен ли ему новый профиль сейчас, позже или вовсе
+	// не нужен (perezapusk_yadra.go).
+	s.posleNovogoProfilya()
+	return nil
 }
 
 // Adres — на чём слушать: только петля, наружу приложение не смотрит.
@@ -634,6 +727,10 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/sostoyanie", s.sostoyanie)
 	m.HandleFunc(pref+"/api/kod", s.kod)
 	m.HandleFunc(pref+"/api/panel", s.panelRuchka)
+	m.HandleFunc(pref+"/api/oplata", s.oplataRuchka)
+	m.HandleFunc(pref+"/api/oplatil", s.oplatilRuchka)
+	m.HandleFunc(pref+"/api/oplata_qr", s.oplataQrRuchka)
+	m.HandleFunc(pref+"/api/napominanie", s.napominanieRuchka)
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
 	// «Дать права»: просьба прав и установка службы Windows. Прежние имена
@@ -1190,16 +1287,32 @@ func (s *Sluzhba) PostavitNaydennoe() (versiya string, oshibka error) {
 		// ядро, жив и он.
 		//
 		// Записка уже на диске: её пишет Zapustit, когда ядро ответило.
+		//
+		// Уходим только между переходами ядра (perehody.go): посреди
+		// перезапуска («Дом», сторож, подъём) ядро погашено, запрет WFP живёт
+		// в сессии этого процесса, и уход оставил бы человека без туннеля и
+		// без запрета до подъёма службы диспетчером (Г1). Замок держится до
+		// самого выхода — новый переход не начнётся.
+		vzyal := s.zanyatPerehodyPeredVyhodom(srokPerehodaPeredVyhodom)
 		// Место чтения журнала ядра — до запуска новой копии: она начнёт
 		// с него, а эта уйдёт через os.Exit, не дожидаясь своей слежки.
 		s.ZapomnitMestoChteniyaYadra()
+		// Запрет мимо туннеля живёт в сессии этого процесса: до ухода — и до
+		// запуска новой копии, чтобы она застала передачу, — держателю
+		// (zaslon_perezapuska.go).
+		s.peredatZapretNovoyKopii(put, n.Versiya)
 		if err := s.PerezapuskPosleObnovleniya(put, pid); err != nil {
 			log.Printf("установка обновления: не поднял новую копию: %v", err)
+			// Копия работает дальше со своим запретом — держатель не нужен.
+			zaslon.OtpustitDerzhatelya(hranenie.Papka())
 			// Перезапуска не будет: окну больше нельзя говорить
 			// «перезапускается», а следующий тычок вправе ставить снова.
 			s.zamok.Lock()
 			s.postavlenoObnovlenie = ""
 			s.zamok.Unlock()
+			if vzyal {
+				s.zamokPodyoma.Unlock()
+			}
 			s.prodolzhitSlezhkuZaYadrom()
 			return
 		}
@@ -1687,6 +1800,8 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 						return int(v)
 					},
 					Vozvrat: func() time.Duration { return s.pult.Dlitelnost("uzel.vozvrat_na_pervyy_min", time.Minute, 0) },
+					// Жив ли обычный туннель — для решения о лечении «Дома» (dom.go).
+					Tekushchiy: s.otmetitTunnelPoOcheredi,
 				}
 				log.Printf("очередь узлов: %q, узлы %v", gruppa, uzly)
 			}
@@ -1762,8 +1877,15 @@ type otvetSostoyaniya struct {
 	// человеку (правка 20.08). До 23.08 её печатала шапка; на телефоне
 	// значка версии в шапке нет вовсе (эталон SimpleSettingsScreen.kt),
 	// поэтому версия переехала в подвал вкладки «Настройки» (index.html).
-	Versiya    string `json:"versiya"`
-	Sost       string `json:"sost"`
+	Versiya string `json:"versiya"`
+	Sost    string `json:"sost"`
+	// Zapret — какой запрет мимо туннеля стоит: «anthropic», «polnyy» или
+	// пусто (zaslon_perezapuska.go). Поле для диагностики, не надпись.
+	Zapret string `json:"zapret,omitempty"`
+	// Diagnoz — диагноз канала ступени самоподъёма: ok, tunnel_mertv,
+	// uzly_nedostupny, net_seti или пусто (samopodyom.go). Поле для
+	// диагностики, не надпись.
+	Diagnoz    string `json:"diagnoz,omitempty"`
 	KodEst     bool   `json:"kod_est"`
 	YadroEst   bool   `json:"yadro_est"`
 	KachaemBin bool   `json:"kachaem_yadro"`
@@ -2042,6 +2164,8 @@ func (s *Sluzhba) sostoyanie(w http.ResponseWriter, r *http.Request) {
 		YadroEst: s.Yadro.EstBinar(),
 		Beda:     s.Yadro.PoslednyayaBeda(),
 		PID:      s.Yadro.PID(),
+		Zapret:   s.zapretDlyaOkna(),
+		Diagnoz:  s.Diagnoz(),
 	}
 	if t, err := s.Yadro.Trafik(); err == nil {
 		o.VverhBayt, o.VnizBayt = t.VverhBayt, t.VnizBayt
@@ -2211,11 +2335,18 @@ func (s *Sluzhba) avtorezhimRuchka(w http.ResponseWriter, r *http.Request) {
 		// больше не включала автомат за него: с этой минуты решает он.
 		s.Nastroyki.Avtorezhim = false
 		s.Nastroyki.RuchnoyVybor = true
+		// С этой минуты связь после перезагрузки решает автоподключение:
+		// поднята сейчас — человек подключён (avtopodklyuch.go).
+		s.Nastroyki.Avtopodklyuch = s.zashchitaPodnyata()
 		if err := hranenie.Sohranit(s.Nastroyki); err != nil {
 			otdat(w, nil, err)
 			return
 		}
 		s.OstanovitAvtorezhim()
+		// Ручной режим: «подключено» — ровно когда туннель стоит; «дома»
+		// без автомата не значит ничего (vhodZaslona).
+		s.ustanovitNamerenie(s.zashchitaPodnyata(), "ручной режим")
+		s.obnovitZaslon("ручной режим")
 	}
 	otdat(w, map[string]any{"gotovo": true}, nil)
 }
@@ -2242,6 +2373,8 @@ func (s *Sluzhba) vklyuchitAvtorezhim(nachalo avtorezhim.Sostoyanie) error {
 		return err
 	}
 	s.zapustitAvtorezhimSNachala(context.Background(), nachalo)
+	// Автомат включён — служба держит «подключено» (дома запрет не стоит).
+	s.ustanovitNamerenie(true, "автомат включён")
 	return nil
 }
 
@@ -2433,6 +2566,14 @@ func (s *Sluzhba) zashchitaPodnyata() bool {
 // слепыми заходами), но правило avtorezhim.Nuzhno всё равно отвечает на неё
 // NeTrogat — неизвестность не повод дёргать чужой туннель.
 func (s *Sluzhba) avtorezhimKolbek(ctx context.Context, sost avtorezhim.Sostoyanie, povtor bool) {
+	// Запрет мимо туннеля — по обстановке: дома снят, вне дома стоит ещё
+	// до подъёма туннеля (уход из дома больше не течёт секундами подъёма).
+	switch sost {
+	case avtorezhim.Doma:
+		s.ustanovitDoma(true, "автомат: дома")
+	case avtorezhim.VneDoma:
+		s.ustanovitDoma(false, "автомат: вне дома")
+	}
 	switch avtorezhim.Nuzhno(sost, s.zashchitaPodnyata()) {
 	case avtorezhim.Opustit:
 		if povtor {
@@ -2444,19 +2585,24 @@ func (s *Sluzhba) avtorezhimKolbek(ctx context.Context, sost avtorezhim.Sostoyan
 		} else {
 			log.Printf("авторежим: обстановка «дома» — опускаю туннель")
 		}
+		// Переход ядра в работе (подъём, перезапуск «Дома», перезапуск
+		// сторожем) — не дёргаем его на полпути. Обстановка никуда не
+		// денется: авторежим ходит по кругу и опустит защиту следующим же
+		// заходом, когда переход кончится (ветка «приведение» выше как раз
+		// про это). А погасив ядро сейчас, мы получили бы провал подъёма и
+		// красную беду на ровном месте — замер 08.09. Раньше смотрели только
+		// podyomIdet, и перезапуск «Дома» между своим «погасить» и «поднять»
+		// был виден как «связи нет» (Г2): опустили бы, а он поднял бы снова.
 		s.zamok.Lock()
 		idet := s.podyomIdet
 		s.zamok.Unlock()
-		if idet {
-			// Подъём в работе — не дёргаем его на полпути. Обстановка никуда
-			// не денется: авторежим ходит по кругу и опустит защиту
-			// следующим же заходом, когда подъём кончится (ветка «приведение»
-			// выше как раз про это). А погасив ядро сейчас, мы получили бы
-			// провал подъёма и красную беду на ровном месте — замер 08.09.
-			log.Printf("авторежим: обстановка «дома», но связь сейчас поднимается — не мешаю, опущу следующим заходом")
+		if idet || !s.zamokPodyoma.TryLock() {
+			log.Printf("авторежим: обстановка «дома», но связь сейчас поднимается или перезапускается — не мешаю, опущу следующим заходом")
 			return
 		}
-		if err := s.OpustitZashchitu(); err != nil {
+		err := s.OpustitZashchitu()
+		s.zamokPodyoma.Unlock()
+		if err != nil {
 			log.Printf("авторежим: не опустил туннель: %v", err)
 		}
 	case avtorezhim.Podnyat:
@@ -2755,9 +2901,16 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 	// отменяемым ctx, см. avtorezhimKolbek). Кнопкам это ничего не меняет:
 	// podklyuchit зовёт PodnyatZashchitu с context.Background().
 	iskhodnyyZapusk := zapustit
+	otklyucheniyNaVhode := s.chisloOtklyucheniy()
 	zapustit = func(c context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("подъём связи прерван: %w", err)
+		}
+		// «Отключить», нажатое посреди перехода (в том числе в секунды
+		// подбора имени адаптера), — ядро не запускаем (Г4).
+		if s.chisloOtklyucheniy() != otklyucheniyNaVhode {
+			log.Printf("подъём связи прерван: нажато «Отключить»")
+			return OshibkaReshenieSmenilos
 		}
 		// Отказ самого запуска ядра помечается: только за него замена ядра
 		// может винить новую сборку (smena_yadra.go, novoeYadroVinovato).
@@ -2881,6 +3034,9 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 		s.zamok.Unlock()
 		zakrepitTunnel(tunImya)
 		s.otmetitPodyomYadra()
+		// Ядро поднято на свежем конфиге (и новом ядре, если оно было
+		// отложено): отложенный перезапуск больше не нужен.
+		s.otlozhennyyVypolnen()
 		// Узел, выбранный в окне ДО этого нажатия (или на прошлом сеансе),
 		// применяем прямо сейчас.
 		s.primenitSohranennyeUzly()
@@ -3107,6 +3263,12 @@ func (s *Sluzhba) Podklyuchit(ctx context.Context) error {
 	avtorezhimVklyuchen := s.Nastroyki.Avtorezhim
 	ruchnoyVybor := s.Nastroyki.RuchnoyVybor
 	s.avtorezhimZamok.Unlock()
+	// Нажатие — слово «подключено»: запрет мимо туннеля встаёт сразу, ещё до
+	// захода обстановки и подъёма ядра (дома его снимет решение «дома»).
+	s.ustanovitNamerenie(true, "«Подключиться»")
+	// Слово человека «хочу связь»: его же служба повторит после перезагрузки
+	// в ручном режиме (avtopodklyuch.go).
+	s.zapomnitPodklyuchenie()
 	// Заказанная схема (27.08): нажатие «Подключить» → программа сама
 	// определяет обстановку → дома «режим ожидания», вне дома включается.
 	// Одно нажатие — и дальше
@@ -3152,6 +3314,9 @@ func (s *Sluzhba) Podklyuchit(ctx context.Context) error {
 		log.Printf("«Подключиться»: пока спрашивал обстановку, человек решил иначе — туннель не трогаю")
 		return nil
 	}
+	if tekushcheye != avtorezhim.Neizvestno {
+		s.ustanovitDoma(tekushcheye == avtorezhim.Doma, "«Подключиться»: обстановка")
+	}
 
 	// Авторежим уже включён — «Подключиться» лишь подтверждает его тем же
 	// заходом обстановки, каким живёт сам автомат (nachalo), см. комментарий
@@ -3184,6 +3349,7 @@ func (s *Sluzhba) OpustitZashchitu() error {
 	// Связь опускают («Отключить», дома, уход копии): запрет на время
 	// перезапуска, если он стоит, снимается — трафик идёт напрямую.
 	s.otkrytMimoTunnelya("связь опущена")
+	s.obnovitZaslon("связь опущена")
 	err := s.Yadro.Ostanovit()
 	// Связи нет — правило NRPT для имён дома снимается (dom.go).
 	s.soglasovatNrpt()
@@ -3228,22 +3394,37 @@ func (s *Sluzhba) otklyuchit(w http.ResponseWriter, r *http.Request) {
 	// «Подключиться»), обязано после него замолчать.
 	s.avtorezhimPokolenie++
 	s.otklyucheniy++
+	// Отключился сам — после перезагрузки туннель сам не встаёт
+	// (avtopodklyuch.go).
+	s.Nastroyki.Avtopodklyuch = false
 	nastroyki := s.Nastroyki
 	s.avtorezhimZamok.Unlock()
+
+	// Слово «отключено»: запрет мимо туннеля снимается весь и сразу — это и
+	// есть аварийный выход, если человек без сети.
+	s.ustanovitNamerenie(false, "«Отключить»")
 
 	if bylVklyuchen {
 		log.Printf("«Отключить»: автомат приостановлен до следующего «Подключиться»")
 		s.OstanovitAvtorezhim()
-		if err := hranenie.Sohranit(nastroyki); err != nil {
-			// Настройку не сохранили — но автомат уже остановлен в этом
-			// процессе, а значит нажатие сработало здесь и сейчас. Валить
-			// из-за этого весь ответ нельзя: человек нажал «Отключить», и
-			// главное для него — что защита опустилась.
-			log.Printf("«Отключить»: не сохранил остановку автомата: %v", err)
-		}
+	}
+	if err := hranenie.Sohranit(nastroyki); err != nil {
+		// Настройку не сохранили — но автомат уже остановлен в этом
+		// процессе, а значит нажатие сработало здесь и сейчас. Валить
+		// из-за этого весь ответ нельзя: человек нажал «Отключить», и
+		// главное для него — что защита опустилась.
+		log.Printf("«Отключить»: не сохранил настройку: %v", err)
 	}
 
+	// Поколение и число подключений — ПОСЛЕ остановки автомата (она тоже
+	// растит поколение): по ним доведение ниже узнаёт, не сказал ли человек
+	// с тех пор чего-то нового.
+	pokolenie := s.pokolenieAvtorezhima()
+	podkl := s.chisloPodklyucheniy()
 	err := s.OpustitZashchitu()
+	// Переход ядра шёл (перезапуск «Дома», сторож, подъём) — после его конца
+	// опустить и то, что он успел поднять (perehody.go).
+	s.dovestiOtklyuchenie(pokolenie, podkl)
 	otdat(w, map[string]any{"gotovo": true}, err)
 }
 
@@ -3789,6 +3970,11 @@ func (s *Sluzhba) primenitObnovlennye(papka string, itog pravila.Itog) {
 	if len(zhdut) > 0 {
 		log.Printf("правила обновлены: %s — в работу пойдут при следующем подключении", strings.Join(zhdut, ", "))
 		s.zapomnitSvezhiePravila(len(zhdut))
+		// Ядро работает — «следующего подключения» можно ждать сутками:
+		// отложенный перезапуск (otlozhennyy_perezapusk.go).
+		if s.Yadro != nil && s.Yadro.PID() != "" {
+			s.otlozhitPerezapusk(prichinaPravila, "наборы правил ждут перезапуска ядра: "+strings.Join(zhdut, ", "), "")
+		}
 	}
 }
 
@@ -3850,6 +4036,15 @@ func (s *Sluzhba) ustupitMestoRuchka(w http.ResponseWriter, r *http.Request) {
 		s.ZapomnitMestoChteniyaYadra()
 		// Пауза — чтобы ответ успел уйти: тот же приём, что в PostavitNaydennoe.
 		time.Sleep(300 * time.Millisecond)
+		// Новых переходов не будет, идущий оборван и дождан (perehody.go):
+		// иначе перезапуск, шедший в эту секунду, поднял бы ядро уже после
+		// ухода — без хозяина. Замок переходов остаётся у уходящего.
+		s.zavershitPerehody(srokZavershitPerehody)
+		// Место за новой копией: свой запрет снимаем, её поставит она. После
+		// zavershitPerehody — временный запрет оборванного перезапуска уже
+		// снят им самим по итогу. Методы запрета берут s.zamok и
+		// s.avtorezhimZamok сами; zamokPodyoma им не мешает.
+		s.ustanovitNamerenie(false, "место уступлено новой копии")
 		_ = s.OpustitZashchitu()
 		if s.vyhod != nil {
 			s.vyhod()
