@@ -485,6 +485,8 @@ type Sluzhba struct {
 	konfigDoPeresborki []byte
 	// samo — ступень самоподъёма «сеть есть, туннель мёртв» (samopodyom.go).
 	samo samopodyomSost
+	// oplata — оплата подписки для окна (oplata.go).
+	oplata oplataSost
 }
 
 // srokOsvobozhdeniya — см. поле srokOsvobozhdeniyaDlyaStenda.
@@ -725,6 +727,9 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/sostoyanie", s.sostoyanie)
 	m.HandleFunc(pref+"/api/kod", s.kod)
 	m.HandleFunc(pref+"/api/panel", s.panelRuchka)
+	m.HandleFunc(pref+"/api/oplata", s.oplataRuchka)
+	m.HandleFunc(pref+"/api/oplatil", s.oplatilRuchka)
+	m.HandleFunc(pref+"/api/oplata_qr", s.oplataQrRuchka)
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
 	// «Дать права»: просьба прав и установка службы Windows. Прежние имена

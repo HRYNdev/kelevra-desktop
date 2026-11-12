@@ -1017,6 +1017,55 @@
      карточки «Выход»: акцент на этом экране уже занят кругом, и второе
      акцентное пятно в двух сантиметрах от него спорит с ним за глаз. */
   .vyhod-title.trevoga { color:var(--zhdem); }
+
+  /* ОПЛАТА (только платящим, /api/oplata). Строка «249 ₽ · Оплатить» — низ
+     карточки подписки (на телефоне — KDivider и строка внутри KCard): своя
+     кнопка, потому что кнопка в кнопке недопустима; стык без зазора, линия —
+     нижняя рамка карточки. */
+  #karta-podpiska.s-oplatoy { border-bottom-left-radius:0; border-bottom-right-radius:0; }
+  #karta-podpiska + #karta-oplata {
+    margin-top:0; border-top:0; border-top-left-radius:0; border-top-right-radius:0; padding:9px 12px;
+  }
+  #karta-podpiska.istekaet + #karta-oplata { border-color:rgba(224,163,74,.3); background:rgba(224,163,74,.07); }
+  .oplata-summa {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-weight:500; font-size:15px; color:var(--tekst);
+  }
+  .oplata-deystvie {
+    flex:none; padding:7px 16px; border-radius:var(--r-m);
+    background:var(--akcent); color:var(--akcent-tem); font-size:13.5px; font-weight:650;
+  }
+  .oplata-deystvie.zhdet { padding:7px 0; background:none; color:var(--tihiy); font-weight:400; font-size:13px; }
+  /* Шторка оплаты. */
+  .oplata-verh { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .oplata-cena {
+    font-family:"Montserrat", -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-weight:650; font-size:36px; letter-spacing:-.5px; color:var(--tekst); user-select:text;
+  }
+  .oplata-srok { margin-top:2px; font-size:14px; color:var(--tihiy); }
+  .oplata-srok.trevoga { color:var(--zhdem); }
+  .oplata-srok[hidden], #oplata-blok-qr[hidden], .oplata-soobshchenie[hidden], .oplata-zhdet[hidden] { display:none; }
+  .oplata-kopir {
+    flex:none; display:flex; padding:8px; background:none; color:var(--tihiy); border-radius:var(--r-s);
+  }
+  .oplata-kopir:hover { color:var(--tekst); background:var(--karta); }
+  .oplata-kopir svg { width:20px; height:20px; display:block; }
+  .oplata-kopir.gotovo { color:var(--norma); }
+  #oplata-blok-qr { margin-top:16px; }
+  .oplata-qr {
+    width:188px; height:188px; margin:0 auto 12px; padding:0; border-radius:var(--r-s);
+    background:#fff; overflow:hidden;
+  }
+  .oplata-qr img { width:100%; height:100%; display:block; image-rendering:pixelated; }
+  .oplata-ryad { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .oplata-ryad .ryad-znachenie { user-select:text; font-variant-numeric:tabular-nums; }
+  #shtorka-oplata-fon .karta { margin-top:16px; }
+  #oplata-oplatil { margin-top:16px; }
+  .oplata-zhdet {
+    margin-top:16px; padding:14px 0; text-align:center; font-size:15px; font-weight:500; color:var(--tihiy);
+  }
+  .oplata-soobshchenie { margin-top:8px; text-align:center; font-size:13px; color:var(--tihiy); }
+  .oplata-soobshchenie.beda-tekst { color:var(--beda); }
   .vyhod-title.molchit { color:var(--tihiy); }
 
   #zhurnal {
@@ -1165,6 +1214,11 @@
         </span>
         <span class="vyhod-shevron" aria-hidden="true">&#8250;</span>
       </button>
+      <!-- Оплата — только платящим (/api/oplata): «249 ₽» и «Оплатить» / «Оплата проверяется». -->
+      <button class="karta karta-vyhod" id="karta-oplata" type="button" hidden>
+        <span class="oplata-summa" id="oplata-stroka-summa"></span>
+        <span class="oplata-deystvie" id="oplata-stroka-deystvie"></span>
+      </button>
       <!-- Строки «человек · устройство» здесь БОЛЬШЕ НЕТ: 01.09 она переехала
            на свою вкладку «Подписка» отдельными строками «Кто пользуется» и
            «Устройство» — так же, как на телефоне, где главный экран эти два
@@ -1287,6 +1341,41 @@
           <span class="vyhod-shevron" aria-hidden="true">&#8250;</span>
         </button>
         <div class="podskazka-pod-kartoy" id="podp-panel-beda" hidden></div>
+      </div>
+    </div>
+
+    <!-- ШТОРКА ОПЛАТЫ (образец — шторка оплаты телефона, OplataEkran.kt): сумма, QR-код
+         ссылки на перевод (сканировать телефоном; QR собирает служба, /api/oplata_qr),
+         «Открыть ссылку» (системный браузер, window.kelevraOtkrytSsylku), номер,
+         «Я оплатил». -->
+    <div class="shtorka-fon" id="shtorka-oplata-fon" hidden>
+      <div class="shtorka">
+        <div class="shtorka-shapka">
+          <div class="shtorka-zagolovok">Оплата</div>
+          <button class="shtorka-krest" id="shtorka-oplata-zakryt" type="button" aria-label="Закрыть">&#10005;</button>
+        </div>
+        <div class="oplata-verh">
+          <span class="oplata-cena" id="oplata-cena"></span>
+          <button class="oplata-kopir" id="oplata-kopir-cena" type="button" aria-label="Копировать"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg></button>
+        </div>
+        <div class="oplata-srok" id="oplata-srok" hidden></div>
+        <div id="oplata-blok-qr" hidden>
+          <div class="oplata-qr"><img id="oplata-qr" alt="QR-код"></div>
+          <button class="tihaya" id="oplata-otkryt" type="button">Открыть ссылку</button>
+          <div class="oplata-soobshchenie" id="oplata-ssylka-beda" hidden>Ссылка не открылась</div>
+        </div>
+        <div class="karta karta-nastroyki" id="oplata-karta-nomer" hidden>
+          <div class="oplata-ryad">
+            <div class="ryad-svedeniya">
+              <span class="ryad-metka">Номер</span>
+              <span class="ryad-znachenie" id="oplata-nomer"></span>
+            </div>
+            <button class="oplata-kopir" id="oplata-kopir-nomer" type="button" aria-label="Копировать"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg></button>
+          </div>
+        </div>
+        <button class="glavnaya" id="oplata-oplatil" type="button">Я оплатил</button>
+        <div class="oplata-zhdet" id="oplata-zhdet" hidden>Оплата проверяется</div>
+        <div class="oplata-soobshchenie" id="oplata-itog" hidden></div>
       </div>
     </div>
 
@@ -2108,6 +2197,7 @@ function narisovatPodpisku(s) {
   // «без ограничений» было бы обещанием, которого никто не давал.
   subtitle.textContent = (s.podpiska_est || s.do_unix) ? zametkaPodpiski(s, istekaet) : "";
   $("karta-podpiska").className = "karta karta-vyhod" + (istekaet ? " istekaet" : "");
+  oplataNaKarte(s);
 
   const sost = $("podp-sostoyanie"), zametka = $("podp-zametka");
   if (s.podpiska_est) {
@@ -2638,6 +2728,7 @@ function obnovitKartuVyhoda() {
 const SHTORKI = [
   {fon: "shtorka-fon", krest: "shtorka-zakryt"},
   {fon: "shtorka-podpiska-fon", krest: "shtorka-podpiska-zakryt"},
+  {fon: "shtorka-oplata-fon", krest: "shtorka-oplata-zakryt"},
   {fon: "dialog-obnovleniya-fon", krest: "dialog-obnovleniya-zakryt"},
 ];
 
@@ -2668,6 +2759,7 @@ function zakrytShtorki() {
   if (!$("dialog-obnovleniya-fon").hidden && poslednee) {
     otlozhennayaVersiya = poslednee.novaya_versiya_dostupna || otlozhennayaVersiya;
   }
+  if (!$("shtorka-oplata-fon").hidden) zabytOtpravku();
   for (const sh of SHTORKI) $(sh.fon).hidden = true;
   $("tab-set").classList.remove("pod-shtorkoy");
 }
@@ -2886,6 +2978,134 @@ $("knopka-kopirovat").onclick = async () => {
   }
   setTimeout(() => { knopka.textContent = "Скопировать журнал"; }, 2500);
 };
+
+// ОПЛАТА (только платящим). Состояние — /api/oplata: служба спрашивает сервер
+// только когда окно на экране и пора (час; ждущая заявка — 5 минут), окно
+// зовёт её при показе и раз в минуту. Неплатящим est=false — ничего нового.
+let oplata = {est: false};
+
+function oplataSrokTekst(o) {
+  if (o.srok === "konchilsya") return "Подписка закончилась";
+  if (!o.srok_unix) return "";
+  return "Подписка до " + new Date(o.srok_unix * 1000)
+      .toLocaleDateString("ru-RU", {day: "2-digit", month: "2-digit"});
+}
+function oplataZametno(o) { return o.est && (o.srok === "skoro" || o.srok === "konchilsya"); }
+
+// Карточка подписки платящего: строка оплаты снизу; срок ≤3 суток или истёк —
+// карточка цветом предупреждения и срок словами вместо «Активна».
+function oplataNaKarte(s) {
+  const o = oplata, karta = $("karta-podpiska"), stroka = $("karta-oplata");
+  stroka.hidden = !o.est;
+  karta.classList.toggle("s-oplatoy", !!o.est);
+  if (!o.est) return;
+  const srok = oplataSrokTekst(o);
+  if (oplataZametno(o) || (!s.podpiska_est && srok)) {
+    $("podpiska-title").textContent = srok;
+  }
+  if (oplataZametno(o)) {
+    karta.classList.add("istekaet");
+    $("podpiska-title").className = "vyhod-title trevoga";
+    // Дата уже в заголовке — под ним только трафик.
+    $("podpiska-subtitle").textContent = s.podpiska_est ? zametkaPodpiski({...s, do_unix: 0}) : "";
+  }
+  $("oplata-stroka-summa").textContent = o.cena + " ₽";
+  const d = $("oplata-stroka-deystvie");
+  d.textContent = o.zhdet ? "Оплата проверяется" : "Оплатить";
+  d.className = "oplata-deystvie" + (o.zhdet ? " zhdet" : "");
+}
+
+function narisovatShtorkuOplaty() {
+  const o = oplata;
+  if (!o.est) {
+    if (!$("shtorka-oplata-fon").hidden) zakrytShtorki();
+    return;
+  }
+  $("oplata-cena").textContent = o.cena + " ₽";
+  const srok = oplataSrokTekst(o), sr = $("oplata-srok");
+  sr.textContent = srok; sr.hidden = !srok;
+  sr.className = "oplata-srok" + (oplataZametno(o) ? " trevoga" : "");
+  $("oplata-blok-qr").hidden = !o.ssylka;
+  if (o.ssylka) {
+    const src = koren + "api/oplata_qr?u=" + encodeURIComponent(o.ssylka);
+    if ($("oplata-qr").getAttribute("src") !== src) $("oplata-qr").setAttribute("src", src);
+  }
+  $("oplata-nomer").textContent = o.nomer || "";
+  $("oplata-karta-nomer").hidden = !o.nomer;
+  $("oplata-oplatil").hidden = !!o.zhdet;
+  $("oplata-oplatil").disabled = o.otpravka === "idet";
+  $("oplata-zhdet").hidden = !o.zhdet;
+  const itog = $("oplata-itog");
+  const slova = {uzhe: "Уже отправлено", net_svyazi: "Нет связи с сервером"};
+  itog.textContent = o.zhdet ? "" : (slova[o.otpravka] || "");
+  itog.hidden = !itog.textContent;
+  itog.className = "oplata-soobshchenie" + (o.otpravka === "net_svyazi" ? " beda-tekst" : "");
+}
+
+function prinyatOplatu(d) {
+  oplata = d && typeof d === "object" ? d : {est: false};
+  if (poslednee) narisovatPodpisku(poslednee);
+  narisovatShtorkuOplaty();
+}
+
+let oplataIdet = false;
+async function obnovitOplatu(sila) {
+  if (document.hidden || oplataIdet) return;
+  oplataIdet = true;
+  try { prinyatOplatu(await api("oplata" + (sila ? "?sila=1" : ""))); } catch (e) {}
+  oplataIdet = false;
+}
+
+function zabytOtpravku() {
+  $("oplata-ssylka-beda").hidden = true;
+  if (oplata.otpravka && oplata.otpravka !== "idet") {
+    oplata = {...oplata, otpravka: ""};
+    narisovatShtorkuOplaty();
+  }
+  api("oplata?zabyt=1").catch(() => {});
+}
+
+$("karta-oplata").onclick = () => {
+  narisovatShtorkuOplaty();
+  otkrytShtorku("shtorka-oplata-fon");
+  obnovitOplatu(false);
+};
+
+$("oplata-oplatil").onclick = async () => {
+  oplata = {...oplata, otpravka: "idet"};
+  narisovatShtorkuOplaty();
+  try {
+    prinyatOplatu(await api("oplatil", {}));
+  } catch (e) {
+    oplata = {...oplata, otpravka: "net_svyazi"};
+    narisovatShtorkuOplaty();
+  }
+};
+
+$("oplata-otkryt").onclick = async () => {
+  let vyshlo = false;
+  if (typeof window.kelevraOtkrytSsylku === "function" && oplata.ssylka) {
+    try { vyshlo = await window.kelevraOtkrytSsylku(oplata.ssylka); } catch (e) {}
+  }
+  $("oplata-ssylka-beda").hidden = !!vyshlo;
+};
+
+const ZNACHOK_KOPIR = $("oplata-kopir-cena").innerHTML;
+const ZNACHOK_GOTOVO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+async function kopirovatOplatu(knopka, tekst) {
+  if (!tekst) return;
+  try { await navigator.clipboard.writeText(tekst); } catch (e) { return; }
+  knopka.innerHTML = ZNACHOK_GOTOVO; knopka.classList.add("gotovo");
+  setTimeout(() => { knopka.innerHTML = ZNACHOK_KOPIR; knopka.classList.remove("gotovo"); }, 1500);
+}
+$("oplata-kopir-cena").onclick = (e) => kopirovatOplatu(e.currentTarget, String(oplata.cena || ""));
+$("oplata-kopir-nomer").onclick = (e) => kopirovatOplatu(e.currentTarget, oplata.nomer || "");
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden) obnovitOplatu(false); });
+window.addEventListener("focus", () => obnovitOplatu(false));
+obnovitOplatu(false);
+setInterval(() => obnovitOplatu(false), 60000);
 
 obnovit();
 obnovitUzly();
