@@ -195,6 +195,10 @@ type Nastroyki struct {
 	// (строка не совпадает) при этом обязана прозвучать заново — поле не
 	// запирает уведомления навсегда, а помнит только последнюю названную.
 	ObyavlennoeObnovlenie string `json:"obyavlennoe_obnovlenie,omitempty"`
+	// NapomnenoOplaty — последнее показанное напоминание об оплате
+	// (podpiska.NapominanieOplaty: «skoro:<срок>» / «konchilsya:<срок>»): то же
+	// напоминание второй раз не показывается, в том числе после перезапуска.
+	NapomnenoOplaty string `json:"napomneno_oplaty,omitempty"`
 	// PravaZaprosheny — приложение уже один раз само спросило права
 	// администратора (см. internal/sluzhba.go: zaprositPravaAvtomaticheskiEsliNado)
 	// при первом успешном подключении, вместо того чтобы ждать, пока человек

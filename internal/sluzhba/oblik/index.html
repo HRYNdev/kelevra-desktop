@@ -1066,6 +1066,12 @@
   }
   .oplata-soobshchenie { margin-top:8px; text-align:center; font-size:13px; color:var(--tihiy); }
   .oplata-soobshchenie.beda-tekst { color:var(--beda); }
+  /* Блок «Оплата» в шторке «Подписка» (только платящим): срок, цена, «Оплатить»,
+     история подтверждённых оплат строками карточки. */
+  #podp-karta-oplata .ryad-znachenie { margin-top:0; }
+  .ryad-znachenie.trevoga { color:var(--zhdem); }
+  #podp-oplatit { margin-top:12px; }
+  .oplata-istoriya { font-size:14px; color:var(--tekst); font-variant-numeric:tabular-nums; user-select:text; }
   .vyhod-title.molchit { color:var(--tihiy); }
 
   #zhurnal {
@@ -1214,7 +1220,8 @@
         </span>
         <span class="vyhod-shevron" aria-hidden="true">&#8250;</span>
       </button>
-      <!-- Оплата — только платящим (/api/oplata): «249 ₽» и «Оплатить» / «Оплата проверяется». -->
+      <!-- Оплата — только платящим (/api/oplata) и только когда нужна: срок ≤ 3 суток или
+           вышел — «249 ₽» и «Оплатить»; заявка ждёт — «Оплата проверяется». -->
       <button class="karta karta-vyhod" id="karta-oplata" type="button" hidden>
         <span class="oplata-summa" id="oplata-stroka-summa"></span>
         <span class="oplata-deystvie" id="oplata-stroka-deystvie"></span>
@@ -1301,6 +1308,22 @@
             <span class="ryad-podpis" id="podp-zametka" hidden></span>
           </div>
         </div>
+
+        <!-- Оплата — только платящим (/api/oplata, решение 12.11: оплата живёт здесь):
+             срок, цена, «Оплата проверяется», «Оплатить» (шторка оплаты), история. -->
+        <div class="zagolovok-bloka" id="podp-zag-oplata" hidden>Оплата</div>
+        <div class="karta karta-nastroyki" id="podp-karta-oplata" hidden>
+          <div class="ryad-svedeniya nastroyki-ryad">
+            <span class="ryad-znachenie" id="podp-oplata-srok"></span>
+            <span class="ryad-podpis" id="podp-oplata-cena" hidden></span>
+          </div>
+          <div class="ryad-svedeniya nastroyki-ryad" id="podp-oplata-zhdet" hidden>
+            <span class="ryad-znachenie molchit">Оплата проверяется</span>
+          </div>
+        </div>
+        <button class="glavnaya" id="podp-oplatit" type="button" hidden>Оплатить</button>
+        <div class="zagolovok-bloka" id="podp-zag-istoriya" hidden>История</div>
+        <div class="karta karta-nastroyki" id="podp-karta-istoriya" hidden></div>
 
         <div class="karta karta-nastroyki" id="podp-karta-kto" hidden>
           <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-chelovek" hidden>
@@ -2979,40 +3002,90 @@ $("knopka-kopirovat").onclick = async () => {
   setTimeout(() => { knopka.textContent = "Скопировать журнал"; }, 2500);
 };
 
-// ОПЛАТА (только платящим). Состояние — /api/oplata: служба спрашивает сервер
-// только когда окно на экране и пора (час; ждущая заявка — 5 минут), окно
-// зовёт её при показе и раз в минуту. Неплатящим est=false — ничего нового.
+// ОПЛАТА (только платящим). Состояние — /api/oplata: служба спрашивает сервер,
+// когда окно на экране и пора (час; ждущая заявка — 30 секунд); окно зовёт её
+// при показе, раз в минуту и, пока заявка ждёт, каждые 5 секунд. Решение 12.11:
+// оплата живёт в шторке «Подписка»; на главной строка оплаты — только когда срок
+// ≤ 3 суток, вышел или заявка ждёт. Неплатящим est=false — ничего нового.
 let oplata = {est: false};
 
+// ДД.ММ или ДД.ММ.ГГГГ.
+function oplataData(unix, sGodom) {
+  return new Date(unix * 1000).toLocaleDateString("ru-RU", sGodom
+      ? {day: "2-digit", month: "2-digit", year: "numeric"} : {day: "2-digit", month: "2-digit"});
+}
+// Шторка оплаты: «Подписка до ДД.ММ» / «Подписка закончилась».
 function oplataSrokTekst(o) {
   if (o.srok === "konchilsya") return "Подписка закончилась";
   if (!o.srok_unix) return "";
-  return "Подписка до " + new Date(o.srok_unix * 1000)
-      .toLocaleDateString("ru-RU", {day: "2-digit", month: "2-digit"});
+  return "Подписка до " + oplataData(o.srok_unix);
+}
+// Карточка подписки: «Оплачено до ДД.ММ», ≤ 3 суток — «Подписка до ДД.ММ»,
+// вышел — «Подписка закончилась»; бессрочно — "" (остаётся «Активна»).
+function oplataSrokNaKarte(o) {
+  if (o.srok === "konchilsya") return "Подписка закончилась";
+  if (!o.srok_unix) return "";
+  return (o.srok === "skoro" ? "Подписка до " : "Оплачено до ") + oplataData(o.srok_unix);
 }
 function oplataZametno(o) { return o.est && (o.srok === "skoro" || o.srok === "konchilsya"); }
+function oplataStrokaNuzhna(o) { return o.est && (!!o.zhdet || oplataZametno(o)); }
 
-// Карточка подписки платящего: строка оплаты снизу; срок ≤3 суток или истёк —
-// карточка цветом предупреждения и срок словами вместо «Активна».
+// Карточка подписки платящего: срок заголовком; строка оплаты снизу — только
+// когда нужна (oplataStrokaNuzhna); срок ≤ 3 суток или вышел — цвет предупреждения.
 function oplataNaKarte(s) {
+  narisovatBlokOplaty();
   const o = oplata, karta = $("karta-podpiska"), stroka = $("karta-oplata");
-  stroka.hidden = !o.est;
-  karta.classList.toggle("s-oplatoy", !!o.est);
+  const nuzhna = oplataStrokaNuzhna(o);
+  stroka.hidden = !nuzhna;
+  karta.classList.toggle("s-oplatoy", nuzhna);
   if (!o.est) return;
-  const srok = oplataSrokTekst(o);
-  if (oplataZametno(o) || (!s.podpiska_est && srok)) {
+  const srok = oplataSrokNaKarte(o), zametno = oplataZametno(o);
+  // «Приостановлена» уступает только предупреждению о сроке.
+  if (srok && (zametno || !s.podpiska_est || s.podpiska_aktivna)) {
     $("podpiska-title").textContent = srok;
-  }
-  if (oplataZametno(o)) {
-    karta.classList.add("istekaet");
-    $("podpiska-title").className = "vyhod-title trevoga";
+    $("podpiska-title").className = "vyhod-title" + (zametno ? " trevoga" : "");
     // Дата уже в заголовке — под ним только трафик.
     $("podpiska-subtitle").textContent = s.podpiska_est ? zametkaPodpiski({...s, do_unix: 0}) : "";
   }
-  $("oplata-stroka-summa").textContent = o.cena + " ₽";
+  // Рамка предупреждения у платящего — по сроку оплаты, а не по сроку профиля (≤ 7 суток).
+  if (o.srok_unix) karta.classList.toggle("istekaet", zametno);
+  if (!nuzhna) return;
+  $("oplata-stroka-summa").textContent = o.cena ? o.cena + " ₽" : "";
   const d = $("oplata-stroka-deystvie");
   d.textContent = o.zhdet ? "Оплата проверяется" : "Оплатить";
   d.className = "oplata-deystvie" + (o.zhdet ? " zhdet" : "");
+}
+
+// Блок «Оплата» в шторке «Подписка»: срок, «249 ₽ в месяц», «Оплата
+// проверяется», «Оплатить» (всегда), история «ДД.ММ.ГГГГ · 249 ₽ · до ДД.ММ».
+function narisovatBlokOplaty() {
+  const o = oplata;
+  for (const id of ["podp-zag-oplata", "podp-karta-oplata", "podp-oplatit"]) $(id).hidden = !o.est;
+  const istoriya = o.est && Array.isArray(o.istoriya) ? o.istoriya : [];
+  $("podp-zag-istoriya").hidden = !istoriya.length;
+  $("podp-karta-istoriya").hidden = !istoriya.length;
+  if (!o.est) return;
+  const cena = o.cena ? o.cena + " ₽ в месяц" : "";
+  const srok = o.srok === "konchilsya" ? "Подписка закончилась"
+      : (o.srok_unix ? "Оплачено до " + oplataData(o.srok_unix) : "");
+  const znach = $("podp-oplata-srok"), podpis = $("podp-oplata-cena");
+  znach.textContent = srok || cena;
+  znach.className = "ryad-znachenie" + (oplataZametno(o) ? " trevoga" : "");
+  podpis.textContent = srok ? cena : "";
+  podpis.hidden = !podpis.textContent;
+  $("podp-oplata-zhdet").hidden = !o.zhdet;
+  const karta = $("podp-karta-istoriya");
+  karta.textContent = "";
+  for (const z of istoriya) {
+    if (!z || !z.data_unix) continue;
+    const kuski = [oplataData(z.data_unix, true)];
+    if (z.summa) kuski.push(z.summa + " ₽");
+    if (z.do_unix) kuski.push("до " + oplataData(z.do_unix));
+    const ryad = document.createElement("div");
+    ryad.className = "nastroyki-ryad oplata-istoriya";
+    ryad.textContent = kuski.join(" · ");
+    karta.appendChild(ryad);
+  }
 }
 
 function narisovatShtorkuOplaty() {
@@ -3045,6 +3118,7 @@ function narisovatShtorkuOplaty() {
 function prinyatOplatu(d) {
   oplata = d && typeof d === "object" ? d : {est: false};
   if (poslednee) narisovatPodpisku(poslednee);
+  else narisovatBlokOplaty();
   narisovatShtorkuOplaty();
 }
 
@@ -3065,11 +3139,13 @@ function zabytOtpravku() {
   api("oplata?zabyt=1").catch(() => {});
 }
 
-$("karta-oplata").onclick = () => {
+function otkrytShtorkuOplaty() {
   narisovatShtorkuOplaty();
   otkrytShtorku("shtorka-oplata-fon");
   obnovitOplatu(false);
-};
+}
+$("karta-oplata").onclick = otkrytShtorkuOplaty;
+$("podp-oplatit").onclick = otkrytShtorkuOplaty;
 
 $("oplata-oplatil").onclick = async () => {
   oplata = {...oplata, otpravka: "idet"};
@@ -3102,10 +3178,24 @@ async function kopirovatOplatu(knopka, tekst) {
 $("oplata-kopir-cena").onclick = (e) => kopirovatOplatu(e.currentTarget, String(oplata.cena || ""));
 $("oplata-kopir-nomer").onclick = (e) => kopirovatOplatu(e.currentTarget, oplata.nomer || "");
 
-document.addEventListener("visibilitychange", () => { if (!document.hidden) obnovitOplatu(false); });
-window.addEventListener("focus", () => obnovitOplatu(false));
+// Окно снова на экране: заявка ждёт — сразу к серверу (sila), не чаще раза в 5 с
+// (фокус и видимость приходят парой).
+let oplataSilaKogda = 0;
+function oplataVernulis() {
+  const sila = !!(oplata.est && oplata.zhdet) && Date.now() - oplataSilaKogda > 5000;
+  if (sila) oplataSilaKogda = Date.now();
+  obnovitOplatu(sila);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) oplataVernulis(); });
+window.addEventListener("focus", oplataVernulis);
 obnovitOplatu(false);
-setInterval(() => obnovitOplatu(false), 60000);
+// Служба сама решает, пора ли к серверу: окно спрашивает её раз в минуту, пока
+// заявка ждёт — каждые 5 секунд (сервер — раз в 30 секунд).
+let oplataTik = 0;
+setInterval(() => {
+  oplataTik++;
+  if ((oplata.est && oplata.zhdet) || oplataTik % 12 === 0) obnovitOplatu(false);
+}, 5000);
 
 obnovit();
 obnovitUzly();

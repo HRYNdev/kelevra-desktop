@@ -785,6 +785,10 @@ func zhitZnachkom(papka, putZhurnala string) {
 	// этого процесса нет, без опроса она вечно «отключено».
 	go oprashivatSostoyanie(shagOprosaZnachka, func() (string, bool) { return kopiya.Nayti(papka) },
 		sostoyanieSluzhby, pometitZashchitu, stop)
+	// Напоминание об оплате пузырём (napominanie_oplaty.go).
+	go oprashivatNapominaniya(pervyyZahodNapominaniya, shagNapominaniya,
+		func() (string, bool) { return kopiya.Nayti(papka) },
+		napominanieSluzhby, pokazatOblachkoOplaty, otmetitNapominanieSluzhby, stop)
 	for {
 		versiya, nado := zhdatSignalIliPerezapusk(vyhod, perezapusk)
 		if !nado {
@@ -1073,6 +1077,10 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 			}()
 			zapustitTrey(vyhodIzTreya)
 		}()
+		// Напоминание об оплате пузырём (napominanie_oplaty.go): значок в этом же процессе.
+		go oprashivatNapominaniya(pervyyZahodNapominaniya, shagNapominaniya,
+			func() (string, bool) { return url, true },
+			napominanieSluzhby, pokazatOblachkoOplaty, otmetitNapominanieSluzhby, nil)
 
 		zhdatSignal(vyhodIzTreya)
 	} else {

@@ -3,7 +3,7 @@ package podpiska
 // Оплата подписки (KelevraServer docs/OPLATA.md): тот же хост и та же база
 // профиля, что у /info:
 //
-//	GET  <база>/oplata   -> {"platit": false} либо {"platit": true, "cena", "ssylka", "nomer", "srok", "zhdet"}
+//	GET  <база>/oplata   -> {"platit": false} либо {"platit": true, "cena", "ssylka", "nomer", "srok", "zhdet", "istoriya"}
 //	POST <база>/oplatil  -> то же (zhdet: true); чаще раза в 10 минут — 429
 //
 // где база — https://<дверь>/k/<код> или /u/<ключ>. Неизвестный код и
@@ -36,7 +36,22 @@ type Oplata struct {
 	SrokUnix int64 `json:"srok_unix"`
 	// Zhdet — «Я оплатил» нажато, срок ещё не продлён.
 	Zhdet bool `json:"zhdet"`
+	// Istoriya — подтверждённые оплаты, свежие первыми; nil — нет или не прислана.
+	Istoriya []ZapisOplaty `json:"istoriya,omitempty"`
 }
+
+// ZapisOplaty — одна подтверждённая оплата (istoriya: {"data", "summa", "do"}).
+type ZapisOplaty struct {
+	// DataUnix — когда нажато «Я оплатил» (секунды Unix).
+	DataUnix int64 `json:"data_unix"`
+	// Summa — рублей; 0 — не прислана.
+	Summa int `json:"summa,omitempty"`
+	// DoUnix — срок после продления; 0 — не прислан.
+	DoUnix int64 `json:"do_unix,omitempty"`
+}
+
+// potolokIstorii — больше записей окну не нужно (сервер шлёт до 12).
+const potolokIstorii = 24
 
 // ErrNeOplata — ответ двери не про оплату (старая выдача на этом адресе
 // отдаёт профиль или страницу): оплату не показываем.
@@ -73,7 +88,9 @@ func RazobratOplatu(telo []byte) (*Oplata, error) {
 	razobrat("nomer", &d.Nomer)
 	razobrat("srok", &d.Srok)
 	razobrat("zhdet", &d.Zhdet)
-	o := &Oplata{Platit: true, Zhdet: d.Zhdet}
+	var istoriya []json.RawMessage
+	razobrat("istoriya", &istoriya)
+	o := &Oplata{Platit: true, Zhdet: d.Zhdet, Istoriya: razobratIstoriyu(istoriya)}
 	if d.Cena != nil && *d.Cena > 0 && *d.Cena < 1e9 {
 		o.Cena = int(*d.Cena)
 	}
@@ -87,6 +104,35 @@ func RazobratOplatu(telo []byte) (*Oplata, error) {
 		o.SrokUnix = srokOplatyUnix(*d.Srok)
 	}
 	return o, nil
+}
+
+// razobratIstoriyu — записи по одной: запись без даты или не объектом
+// пропускается, остальные остаются.
+func razobratIstoriyu(spisok []json.RawMessage) []ZapisOplaty {
+	var zapisi []ZapisOplaty
+	for _, syroe := range spisok {
+		if len(zapisi) >= potolokIstorii {
+			break
+		}
+		var polya map[string]json.RawMessage
+		if json.Unmarshal(syroe, &polya) != nil {
+			continue
+		}
+		var data, do string
+		var summa float64
+		_ = json.Unmarshal(polya["data"], &data)
+		_ = json.Unmarshal(polya["summa"], &summa)
+		_ = json.Unmarshal(polya["do"], &do)
+		z := ZapisOplaty{DataUnix: srokOplatyUnix(data), DoUnix: srokOplatyUnix(do)}
+		if z.DataUnix == 0 {
+			continue
+		}
+		if summa > 0 && summa < 1e9 {
+			z.Summa = int(summa)
+		}
+		zapisi = append(zapisi, z)
+	}
+	return zapisi
 }
 
 // ssylkaOplaty — ссылку открывает системный браузер: только https с хостом,
@@ -166,12 +212,42 @@ func SostoyanieSroka(srokUnix int64, seychas time.Time) string {
 }
 
 // ShagOprosaOplaty — как часто спрашивать /oplata, пока окно на экране: час;
-// заявка ждёт подтверждения — 5 минут.
+// заявка ждёт подтверждения — 30 секунд.
 func ShagOprosaOplaty(zhdet bool) time.Duration {
 	if zhdet {
-		return 5 * time.Minute
+		return 30 * time.Second
 	}
 	return time.Hour
+}
+
+// ShagOprosaOplatyFon — как часто спрашивать /oplata ради напоминаний, когда
+// окна нет (спрашивает значок в трее): раз в 6 часов.
+const ShagOprosaOplatyFon = 6 * time.Hour
+
+// NapominanieOplaty — напоминание значком в трее: за SrokSkoro до срока
+// («Подписка до 12.12 · 249 ₽») и после окончания, пока не прошло ещё
+// SrokSkoro («Подписка закончилась · 249 ₽»). klyuch — одно напоминание на
+// срок и состояние: показанное второй раз не показывается. Неплатящему,
+// бессрочно и при ждущей заявке — "".
+func NapominanieOplaty(o *Oplata, seychas time.Time) (klyuch, tekst string) {
+	if o == nil || !o.Platit || o.Zhdet || o.SrokUnix <= 0 {
+		return "", ""
+	}
+	cena := ""
+	if o.Cena > 0 {
+		cena = fmt.Sprintf(" · %d ₽", o.Cena)
+	}
+	switch SostoyanieSroka(o.SrokUnix, seychas) {
+	case "skoro":
+		return fmt.Sprintf("skoro:%d", o.SrokUnix),
+			"Подписка до " + time.Unix(o.SrokUnix, 0).In(time.Local).Format("02.01") + cena
+	case "konchilsya":
+		if seychas.Sub(time.Unix(o.SrokUnix, 0)) > SrokSkoro {
+			return "", ""
+		}
+		return fmt.Sprintf("konchilsya:%d", o.SrokUnix), "Подписка закончилась" + cena
+	}
+	return "", ""
 }
 
 // BazaOplaty — база для /oplata из сохранённого адреса подписки (/k/<код>,

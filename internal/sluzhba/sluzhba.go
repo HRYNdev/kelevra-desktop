@@ -730,6 +730,7 @@ func (s *Sluzhba) Obsluzhit() http.Handler {
 	m.HandleFunc(pref+"/api/oplata", s.oplataRuchka)
 	m.HandleFunc(pref+"/api/oplatil", s.oplatilRuchka)
 	m.HandleFunc(pref+"/api/oplata_qr", s.oplataQrRuchka)
+	m.HandleFunc(pref+"/api/napominanie", s.napominanieRuchka)
 	m.HandleFunc(pref+"/api/podklyuchit", s.podklyuchit)
 	m.HandleFunc(pref+"/api/otklyuchit", s.otklyuchit)
 	// «Дать права»: просьба прав и установка службы Windows. Прежние имена

@@ -267,7 +267,13 @@ func zapustitTrey(vyhod chan<- struct{}) {
 			case wmContextMenu:
 				pokazatMenuTreyaOdnazhdy(syscall.Handle(hwnd))
 			case ninBalloonUserClick:
-				go tychokVPuzyr()
+				// Пузырь напоминания об оплате открывает окно, пузырь
+				// обновления — ставит обновление.
+				if puzyrOplatyPoslednim.Load() {
+					otkrytOknoIzTreyaOdnazhdy()
+				} else {
+					go tychokVPuzyr()
+				}
 			}
 			return 0
 		case wmCommand:
@@ -410,6 +416,7 @@ func pokazatOblachkoObnovleniya(versiya string) bool {
 	// второго пути тычка.
 	zapomnitObnovlenie(versiya)
 	obnovitPodskazkuTreya()
+	puzyrOplatyPoslednim.Store(false)
 	d.uFlags = nifInfo
 	d.dwInfoFlags = niifInfo
 	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra: доступно обновление")
@@ -488,12 +495,39 @@ func pokazatOblachkoBedyUstanovki() {
 	d.cbSize = uint32(unsafe.Sizeof(d))
 	d.hWnd = hwnd
 	d.uID = trayIconID
+	puzyrOplatyPoslednim.Store(false)
 	d.uFlags = nifInfo
 	d.dwInfoFlags = niifInfo
 	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra: обновление не поставилось")
 	kopirovatStrokuUTF16(d.szInfo[:], "Откройте Kelevra и нажмите «Проверить обновление», чтобы попробовать снова.")
 	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
 	log.Printf("трей: пузырь о неудачной установке -> Shell_NotifyIconW(NIM_MODIFY) = %v", r != 0)
+}
+
+// pokazatOblachkoOplaty — пузырь напоминания об оплате (napominanie_oplaty.go):
+// «Подписка до 12.12 · 249 ₽» / «Подписка закончилась · 249 ₽». Тычок в него
+// открывает окно (WndProc, ninBalloonUserClick). false — трей не поднят или
+// Windows отказала: служба не отмечает напоминание, значок спросит снова.
+func pokazatOblachkoOplaty(tekst string) bool {
+	treyZamok.Lock()
+	hwnd := treyHwnd
+	treyZamok.Unlock()
+	if hwnd == 0 {
+		log.Printf("трей: пузырь об оплате не показан — окно трея не поднято")
+		return false
+	}
+	var d notifyIconDataW
+	d.cbSize = uint32(unsafe.Sizeof(d))
+	d.hWnd = hwnd
+	d.uID = trayIconID
+	puzyrOplatyPoslednim.Store(true)
+	d.uFlags = nifInfo
+	d.dwInfoFlags = niifInfo
+	kopirovatStrokuUTF16(d.szInfoTitle[:], "Kelevra")
+	kopirovatStrokuUTF16(d.szInfo[:], tekst)
+	r, _, _ := procShellNotifyIconW.Call(uintptr(nimModify), uintptr(unsafe.Pointer(&d)))
+	log.Printf("трей: пузырь об оплате -> Shell_NotifyIconW(NIM_MODIFY) = %v", r != 0)
+	return r != 0
 }
 
 // sobratZnachokTreya делает HICON из znachok.ico настоящим

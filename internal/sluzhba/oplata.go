@@ -3,9 +3,12 @@ package sluzhba
 // Оплата подписки в окне (internal/podpiska/oplata.go, KelevraServer
 // docs/OPLATA.md). Образец поведения — Android-клиент (OplataSostoyanie.kt):
 //
-//   - /oplata спрашивается только когда окно на экране: окно зовёт
-//     /api/oplata при показе и раз в минуту, служба решает, пора ли
-//     (ShagOprosaOplaty: час, при ждущей заявке 5 минут). Фоновых работ нет;
+//   - /oplata спрашивается, когда окно на экране: окно зовёт /api/oplata при
+//     показе и раз в минуту (при ждущей заявке — каждые 5 секунд), служба
+//     решает, пора ли (ShagOprosaOplaty: час, при ждущей заявке 30 секунд);
+//   - без окна — только ради напоминаний: значок в трее зовёт /api/napominanie,
+//     служба спрашивает сервер не чаще ShagOprosaOplatyFon. Своих фоновых работ
+//     у службы нет;
 //   - ходит тем же клиентом, что /info (s.Podpiska: заголовки устройства,
 //     запасной путь через туннель);
 //   - сбой сети и 429 держат прежнее; 404 — оплаты нет; не ответ оплаты —
@@ -23,6 +26,7 @@ import (
 
 	"rsc.io/qr"
 
+	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 	"github.com/HRYNdev/kelevra-desktop/internal/podpiska"
 )
 
@@ -53,6 +57,8 @@ type otvetOplaty struct {
 	Srok     string `json:"srok,omitempty"`
 	Zhdet    bool   `json:"zhdet,omitempty"`
 	Otpravka string `json:"otpravka,omitempty"`
+	// Istoriya — подтверждённые оплаты, свежие первыми.
+	Istoriya []podpiska.ZapisOplaty `json:"istoriya,omitempty"`
 }
 
 // bazaOplaty — база /oplata для нынешней подписки; "" — кода нет.
@@ -75,11 +81,13 @@ func (s *Sluzhba) otvetOplatySeychas() otvetOplaty {
 	return otvetOplaty{
 		Est: true, Cena: i.Cena, Ssylka: i.Ssylka, Nomer: i.Nomer, SrokUnix: i.SrokUnix,
 		Srok: podpiska.SostoyanieSroka(i.SrokUnix, time.Now()), Zhdet: i.Zhdet, Otpravka: o.otpravka,
+		Istoriya: i.Istoriya,
 	}
 }
 
-// obnovitOplatu — спросить /oplata, если пора или sila.
-func (s *Sluzhba) obnovitOplatu(ctx context.Context, sila bool) {
+// obnovitOplatu — спросить /oplata, если пора или sila. fon — спрашивает не
+// окно, а значок ради напоминаний: шаг ShagOprosaOplatyFon.
+func (s *Sluzhba) obnovitOplatu(ctx context.Context, sila, fon bool) {
 	o := &s.oplata
 	if !o.opros.TryLock() {
 		return
@@ -90,8 +98,12 @@ func (s *Sluzhba) obnovitOplatu(ctx context.Context, sila bool) {
 	if baza != o.baza {
 		o.info, o.baza, o.kogda, o.otpravka = nil, baza, time.Time{}, ""
 	}
+	shag := podpiska.ShagOprosaOplaty(o.info != nil && o.info.Zhdet)
+	if fon {
+		shag = podpiska.ShagOprosaOplatyFon
+	}
 	pora := baza != "" && baza != o.neUmeet &&
-		(sila || o.kogda.IsZero() || time.Since(o.kogda) >= podpiska.ShagOprosaOplaty(o.info != nil && o.info.Zhdet))
+		(sila || o.kogda.IsZero() || time.Since(o.kogda) >= shag)
 	o.zamok.Unlock()
 	if !pora {
 		return
@@ -173,10 +185,66 @@ func (s *Sluzhba) oplataRuchka(w http.ResponseWriter, r *http.Request) {
 		s.oplata.zamok.Unlock()
 	} else {
 		ctx, otmena := context.WithTimeout(r.Context(), 25*time.Second)
-		s.obnovitOplatu(ctx, r.URL.Query().Get("sila") == "1")
+		s.obnovitOplatu(ctx, r.URL.Query().Get("sila") == "1", false)
 		otmena()
 	}
 	otdat(w, s.otvetOplatySeychas(), nil)
+}
+
+// otvetNapominaniya — что значок в трее показывает пузырём; пусто — нечего.
+type otvetNapominaniya struct {
+	Klyuch string `json:"klyuch,omitempty"`
+	Tekst  string `json:"tekst,omitempty"`
+}
+
+// napominanieSeychas — напоминание об оплате, которое ещё не показывали.
+// Окно на экране — напоминание уже видно на карточке подписки: помечаем
+// показанным и пузырём не дублируем (то же правило, что у пузыря обновления,
+// povestitEsliNovaya).
+func (s *Sluzhba) napominanieSeychas(seychas time.Time) otvetNapominaniya {
+	o := &s.oplata
+	o.zamok.Lock()
+	var info *podpiska.Oplata
+	if o.baza == s.bazaOplaty() {
+		info = o.info
+	}
+	o.zamok.Unlock()
+	klyuch, tekst := podpiska.NapominanieOplaty(info, seychas)
+	if klyuch == "" || s.Nastroyki == nil || klyuch == s.Nastroyki.NapomnenoOplaty {
+		return otvetNapominaniya{}
+	}
+	if s.oknoOtkryto() {
+		s.otmetitNapominanie(klyuch)
+		return otvetNapominaniya{}
+	}
+	return otvetNapominaniya{Klyuch: klyuch, Tekst: tekst}
+}
+
+// otmetitNapominanie — напоминание показано; на диске, чтобы перезапуск не
+// повторил его.
+func (s *Sluzhba) otmetitNapominanie(klyuch string) {
+	if klyuch == "" || len(klyuch) > 64 || s.Nastroyki == nil || s.Nastroyki.NapomnenoOplaty == klyuch {
+		return
+	}
+	s.Nastroyki.NapomnenoOplaty = klyuch
+	if err := hranenie.Sohranit(s.Nastroyki); err != nil {
+		log.Printf("не сохранил отметку о напоминании об оплате: %v", err)
+	}
+}
+
+// napominanieRuchka — значок в трее (cmd/kelevra/napominanie_oplaty.go):
+// GET /api/napominanie — что показать (сервер спрашивается не чаще
+// ShagOprosaOplatyFon); POST /api/napominanie?klyuch=… — показано.
+func (s *Sluzhba) napominanieRuchka(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.otmetitNapominanie(r.URL.Query().Get("klyuch"))
+		otdat(w, otvetNapominaniya{}, nil)
+		return
+	}
+	ctx, otmena := context.WithTimeout(r.Context(), 25*time.Second)
+	s.obnovitOplatu(ctx, false, true)
+	otmena()
+	otdat(w, s.napominanieSeychas(time.Now()), nil)
 }
 
 // oplatilRuchka — POST /api/oplatil.
