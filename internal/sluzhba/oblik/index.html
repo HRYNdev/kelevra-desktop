@@ -1068,9 +1068,12 @@
   .oplata-soobshchenie.beda-tekst { color:var(--beda); }
   /* Блок «Оплата» в шторке «Подписка» (только платящим): срок, цена, «Оплатить»,
      история подтверждённых оплат строками карточки. */
-  #podp-karta-oplata .ryad-znachenie { margin-top:0; }
   .ryad-znachenie.trevoga { color:var(--zhdem); }
-  #podp-oplatit { margin-top:12px; }
+  .podp-oplata { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px; }
+  .podp-oplata .oplata-deystvie { border:0; cursor:pointer; font-family:inherit; }
+  .podp-oplata .oplata-deystvie.zhdet { cursor:default; }
+  .podp-istoriya { margin-top:12px; padding-top:12px; border-top:1px solid var(--gran); }
+  .podp-istoriya .oplata-istoriya { font-size:13px; color:var(--tihiy); margin-top:6px; }
   .oplata-istoriya { font-size:14px; color:var(--tekst); font-variant-numeric:tabular-nums; user-select:text; }
   .vyhod-title.molchit { color:var(--tihiy); }
 
@@ -1307,23 +1310,18 @@
             <span class="ryad-znachenie molchit" id="podp-sostoyanie">Пока неизвестно</span>
             <span class="ryad-podpis" id="podp-zametka" hidden></span>
           </div>
+          <!-- Оплата — только платящим, в этой же карточке (решение 13.11: «аккуратная вкладочка»):
+               «249 ₽ в месяц» и маленькая «Оплатить» справа, ниже — последние три оплаты. -->
+          <div class="podp-oplata" id="podp-oplata" hidden>
+            <span class="ryad-podpis" id="podp-oplata-cena"></span>
+            <button class="oplata-deystvie" id="podp-oplatit" type="button">Оплатить</button>
+          </div>
+          <div class="podp-istoriya" id="podp-istoriya" hidden>
+            <span class="ryad-metka">История</span>
+            <div id="podp-istoriya-spisok"></div>
+          </div>
         </div>
 
-        <!-- Оплата — только платящим (/api/oplata, решение 12.11: оплата живёт здесь):
-             срок, цена, «Оплата проверяется», «Оплатить» (шторка оплаты), история. -->
-        <div class="zagolovok-bloka" id="podp-zag-oplata" hidden>Оплата</div>
-        <div class="karta karta-nastroyki" id="podp-karta-oplata" hidden>
-          <div class="ryad-svedeniya nastroyki-ryad">
-            <span class="ryad-znachenie" id="podp-oplata-srok"></span>
-            <span class="ryad-podpis" id="podp-oplata-cena" hidden></span>
-          </div>
-          <div class="ryad-svedeniya nastroyki-ryad" id="podp-oplata-zhdet" hidden>
-            <span class="ryad-znachenie molchit">Оплата проверяется</span>
-          </div>
-        </div>
-        <button class="glavnaya" id="podp-oplatit" type="button" hidden>Оплатить</button>
-        <div class="zagolovok-bloka" id="podp-zag-istoriya" hidden>История</div>
-        <div class="karta karta-nastroyki" id="podp-karta-istoriya" hidden></div>
 
         <div class="karta karta-nastroyki" id="podp-karta-kto" hidden>
           <div class="ryad-svedeniya nastroyki-ryad" id="podp-ryad-chelovek" hidden>
@@ -2239,6 +2237,7 @@ function narisovatPodpisku(s) {
     zametka.textContent = "";
     zametka.hidden = true;
   }
+  narisovatBlokOplaty();   // платящему срок оплаты поверх «Активна»
 
   narisovatUstroystva(s.ustroystva);
 
@@ -3060,31 +3059,32 @@ function oplataNaKarte(s) {
 // проверяется», «Оплатить» (всегда), история «ДД.ММ.ГГГГ · 249 ₽ · до ДД.ММ».
 function narisovatBlokOplaty() {
   const o = oplata;
-  for (const id of ["podp-zag-oplata", "podp-karta-oplata", "podp-oplatit"]) $(id).hidden = !o.est;
-  const istoriya = o.est && Array.isArray(o.istoriya) ? o.istoriya : [];
-  $("podp-zag-istoriya").hidden = !istoriya.length;
-  $("podp-karta-istoriya").hidden = !istoriya.length;
+  $("podp-oplata").hidden = !o.est;
+  const istoriya = o.est && Array.isArray(o.istoriya) ? o.istoriya.filter(z => z && z.data_unix).slice(0, 3) : [];
+  $("podp-istoriya").hidden = !istoriya.length;
   if (!o.est) return;
-  const cena = o.cena ? o.cena + " ₽ в месяц" : "";
+  // Срок оплаты — в строку «Состояние»; трафик и цена — подписью под ней.
   const srok = o.srok === "konchilsya" ? "Подписка закончилась"
       : (o.srok_unix ? "Оплачено до " + oplataData(o.srok_unix) : "");
-  const znach = $("podp-oplata-srok"), podpis = $("podp-oplata-cena");
-  znach.textContent = srok || cena;
-  znach.className = "ryad-znachenie" + (oplataZametno(o) ? " trevoga" : "");
-  podpis.textContent = srok ? cena : "";
-  podpis.hidden = !podpis.textContent;
-  $("podp-oplata-zhdet").hidden = !o.zhdet;
-  const karta = $("podp-karta-istoriya");
-  karta.textContent = "";
+  if (srok) {
+    $("podp-sostoyanie").textContent = srok;
+    $("podp-sostoyanie").className = "ryad-znachenie" + (oplataZametno(o) ? " trevoga" : "");
+  }
+  $("podp-oplata-cena").textContent = o.cena ? o.cena + " ₽ в месяц" : "";
+  const kn = $("podp-oplatit");
+  kn.textContent = o.zhdet ? "Оплата проверяется" : "Оплатить";
+  kn.className = "oplata-deystvie" + (o.zhdet ? " zhdet" : "");
+  kn.disabled = !!o.zhdet;
+  const spisok = $("podp-istoriya-spisok");
+  spisok.textContent = "";
   for (const z of istoriya) {
-    if (!z || !z.data_unix) continue;
     const kuski = [oplataData(z.data_unix, true)];
     if (z.summa) kuski.push(z.summa + " ₽");
     if (z.do_unix) kuski.push("до " + oplataData(z.do_unix));
     const ryad = document.createElement("div");
-    ryad.className = "nastroyki-ryad oplata-istoriya";
+    ryad.className = "oplata-istoriya";
     ryad.textContent = kuski.join(" · ");
-    karta.appendChild(ryad);
+    spisok.appendChild(ryad);
   }
 }
 
