@@ -932,7 +932,12 @@ func (s *Sluzhba) proveritObnovlenieRaz(ctx context.Context) error {
 	if n != nil {
 		log.Printf("фоновая проверка обновления: найдена версия %s", n.Versiya)
 		s.povestitEsliNovaya(n.Versiya)
-		s.postavitTiho(*n)
+		// Сетевой провал установки — тикеру (fonovoeDelo), он повторит с
+		// нарастающей паузой: находка из пульта лежит на диске и находится без
+		// сети, а скачать сборку без сети нельзя (ноут 11-2, 08–13.11.2026).
+		if err := s.postavitTiho(*n); setevoyOtkaz(err) {
+			return err
+		}
 	}
 	return nil
 }
@@ -1029,7 +1034,12 @@ func (s *Sluzhba) otpechatokFayla(put string, kesh *string) string {
 // PostavitNaydennoe и zapustitSmenuPosleObnovleniya): окно не всплывает, связь
 // поднимается заново сама, если была поднята. Фоновый тик редкий, поэтому одной
 // попытки на версию достаточно, а неудача попадёт в журнал.
-func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
+//
+// Кроме сетевого провала (setevoyOtkaz): сборку не дали скачать — версию не
+// запрещаем и ошибку отдаём наверх, повтор назначит тикер. Журнал ноута
+// 08–13.11.2026: установка шла через 5 с после старта службы, до сети
+// («lookup github.com: no such host»), и запрет держал старую сборку неделю.
+func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) error {
 	// KELEVRA_BEZ_OBNOVLENIYA=1 — тот же переключатель, что глушит немедленную
 	// проверку в SleditZaObnovleniem: на нём стоит масса стендов (stend/*.sh),
 	// которым нужна находка (naydennoeObnovlenie уже выставлена выше по
@@ -1041,23 +1051,23 @@ func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
 	// неподписанную, и гонка стала настоящей). У человека эта переменная
 	// не задана — тихая установка идёт как и раньше.
 	if os.Getenv("KELEVRA_BEZ_OBNOVLENIYA") == "1" {
-		return
+		return nil
 	}
 	// Пульт может попросить не ставить тихо (obnovleniya.tiho=false): тогда
 	// находку объявляют пузырь и метка, а ставит человек нажатием.
 	if !s.pult.FlagIli("obnovleniya.tiho", true) {
 		log.Printf("тихая установка %s: выключена пультом — жду нажатия человека", n.Versiya)
-		return
+		return nil
 	}
 	s.zamok.Lock()
 	uzhe := s.idetUstanovkaObnovleniya || s.postavlenoObnovlenie != ""
 	stavili := s.tihoStavili
 	s.zamok.Unlock()
 	if uzhe {
-		return
+		return nil
 	}
 	if stavili == n.Versiya {
-		return // эту версию уже пробовали, второй раз незачем
+		return nil // эту версию уже пробовали, второй раз незачем
 	}
 	s.zamok.Lock()
 	s.tihoStavili = n.Versiya
@@ -1068,15 +1078,23 @@ func (s *Sluzhba) postavitTiho(n obnovlenie.Novaya) {
 	s.zamok.Lock()
 	s.oshibkaTihoy = err
 	s.zamok.Unlock()
+	if err != nil && setevoyOtkaz(err) {
+		s.zamok.Lock()
+		s.tihoStavili = ""
+		s.zamok.Unlock()
+		log.Printf("тихая установка %s: сеть не дала скачать (%s), остаюсь на прежней — повторю", n.Versiya, korotkoOSeti(err))
+		return err
+	}
 	if err != nil {
 		log.Printf("тихая установка %s: не вышло (%v), остаюсь на прежней", n.Versiya, err)
 		if n.Sha256 != "" {
 			// Сборка из пульта не встала — мозгу словом в X-Pult.
 			s.pult.OshibkaObnovleniya(prichinaObnovleniya(err))
 		}
-		return
+		return err
 	}
-	log.Printf("тихая установка %s: поставлено, файл %s", n.Versiya, put)
+	log.Printf("тихая установка %s: поставлено, версия %s", n.Versiya, put)
+	return nil
 }
 
 // povestitEsliNovaya решает, стоит ли беспокоить человека пузырём в трее.
@@ -1802,6 +1820,8 @@ func (s *Sluzhba) VestiOcheredUzlov(ctx context.Context) {
 					Vozvrat: func() time.Duration { return s.pult.Dlitelnost("uzel.vozvrat_na_pervyy_min", time.Minute, 0) },
 					// Жив ли обычный туннель — для решения о лечении «Дома» (dom.go).
 					Tekushchiy: s.otmetitTunnelPoOcheredi,
+					// Нет шлюза — в журнал «у компьютера нет сети», а не «узлы не отвечают».
+					EstSet: s.estSet,
 				}
 				log.Printf("очередь узлов: %q, узлы %v", gruppa, uzly)
 			}

@@ -417,3 +417,49 @@ func TestOborvannayaZakachkaNeOstavlyaetDolyuVSostoyanii(t *testing.T) {
 		t.Fatal("приложение отодвинуто в .old, хотя скачивание оборвалось")
 	}
 }
+
+// Ноут 11-2, 08–13.11.2026: находка из пульта лежит на диске и находится без
+// сети, тихая установка шла через 5 с после старта службы — до сети — и
+// падала на «lookup github.com: no such host» или 504 GitHub, а запрет на
+// версию держал старую сборку до перезапуска. Временный провал теперь
+// уходит наверх сетевым отказом (повтор — тикер fonovoeDelo), версия не
+// запрещается; постоянный (404) — запрещается, как было.
+func TestTihayaSetevoyProvalNeZapreshchaetVersiyu(t *testing.T) {
+	t.Setenv("KELEVRA_BEZ_OBNOVLENIYA", "")
+	s := stend(t)
+	var kod atomic.Int32
+	kod.Store(http.StatusServiceUnavailable)
+	var pohodov atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pohodov.Add(1)
+		w.WriteHeader(int(kod.Load()))
+	}))
+	t.Cleanup(srv.Close)
+	n := obnovlenie.Novaya{Versiya: "9.9.9", Ssylka: srv.URL, Razmer: 10}
+	s.zamok.Lock()
+	s.naydennoeObnovlenie = &n
+	s.zamok.Unlock()
+
+	err := s.postavitTiho(n)
+	if !setevoyOtkaz(err) {
+		t.Fatalf("503 на скачивании: ждал временный отказ для тикера, получил %v", err)
+	}
+	s.zamok.Lock()
+	stavili := s.tihoStavili
+	s.zamok.Unlock()
+	if stavili != "" {
+		t.Fatalf("после временного провала версия запрещена (%q) — повтора не будет", stavili)
+	}
+
+	kod.Store(http.StatusNotFound)
+	if err := s.postavitTiho(n); err == nil || setevoyOtkaz(err) {
+		t.Fatalf("404 на скачивании: ждал постоянный отказ, получил %v", err)
+	}
+	do := pohodov.Load()
+	if err := s.postavitTiho(n); err != nil {
+		t.Fatalf("запрещённая версия: ждал тихий отказ без ошибки, получил %v", err)
+	}
+	if pohodov.Load() != do {
+		t.Fatalf("после постоянного отказа версия скачивалась снова")
+	}
+}

@@ -114,6 +114,12 @@ func setevoyOtkaz(err error) bool {
 	if errors.Is(err, obnovlenie.ErrPodpis) {
 		return false
 	}
+	// Сборку или подпись не дали скачать: 5xx и 429 GitHub проходят сами (504
+	// на подписи, ноут 11-2, 08.11.2026), 404 и 403 — нет.
+	var skach *obnovlenie.OshibkaSkachivaniya
+	if errors.As(err, &skach) {
+		return skach.Vremennaya()
+	}
 	var kod *podpiska.OshibkaKoda
 	if errors.As(err, &kod) {
 		return false

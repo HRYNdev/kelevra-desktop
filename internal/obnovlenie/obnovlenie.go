@@ -105,6 +105,40 @@ func (o *OshibkaStatusa) Error() string {
 	return fmt.Sprintf("список релизов: ответ %d", o.Kod)
 }
 
+// OshibkaSkachivaniya — файл сборки или её подписи не скачался по причине,
+// которая проходит сама: ответа не было вовсе (Prichina — сетевая ошибка) или
+// сервер ответил временной бедой (5xx, 429). Отдельным типом, а не строкой,
+// чтобы тихая установка (internal/sluzhba: postavitTiho) отличала «GitHub
+// сейчас не отдал файл» от «файл не тот».
+//
+// Зачем. Журнал ноута 08–13.11.2026: подпись не скачалась с ответом 504, и
+// это ушло наверх как ErrPodpis — «подпись не подтверждена», — то есть
+// так же, как подменённый файл. Тихая установка такую версию больше не
+// пробовала до перезапуска. Подпись при этом никто не отвергал: её просто не
+// дали. Неверная подпись (podpis.Proverit) и подписи нет на сервере (404) —
+// по-прежнему ErrPodpis: это не лечится повтором.
+type OshibkaSkachivaniya struct {
+	Chto     string // «скачивание», «подпись не скачалась» — начало строки журнала
+	Kod      int    // код ответа; 0 — ответа не было
+	Prichina error  // сетевая ошибка, когда ответа не было
+}
+
+func (o *OshibkaSkachivaniya) Error() string {
+	if o.Prichina != nil {
+		return fmt.Sprintf("%s: %v", o.Chto, o.Prichina)
+	}
+	return fmt.Sprintf("%s: ответ %d", o.Chto, o.Kod)
+}
+
+func (o *OshibkaSkachivaniya) Unwrap() error { return o.Prichina }
+
+// Vremennaya — пройдёт ли беда сама: не было ответа, сервер лёг (5xx) или
+// просит подождать (429). 404, 403 и прочие ответы — нет: файла нет или нас
+// не пускают, повтор через минуту получит то же самое.
+func (o *OshibkaSkachivaniya) Vremennaya() bool {
+	return o.Prichina != nil || o.Kod >= 500 || o.Kod == http.StatusTooManyRequests
+}
+
 // OshibkaRazbora — тело ответа получено целиком, но это не тот JSON, который
 // мы ждём (прокси подсунул страницу-заглушку, GitHub вернул html и т.п.).
 type OshibkaRazbora struct {
@@ -332,7 +366,7 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	}
 	defer otvet.Body.Close()
 	if otvet.StatusCode != http.StatusOK {
-		return fmt.Errorf("скачивание: ответ %d", otvet.StatusCode)
+		return &OshibkaSkachivaniya{Chto: "скачивание", Kod: otvet.StatusCode}
 	}
 
 	// Рядом с самим приложением: переименование поверх дисков не работает, а
@@ -420,6 +454,13 @@ func PostavitSHodom(ctx context.Context, klient *http.Client, n Novaya, putExe s
 	// Подпись — ДО любых проверок формата и ДО того, как тронут рабочий файл.
 	if TrebovatPodpis {
 		if err := proveritPodpisFayla(ctx, klient, n.SsylkaPodpisi, vremennyy, ImyaFayla); err != nil {
+			// Подпись не дали (сеть, 5xx) — это не «подпись неверна»: файл не
+			// тронут и не проверен, а следующая попытка вполне может пройти.
+			var neDali *OshibkaSkachivaniya
+			if errors.As(err, &neDali) && neDali.Vremennaya() {
+				log.Printf("подпись обновления %s не скачалась (%v) — обновление не поставлено, прежнее приложение не тронуто", n.Versiya, err)
+				return fmt.Errorf("%w — прежнее приложение не тронуто", err)
+			}
 			log.Printf("подпись обновления %s НЕ подтверждена (ed25519): %v — обновление отвергнуто, остаюсь на прежней версии", n.Versiya, err)
 			return fmt.Errorf("%w (%v) — прежнее приложение не тронуто", ErrPodpis, err)
 		}
@@ -522,15 +563,17 @@ func proveritPodpisFayla(ctx context.Context, klient *http.Client, ssylka, put, 
 	}
 	otvet, err := klient.Do(req)
 	if err != nil {
-		return fmt.Errorf("подпись не скачалась: %w", err)
+		return &OshibkaSkachivaniya{Chto: "подпись не скачалась", Prichina: err}
 	}
 	defer otvet.Body.Close()
 	if otvet.StatusCode != http.StatusOK {
-		return fmt.Errorf("подпись не скачалась: ответ %d", otvet.StatusCode)
+		// Код — полем: 5xx временный (PostavitSHodom не зовёт это отвергнутой
+		// подписью), 404 — подписи нет, и это ErrPodpis, как было.
+		return &OshibkaSkachivaniya{Chto: "подпись не скачалась", Kod: otvet.StatusCode}
 	}
 	sig, err := io.ReadAll(io.LimitReader(otvet.Body, podpis.PredelRazmera))
 	if err != nil {
-		return fmt.Errorf("подпись не прочиталась: %w", err)
+		return &OshibkaSkachivaniya{Chto: "подпись не прочиталась", Prichina: err}
 	}
 	return podpis.Proverit(put, imya, sig)
 }

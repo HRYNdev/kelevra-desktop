@@ -295,6 +295,22 @@ func TestSetevoyOtkazPoTipam(t *testing.T) {
 			t.Errorf("%v не сочтено сетевым отказом — не повторилось бы", err)
 		}
 	}
+	// Сборку или подпись не дали скачать: 5xx и 429 — пройдёт само, 404 — нет.
+	for _, s := range []struct {
+		err     error
+		setevoy bool
+	}{
+		{&obnovlenie.OshibkaSkachivaniya{Chto: "подпись не скачалась", Kod: 504}, true},
+		{fmt.Errorf("обновление не установлено: %w", &obnovlenie.OshibkaSkachivaniya{Chto: "скачивание", Kod: 503}), true},
+		{&obnovlenie.OshibkaSkachivaniya{Chto: "скачивание", Kod: 429}, true},
+		{&obnovlenie.OshibkaSkachivaniya{Chto: "подпись не скачалась", Kod: 404}, false},
+		{&obnovlenie.OshibkaSkachivaniya{Chto: "скачивание", Kod: 403}, false},
+		{&obnovlenie.OshibkaSkachivaniya{Chto: "подпись не скачалась", Prichina: oshibkaDNS()}, true},
+	} {
+		if setevoyOtkaz(s.err) != s.setevoy {
+			t.Errorf("%v: setevoyOtkaz = %v, ждал %v", s.err, !s.setevoy, s.setevoy)
+		}
+	}
 	if k := korotkoOSeti(oshibkaDNS()); strings.Contains(k, "SEKRETNYYKOD42") || strings.Contains(k, "/k/") {
 		t.Errorf("короткая причина несёт адрес подписки: %q", k)
 	}
