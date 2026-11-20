@@ -3151,6 +3151,7 @@ func zakrepitTunnel(tunImya string) {
 	proksi.UbratSled()
 	tunnel.Otmetit(tunImya, os.Getpid())
 	log.Printf("поднят туннель (адаптер %q)", tunImya)
+	tunnel.NastroitDNS(tunImya)
 }
 
 // soobshchitTreyuProZashchitu отдаёт значку в трее, поднята ли связь.
