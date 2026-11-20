@@ -43,6 +43,7 @@ import (
 	"github.com/HRYNdev/kelevra-desktop/internal/pult"
 	"github.com/HRYNdev/kelevra-desktop/internal/tunnel"
 	"github.com/HRYNdev/kelevra-desktop/internal/ustroystvo"
+	"github.com/HRYNdev/kelevra-desktop/internal/vinsluzhba"
 	"github.com/HRYNdev/kelevra-desktop/internal/yadro"
 	"github.com/HRYNdev/kelevra-desktop/internal/zapasnoy"
 	"github.com/HRYNdev/kelevra-desktop/internal/zapisi"
@@ -2845,7 +2846,7 @@ func (s *Sluzhba) podnyatZashchituRaz(ctx context.Context) error {
 	// Права — раньше всего, даже раньше скачивания ядра: без них туннель не
 	// поднять, а качать мегабайты ради отказа незачем.
 	if !s.estPrava() {
-		log.Printf("подключение не начато: у этой копии нет прав администратора (служба Windows не установлена)")
+		log.Printf("подключение не начато: у этой копии нет прав администратора (служба " + vinsluzhba.Sistema + " не установлена)")
 		s.soobshchitTreyuProZashchitu(false)
 		return OshibkaNetPrav
 	}
@@ -3632,13 +3633,13 @@ func (s *Sluzhba) datPrava(w http.ResponseWriter, r *http.Request) {
 		otdat(w, nil, fmt.Errorf("Служба Kelevra устанавливается только в Windows."))
 		return
 	}
-	log.Printf("«Дать права»: прошу права администратора и ставлю службу Windows")
+	log.Printf("«Дать права»: прошу права администратора и ставлю службу " + vinsluzhba.Sistema + "")
 	if err := s.PostavitSluzhbuWindows(); err != nil {
 		log.Printf("«Дать права»: служба не поставлена: %v", err)
 		otdat(w, nil, OshibkaNetPrav)
 		return
 	}
-	log.Printf("«Дать права»: служба Windows поставлена")
+	log.Printf("«Дать права»: служба " + vinsluzhba.Sistema + " поставлена")
 	otdat(w, map[string]any{"gotovo": true}, nil)
 }
 

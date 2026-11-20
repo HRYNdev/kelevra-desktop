@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/vinsluzhba"
 )
 
 // Путь запасной папки журнала знает hranenie (ZapasnayaPapkaZhurnala) — тот
@@ -74,6 +75,11 @@ func (p *pisatelZhurnala) Write(b []byte) (int, error) {
 // нельзя — сторожит TestRolProcessaSovpadaetSRezhimomSluzhby.
 func rolProcessa() string {
 	if os.Getenv("KELEVRA_BEZ_OKNA") == "1" || estArg(argSluzhba) {
+		return "служба"
+	}
+	// Служба, поднятая диспетчером служб Windows или systemd (ветка
+	// vinsluzhba.PodSluzhboy в main()): у неё свой аргумент.
+	if estArg(vinsluzhba.Argument) {
 		return "служба"
 	}
 	if estArg(argDerzhatZapret) {

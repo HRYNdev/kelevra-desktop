@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/obnovlenie"
+	"github.com/HRYNdev/kelevra-desktop/internal/vinsluzhba"
 )
 
 // ustanovitObnovlenie — хук, которым тычок в пузырь трея (trey_windows.go:
@@ -95,7 +96,7 @@ func podtolknutFonovuyuProverku(adres string) {
 // (internal/vinsluzhba, SetRecoveryActions). К этому моменту файл на диске уже
 // заменён, значит поднимется новая версия.
 func perezapustitSluzhbuPosleObnovleniya(put string, pid int) error {
-	log.Printf("обновление поставлено, ухожу с отказом — диспетчер служб поднимет новую версию")
+	log.Printf("обновление поставлено, ухожу с отказом — " + vinsluzhba.Dispetcher + " поднимет новую версию")
 	return nil
 }
 
