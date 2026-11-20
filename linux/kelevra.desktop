@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kelevra
+Comment=Kelevra
+Exec=kelevra
+Icon=kelevra
+Terminal=false
+Categories=Network;

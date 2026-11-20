@@ -1,0 +1,122 @@
+#!/bin/sh
+# Kelevra.AppImage — точка входа образа.
+#
+# Образ — установщик и ярлык одновременно. Служба Kelevra живёт в
+# /opt/kelevra/kelevra и обновляется сама (пульт и GitHub, файл
+# kelevra-linux-amd64); образ в этом не участвует.
+#
+#   служба стоит  → открыть установленную программу (она свежее образа,
+#                   если обновлялась);
+#   службы нет    → одно окно пароля (pkexec): WebKitGTK 4.1 пакетным
+#                   менеджером, если её нет, и установка службы из программы
+#                   внутри образа (install.sh --iz-fayla), затем — окно.
+#
+# Почему не pkexec прямо на файл внутри образа: образ смонтирован FUSE от
+# имени человека, root туда не заглядывает. Программа и установщик сперва
+# копируются во временную папку.
+set -u
+
+ZDES="$(dirname "$(readlink -f "$0")")"
+USTANOVLENA="/opt/kelevra/kelevra"
+
+soobshchit_oshibku() {
+	zagolovok="Kelevra не установлена"
+	if command -v zenity >/dev/null 2>&1; then
+		zenity --error --title="$zagolovok" --text="$1" --no-markup 2>/dev/null && return
+	fi
+	if command -v kdialog >/dev/null 2>&1; then
+		kdialog --title "$zagolovok" --error "$1" 2>/dev/null && return
+	fi
+	if command -v notify-send >/dev/null 2>&1; then
+		notify-send --app-name=Kelevra "$zagolovok" "$1" 2>/dev/null && return
+	fi
+	if command -v xmessage >/dev/null 2>&1; then
+		xmessage -center "$zagolovok: $1" 2>/dev/null && return
+	fi
+	printf '%s: %s\n' "$zagolovok" "$1" >&2
+}
+
+uvedomit() {
+	command -v notify-send >/dev/null 2>&1 &&
+		notify-send --app-name=Kelevra "Kelevra" "$1" 2>/dev/null || true
+}
+
+zapuskaetsya() {
+	[ -x "$USTANOVLENA" ] || return 1
+	ldd "$USTANOVLENA" 2>/dev/null | grep -q 'not found' && return 1
+	systemctl is-enabled --quiet kelevra 2>/dev/null
+}
+
+if zapuskaetsya; then
+	exec "$USTANOVLENA" "$@"
+fi
+
+if [ "$(uname -m)" != x86_64 ]; then
+	soobshchit_oshibku "Поддерживается только 64-битный x86."
+	exit 1
+fi
+
+vrem="$(mktemp -d)" || {
+	soobshchit_oshibku "Не создать временную папку."
+	exit 1
+}
+trap 'rm -rf "$vrem"' EXIT INT TERM
+cp "$ZDES/usr/bin/kelevra" "$vrem/kelevra" &&
+	cp "$ZDES/usr/share/kelevra/install.sh" "$vrem/kelevra-ustanovka" &&
+	chmod 755 "$vrem" "$vrem/kelevra" "$vrem/kelevra-ustanovka" || {
+	soobshchit_oshibku "Не скопировать программу из образа."
+	exit 1
+}
+
+if ldd "$vrem/kelevra" 2>/dev/null | grep -q 'not found'; then
+	uvedomit "Установка компонентов (WebKitGTK). Это может занять несколько минут."
+fi
+
+zhurnal="$vrem/zhurnal.txt"
+kod=0
+if command -v pkexec >/dev/null 2>&1; then
+	pkexec "$vrem/kelevra-ustanovka" --iz-fayla "$vrem/kelevra" >"$zhurnal" 2>&1 || kod=$?
+else
+	kod=127
+	printf 'нет pkexec\n' >"$zhurnal"
+fi
+
+# Нет pkexec или агента окна пароля — тот же установщик в терминале через sudo.
+if [ "$kod" = 127 ] && ! zapuskaetsya; then
+	for term in x-terminal-emulator gnome-terminal konsole xfce4-terminal mate-terminal lxterminal kitty alacritty xterm; do
+		command -v "$term" >/dev/null 2>&1 || continue
+		cat >"$vrem/v-terminale" <<KONEC
+#!/bin/sh
+sudo "$vrem/kelevra-ustanovka" --iz-fayla "$vrem/kelevra"
+touch "$vrem/gotovo"
+printf '\nEnter — закрыть окно. '
+read _
+KONEC
+		chmod 755 "$vrem/v-terminale"
+		case "$term" in
+		gnome-terminal) "$term" -- "$vrem/v-terminale" ;;
+		*) "$term" -e "$vrem/v-terminale" ;;
+		esac
+		# Терминал может вернуться сразу (окно открыл уже живой процесс) —
+		# ждём отметку конца установки, не дольше 15 минут.
+		i=0
+		while [ ! -e "$vrem/gotovo" ] && [ $i -lt 900 ]; do
+			sleep 1
+			i=$((i + 1))
+		done
+		kod=0
+		break
+	done
+fi
+
+if ! zapuskaetsya; then
+	case "$kod" in
+	126) soobshchit_oshibku "Права администратора не даны. Запустите Kelevra ещё раз и введите пароль." ;;
+	*) soobshchit_oshibku "$(tail -n 5 "$zhurnal" 2>/dev/null)" ;;
+	esac
+	exit 1
+fi
+
+rm -rf "$vrem"
+trap - EXIT INT TERM
+exec "$USTANOVLENA" "$@"
