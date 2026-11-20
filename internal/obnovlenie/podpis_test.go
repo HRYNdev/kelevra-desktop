@@ -146,3 +146,74 @@ func TestProveritRelizSPodpisyuPredlagaetSsylku(t *testing.T) {
 		t.Fatalf("ссылка на подпись %q", n.SsylkaPodpisi)
 	}
 }
+
+// Подпись не дали (504, как у ноута 13.11) — это не «подпись неверна»: отказ
+// временный, без ErrPodpis, старая версия цела. 404 — по-прежнему ErrPodpis
+// (TestPostavitBezPodpisiOtvergaetsya выше).
+func TestPostavitPodpisNeSkachalas504(t *testing.T) {
+	fayl := []byte("MZ nastoyashchaya versiya")
+	n, _ := stendPodpisi(t, fayl, func(sig string) string { return sig })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sig") {
+			http.Error(w, "шлюз", http.StatusGatewayTimeout)
+			return
+		}
+		w.Write(fayl)
+	}))
+	t.Cleanup(srv.Close)
+	n.Ssylka, n.SsylkaPodpisi = srv.URL+"/Kelevra.exe", srv.URL+"/Kelevra.exe.sig"
+	put, staroe := tekushchiy(t)
+
+	err := Postavit(context.Background(), nil, n, put)
+	if err == nil || errors.Is(err, ErrPodpis) {
+		t.Fatalf("504 на подписи: ждал временный отказ без ErrPodpis, получил %v", err)
+	}
+	var skach *OshibkaSkachivaniya
+	if !errors.As(err, &skach) || !skach.Vremennaya() || skach.Kod != http.StatusGatewayTimeout {
+		t.Fatalf("504 на подписи: не OshibkaSkachivaniya с кодом 504: %v", err)
+	}
+	if !strings.Contains(err.Error(), "подпись не скачалась: ответ 504") {
+		t.Fatalf("строка журнала потеряла причину: %v", err)
+	}
+	if b, _ := os.ReadFile(put); string(b) != string(staroe) {
+		t.Fatal("старая версия тронута")
+	}
+	if HvostEst(put) {
+		t.Fatal("после отказа остался хвост рядом с приложением")
+	}
+}
+
+// Подпись не скачалась, потому что сервера нет вовсе (сеть): тоже временный,
+// и сетевая ошибка видна по цепочке (её разбирает служба: setevoyOtkaz).
+func TestPostavitPodpisNetSeti(t *testing.T) {
+	fayl := []byte("MZ nastoyashchaya versiya")
+	n, _ := stendPodpisi(t, fayl, func(sig string) string { return sig })
+	mertvyy := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	adres := mertvyy.URL
+	mertvyy.Close()
+	n.SsylkaPodpisi = adres + "/Kelevra.exe.sig"
+	put, _ := tekushchiy(t)
+
+	err := Postavit(context.Background(), nil, n, put)
+	var skach *OshibkaSkachivaniya
+	if errors.Is(err, ErrPodpis) || !errors.As(err, &skach) || !skach.Vremennaya() || skach.Prichina == nil {
+		t.Fatalf("подпись без сети: ждал временный отказ с сетевой причиной, получил %v", err)
+	}
+}
+
+// Сборка не скачалась с 5xx — временный отказ, текст прежний.
+func TestPostavitSborka503Vremennaya(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "лёг", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	put, _ := tekushchiy(t)
+	err := Postavit(context.Background(), nil, Novaya{Versiya: "9.9.9", Ssylka: srv.URL}, put)
+	var skach *OshibkaSkachivaniya
+	if !errors.As(err, &skach) || !skach.Vremennaya() || err.Error() != "скачивание: ответ 503" {
+		t.Fatalf("503 на сборке: %v", err)
+	}
+	if (&OshibkaSkachivaniya{Chto: "скачивание", Kod: 404}).Vremennaya() {
+		t.Fatal("404 сочтён временным")
+	}
+}

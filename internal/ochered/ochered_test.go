@@ -3,6 +3,8 @@ package ochered
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,5 +131,134 @@ func TestVybratSOpozdaniem(t *testing.T) {
 	o.Shag(context.Background())
 	if !o.Shag(context.Background()) || p.vybrano != "Финляндия" {
 		t.Fatalf("переход с опоздавшим ответом не засчитан: %q", p.vybrano)
+	}
+}
+
+// zhurnal — строки, которые очередь пишет в журнал.
+type zhurnal struct{ stroki []string }
+
+func (z *zhurnal) log(f string, a ...any) { z.stroki = append(z.stroki, fmt.Sprintf(f, a...)) }
+
+func (z *zhurnal) skolko(podstroka string) int {
+	n := 0
+	for _, s := range z.stroki {
+		if strings.Contains(s, podstroka) {
+			n++
+		}
+	}
+	return n
+}
+
+// Ни один узел не отвечает час подряд: строка «ни один» с причинами — при входе в серию, потом
+// не чаще NapominatVseMertvy с числом шагов, и одна строка, когда узел ожил. Решения те же:
+// никуда не переключаемся, пока все мертвы.
+func TestVseMertvyZhurnalSeriey(t *testing.T) {
+	sey := time.Unix(1000, 0)
+	p := &podstava{vybrano: "Нидерланды", mertvye: map[string]bool{"Нидерланды": true, "Финляндия": true}}
+	o := ochered(p, &sey)
+	z := &zhurnal{}
+	o.Log = z.log
+
+	shagov := 0
+	for proshlo := time.Duration(0); proshlo <= time.Hour; proshlo += 34 * time.Second {
+		sey = time.Unix(1000, 0).Add(proshlo)
+		if o.Shag(context.Background()) {
+			t.Fatal("переключились, когда все мертвы")
+		}
+		shagov++
+	}
+	if n := z.skolko("ни один узел не отвечает:"); n != 1 {
+		t.Fatalf("строк о входе в серию %d, ждал 1:\n%s", n, strings.Join(z.stroki, "\n"))
+	}
+	if !strings.Contains(z.stroki[1], "«Нидерланды» — не ответил") || !strings.Contains(z.stroki[1], "«Финляндия» — не ответил") {
+		t.Fatalf("в строке о серии нет причин по узлам: %q", z.stroki[1])
+	}
+	napominaniy := z.skolko("всё ещё не отвечает")
+	if napominaniy < 5 || napominaniy > 6 {
+		t.Fatalf("напоминаний за час %d, ждал 5–6 (раз в %s):\n%s", napominaniy, NapominatVseMertvy, strings.Join(z.stroki, "\n"))
+	}
+	if len(z.stroki) > 10 {
+		t.Fatalf("за %d шагов %d строк — журнал снова шумит:\n%s", shagov, len(z.stroki), strings.Join(z.stroki, "\n"))
+	}
+
+	delete(p.mertvye, "Нидерланды")
+	sey = sey.Add(34 * time.Second)
+	o.Shag(context.Background())
+	if z.skolko("узлы снова отвечают") != 1 {
+		t.Fatalf("нет строки о выходе из серии:\n%s", strings.Join(z.stroki, "\n"))
+	}
+	n := len(z.stroki)
+	sey = sey.Add(34 * time.Second)
+	o.Shag(context.Background())
+	if len(z.stroki) != n {
+		t.Fatalf("живой узел пишет лишнее: %v", z.stroki[n:])
+	}
+	if len(p.vybory) != 0 {
+		t.Fatalf("очередь переключала: %v", p.vybory)
+	}
+	t.Logf("журнал за час:\n%s", strings.Join(z.stroki, "\n"))
+}
+
+// Нет шлюза по умолчанию — пишем «у компьютера нет сети», а не «узлы не отвечают»; сеть
+// вернулась, а узлы всё ещё мертвы — это уже другая серия, о ней своя строка.
+func TestVseMertvyBezSeti(t *testing.T) {
+	sey := time.Unix(1000, 0)
+	p := &podstava{vybrano: "Нидерланды", mertvye: map[string]bool{"Нидерланды": true, "Финляндия": true}}
+	o := ochered(p, &sey)
+	z := &zhurnal{}
+	o.Log = z.log
+	set := false
+	o.EstSet = func() bool { return set }
+
+	for i := 0; i < 5; i++ {
+		sey = sey.Add(34 * time.Second)
+		o.Shag(context.Background())
+	}
+	if z.skolko("у компьютера нет сети") != 1 || z.skolko("ни один узел") != 0 {
+		t.Fatalf("без сети ждал одну строку «нет сети» и ни одной «ни один узел»:\n%s", strings.Join(z.stroki, "\n"))
+	}
+	set = true
+	sey = sey.Add(34 * time.Second)
+	o.Shag(context.Background())
+	if z.skolko("ни один узел не отвечает:") != 1 {
+		t.Fatalf("сеть есть, узлы мертвы — ждал строку «ни один»:\n%s", strings.Join(z.stroki, "\n"))
+	}
+	p.mertvye = map[string]bool{}
+	sey = sey.Add(34 * time.Second)
+	o.Shag(context.Background())
+	if z.skolko("узлы снова отвечают") != 1 {
+		t.Fatalf("нет строки о выходе:\n%s", strings.Join(z.stroki, "\n"))
+	}
+}
+
+// Причины Clash API — по-русски; ошибка срока шага — своя; длинное обрезано в одну строку.
+func TestPrichinaZamera(t *testing.T) {
+	sluchai := map[string]error{
+		"нет ответа за срок замера":             errors.New("Timeout"),
+		"соединение через узел не установилось": errors.New("An error occurred in the delay test"),
+		"замер не уложился в срок шага":         fmt.Errorf("Get: %w", context.DeadlineExceeded),
+		"узел не ответил":                       errors.New("узел не ответил"),
+	}
+	for zhdu, err := range sluchai {
+		if got := prichinaZamera(err); got != zhdu {
+			t.Errorf("%v: %q, ждал %q", err, got, zhdu)
+		}
+	}
+	dlinnaya := prichinaZamera(errors.New(strings.Repeat("а", 300) + "\nвторая строка"))
+	if strings.Contains(dlinnaya, "\n") || len([]rune(dlinnaya)) > 121 {
+		t.Fatalf("причина не в одну короткую строку: %q", dlinnaya)
+	}
+}
+
+// Провал текущего узла (до порога) — строка с причиной.
+func TestProvalSPrichinoy(t *testing.T) {
+	sey := time.Unix(1000, 0)
+	p := &podstava{vybrano: "Нидерланды", mertvye: map[string]bool{"Нидерланды": true}}
+	o := ochered(p, &sey)
+	z := &zhurnal{}
+	o.Log = z.log
+	o.Shag(context.Background())
+	if len(z.stroki) != 1 || !strings.HasSuffix(z.stroki[0], "(1 из 2): не ответил") {
+		t.Fatalf("строка провала без причины: %v", z.stroki)
 	}
 }
