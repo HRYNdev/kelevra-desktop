@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"runtime"
 	"time"
 	"unsafe"
@@ -38,8 +39,9 @@ func zanyatMestoZnachka(srok time.Duration) bool {
 			itog <- true
 			return
 		}
+		// ERROR_ALREADY_EXISTS при рабочей ручке — объект уже есть, не отказ.
 		h, err := windows.CreateMutex(nil, false, imya)
-		if err != nil || h == 0 {
+		if h == 0 || (err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS)) {
 			itog <- true
 			return
 		}
@@ -68,7 +70,7 @@ func zamokZnachkaZanyat() bool {
 		return false
 	}
 	h, err := windows.CreateMutex(nil, false, imya)
-	if err != nil || h == 0 {
+	if h == 0 || (err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS)) {
 		return false
 	}
 	defer windows.CloseHandle(h)

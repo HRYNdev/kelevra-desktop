@@ -3,6 +3,7 @@
 package kopiya
 
 import (
+	"errors"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -31,8 +32,10 @@ func Vzyat(timeout time.Duration) (*Zamok, bool) {
 	if err != nil {
 		return nil, false
 	}
+	// Существующий объект x/sys отдаёт рабочей ручкой ВМЕСТЕ с ERROR_ALREADY_EXISTS
+	// (с v0.x после 2021): это не отказ, а ровно тот случай, ради которого замок.
 	handle, err := windows.CreateMutex(nil, false, imya)
-	if err != nil || handle == 0 {
+	if handle == 0 || (err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS)) {
 		return nil, false
 	}
 	sobytie, err := windows.WaitForSingleObject(handle, uint32(timeout.Milliseconds()))
