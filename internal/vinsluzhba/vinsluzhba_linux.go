@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -38,6 +39,12 @@ const (
 // Restart=on-failure: после обновления служба уходит с отказом (как служба
 // Windows) — systemd поднимает её уже новой версией. Штатный выход (stop) —
 // не повод поднимать.
+//
+// ExecStopPost снимает таблицу запрета (internal/zaslon) после ЛЮБОГО ухода
+// службы — штатного, падения, обновления. На Windows фильтры WFP живут в
+// сессии процесса и умирают вместе с ним; таблица nftables процесс
+// переживает, и в строгом режиме упавшая служба оставила бы машину без сети.
+// На время смены копий запрет держит держатель своей таблицей.
 func tekstYunita(putExe string) string {
 	return fmt.Sprintf(`[Unit]
 Description=Kelevra
@@ -51,6 +58,7 @@ Environment=%s=1
 Restart=on-failure
 RestartSec=2
 KillMode=process
+ExecStopPost=-/bin/sh -c 'nft delete table inet kelevra_zaslon 2>/dev/null; true'
 
 [Install]
 WantedBy=multi-user.target
@@ -119,14 +127,38 @@ func Ostanovit() error { return systemctl("stop", ImyaYunita) }
 
 // Krutit — работа службы до сигнала остановки от systemd (SIGTERM).
 func Krutit(rabota func(ctx context.Context)) error {
+	PopravitSamopodyom()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	rabota(ctx)
 	return nil
 }
 
-// PopravitSamopodyom — самоподъём задан в юните (Restart=on-failure).
-func PopravitSamopodyom() {}
+// PopravitSamopodyom — юнит, поставленный прежней версией, приводится к
+// нынешнему (как перенастройка самоподъёма службы Windows): правка ложится на
+// диск и вступает в силу со следующего старта, текущую работу не трогает.
+func PopravitSamopodyom() {
+	if !PodSluzhboy() || os.Geteuid() != 0 {
+		return
+	}
+	b, err := os.ReadFile(PutYunita)
+	if err != nil {
+		return
+	}
+	nuzhen := tekstYunita(PutUstanovki)
+	if string(b) == nuzhen {
+		return
+	}
+	if err := os.WriteFile(PutYunita, []byte(nuzhen), 0o644); err != nil {
+		log.Printf("служба: юнит не обновлён: %v", err)
+		return
+	}
+	if err := systemctl("daemon-reload"); err != nil {
+		log.Printf("служба: юнит обновлён, daemon-reload: %v", err)
+		return
+	}
+	log.Printf("служба: юнит systemd обновлён до нынешнего (вступит со следующего старта)")
+}
 
 // PerenestiVProgramFiles — юнит с первой установки смотрит в /opt/kelevra,
 // переносить нечего.

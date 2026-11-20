@@ -24,7 +24,14 @@ import (
 // (или kelevra --snyat-zapret).
 const tablicaNft = "kelevra_zaslon"
 
-type nftSistema struct{ nft string }
+// tablicaDerzhatelya — своя таблица у держателя запрета (--derzhat-zapret):
+// на Windows у каждого процесса своя сессия WFP, и уходящий держатель снимает
+// только свои фильтры. Общая таблица дала бы держателю снести запрет новой
+// копии (стенд 20.11.2026: после обновления таблицы не стало). Две таблицы
+// с одинаковыми правилами действуют вместе: drop в любой — пакет отброшен.
+const tablicaDerzhatelya = "kelevra_zaslon_derzhatel"
+
+type nftSistema struct{ nft, tablica string }
 
 // NovayaSistema — nftables есть и мы root (служба systemd); иначе запрета нет.
 func NovayaSistema() Sistema {
@@ -36,7 +43,13 @@ func NovayaSistema() Sistema {
 		log.Printf("запрет мимо туннеля: nft не найден (%v) — запрета на этой машине нет", err)
 		return nil
 	}
-	return &nftSistema{nft: p}
+	tablica := tablicaNft
+	for _, a := range os.Args[1:] {
+		if a == "--derzhat-zapret" {
+			tablica = tablicaDerzhatelya
+		}
+	}
+	return &nftSistema{nft: p, tablica: tablica}
 }
 
 func (n *nftSistema) zapustit(skript string) error {
@@ -50,20 +63,24 @@ func (n *nftSistema) zapustit(skript string) error {
 	return nil
 }
 
-func (n *nftSistema) Primenit(filtry []Filtr) error { return n.zapustit(SkriptNft(filtry)) }
+func (n *nftSistema) Primenit(filtry []Filtr) error {
+	return n.zapustit(skriptNftDlya(n.tablica, filtry))
+}
 
 func (n *nftSistema) Snyat() error {
 	// «Объявить и удалить» — удаление не падает, если таблицы нет.
-	return n.zapustit(fmt.Sprintf("table inet %s\ndelete table inet %s\n", tablicaNft, tablicaNft))
+	return n.zapustit(fmt.Sprintf("table inet %s\ndelete table inet %s\n", n.tablica, n.tablica))
 }
 
 // SkriptNft — сценарий nft для набора фильтров (чистая функция, проверяется тестом).
-func SkriptNft(filtry []Filtr) string {
+func SkriptNft(filtry []Filtr) string { return skriptNftDlya(tablicaNft, filtry) }
+
+func skriptNftDlya(tablica string, filtry []Filtr) string {
 	po := append([]Filtr(nil), filtry...)
 	sort.SliceStable(po, func(i, j int) bool { return po[i].Ves > po[j].Ves })
 	var b strings.Builder
-	fmt.Fprintf(&b, "table inet %s\ndelete table inet %s\n", tablicaNft, tablicaNft)
-	fmt.Fprintf(&b, "table inet %s {\n\tchain vyhod {\n\t\ttype filter hook output priority filter; policy accept;\n", tablicaNft)
+	fmt.Fprintf(&b, "table inet %s\ndelete table inet %s\n", tablica, tablica)
+	fmt.Fprintf(&b, "table inet %s {\n\tchain vyhod {\n\t\ttype filter hook output priority filter; policy accept;\n", tablica)
 	for _, f := range po {
 		fmt.Fprintf(&b, "\t\t%s\n", pravilo(f))
 	}
