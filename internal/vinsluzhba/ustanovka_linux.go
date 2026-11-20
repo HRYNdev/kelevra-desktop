@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 
@@ -72,6 +73,10 @@ func UstanovitPolnostyu(putExe string) error {
 	}
 	if err := os.WriteFile(PutYarlyka, []byte(tekstYarlyka), 0o644); err != nil {
 		log.Printf("ярлык в меню не записан: %v", err)
+	}
+	// Без обновлённого кеша значков меню показывает ярлык пустым (стенд 20.11.2026).
+	if p, err := exec.LookPath("gtk-update-icon-cache"); err == nil {
+		_ = exec.Command(p, "-f", "-t", "/usr/share/icons/hicolor").Run()
 	}
 	return Ustanovit(PutUstanovki)
 }
