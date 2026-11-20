@@ -32,6 +32,10 @@ on:
         type: boolean
         required: false
         default: false
+      dozalit_v:
+        description: "Тег уже выпущенного ядра (core-…): собрать из тех же core_ref и patch_ref и ДОЛОЖИТЬ в него только архив Linux; Windows-файлы и тег не трогаются"
+        required: false
+        default: ""
       probnoe:
         description: "Пробная сборка (prerelease): клиенты её не берут, только стенд с KELEVRA_YADRO_PROBNYE=1"
         type: boolean
@@ -43,7 +47,7 @@ env:
   # Тег сборки ядра: номер прогона и номер повтора — повторный прогон не
   # кладёт второй архив под тот же тег. Клиент сравнивает теги по версии
   # (internal/yadro/versiya_sborki.go): core-v<semver>-<прогон>.<повтор>.
-  TEG_YADRA: core-${{ github.event.inputs.core_ref || 'v1.14.1' }}-${{ github.run_number }}.${{ github.run_attempt }}
+  TEG_YADRA: ${{ github.event.inputs.dozalit_v || format('core-{0}-{1}.{2}', github.event.inputs.core_ref || 'v1.14.1', github.run_number, github.run_attempt) }}
   PATCH_REF: ${{ github.event.inputs.patch_ref || '63e4a97222417daa842ca5c0fc792865872ab2e0' }}
 
 jobs:
@@ -99,6 +103,18 @@ jobs:
             -o ../kelevra-core.exe ./cmd/sing-box
           ls -lh ../kelevra-core.exe
 
+      # Linux (Desktop на Linux, служба systemd): то же ядро с теми же тегами.
+      - name: Сборка под Linux
+        working-directory: core
+        run: |
+          VERSION=$(git describe --tags | sed 's/^v//')
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -tags "with_utls,with_quic,with_gvisor,with_clash_api,with_wireguard" \
+            -trimpath -ldflags "-X github.com/sagernet/sing-box/constant.Version=$VERSION -s -w" \
+            -o ../kelevra-core-linux ./cmd/sing-box
+          ls -lh ../kelevra-core-linux
+          grep -qa 'v2rayxhttp' ../kelevra-core-linux || { echo "ОШИБКА: ядро Linux без нашего транспорта"; exit 1; }
+
       - name: Проверка что транспорт внутри
         run: |
           if grep -qa 'v2rayxhttp' kelevra-core.exe; then
@@ -137,6 +153,9 @@ jobs:
           mkdir -p pack && cp kelevra-core.exe pack/sing-box.exe
           cd pack && zip -q "../sing-box-windows-amd64.zip" sing-box.exe
           ls -lh ../sing-box-windows-amd64.zip
+          mkdir -p ../pack-linux && cp ../kelevra-core-linux ../pack-linux/sing-box && chmod 755 ../pack-linux/sing-box
+          (cd ../pack-linux && zip -q "../sing-box-linux-amd64.zip" sing-box)
+          ls -lh ../sing-box-linux-amd64.zip
 
       # Подпись архива (internal/podpis): десктоп ставит ядро только с верной
       # подписью нашего ключа. Подписываем под именем, под которым файл
@@ -154,9 +173,21 @@ jobs:
         run: |
           (cd sign-src && go run ./cmd/podpisat ../sing-box-windows-amd64.zip sing-box-windows-amd64.zip "$TEG_YADRA")
           test -s sing-box-windows-amd64.zip.sig
+          (cd sign-src && go run ./cmd/podpisat ../sing-box-linux-amd64.zip sing-box-linux-amd64.zip "$TEG_YADRA")
+          test -s sing-box-linux-amd64.zip.sig
+
+      # Доложить Linux в выпущенное ядро: подпись выше уже под его тегом.
+      - name: Доложить архив Linux в выпуск ядра
+        if: ${{ github.event.inputs.dozalit_v != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TEG_YADRA" -R "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$TEG_YADRA" sing-box-linux-amd64.zip sing-box-linux-amd64.zip.sig -R "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TEG_YADRA" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
 
       - uses: softprops/action-gh-release@v3
-        if: ${{ github.event.inputs.vypustit == 'true' }}
+        if: ${{ github.event.inputs.vypustit == 'true' && github.event.inputs.dozalit_v == '' }}
         with:
           tag_name: ${{ env.TEG_YADRA }}
           name: Ядро ${{ env.CORE_REF }} (сборка ${{ github.run_number }}.${{ github.run_attempt }})
@@ -166,6 +197,8 @@ jobs:
           files: |
             sing-box-windows-amd64.zip
             sing-box-windows-amd64.zip.sig
+            sing-box-linux-amd64.zip
+            sing-box-linux-amd64.zip.sig
           # Пробная сборка не уходит ни новым установкам, ни на замену у стоящих.
           prerelease: ${{ github.event.inputs.probnoe == 'true' }}
           # Релиз ядра не должен становиться «последним»: latest/download/Kelevra.exe отдал бы 404.

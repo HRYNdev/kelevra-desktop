@@ -131,6 +131,26 @@ jobs:
           echo "   $(stat -c%s build/Kelevra.exe) байт, версия $VERSIYA внутри найдена"
           sha256sum build/Kelevra.exe | tee build/Kelevra.exe.sha256
 
+      # Linux: та же программа с окном WebKitGTK (тег webkit, CGO). webview_go
+      # просит webkit2gtk-4.0, а в свежих системах есть только 4.1 (API тот
+      # же) — подставляем 4.1 под именем 4.0 для pkg-config. Файл тянет
+      # libwebkit2gtk-4.1 и gtk3 — они есть в любом рабочем столе GNOME/XFCE/KDE.
+      - name: Сборка под Linux
+        env:
+          VERSIYA: ${{ steps.versiya.outputs.versiya }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config >/dev/null
+          mkdir -p "$RUNNER_TEMP/pc"
+          sed 's/^Name:.*/Name: webkit2gtk-4.0/' "$(pkg-config --variable=pcfiledir webkit2gtk-4.1)/webkit2gtk-4.1.pc" > "$RUNNER_TEMP/pc/webkit2gtk-4.0.pc"
+          PKG_CONFIG_PATH="$RUNNER_TEMP/pc" CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -tags webkit \
+            -ldflags "-s -w -X github.com/HRYNdev/kelevra-desktop/internal/podpiska.Versiya=$VERSIYA" \
+            -o build/kelevra-linux-amd64 ./cmd/kelevra
+          grep -qa "$VERSIYA" build/kelevra-linux-amd64 || { echo "✗ в Linux-сборке нет версии $VERSIYA"; exit 1; }
+          ldd build/kelevra-linux-amd64 | grep -q webkit2gtk-4.1 || { echo "✗ Linux-сборка без WebKitGTK 4.1"; exit 1; }
+          ls -l build/kelevra-linux-amd64
+          sha256sum build/kelevra-linux-amd64 | tee build/kelevra-linux-amd64.sha256
+
       # Подпись выпуска (internal/podpis). Клиенты версии с проверкой подписи
       # ставят обновление, только если рядом лежит Kelevra.exe.sig, сделанный
       # нашим ключом: без неё релиз не обновит никого. Закрытый ключ — секрет
@@ -143,6 +163,8 @@ jobs:
         run: |
           go run ./cmd/podpisat build/Kelevra.exe Kelevra.exe
           test -s build/Kelevra.exe.sig
+          go run ./cmd/podpisat build/kelevra-linux-amd64 kelevra-linux-amd64
+          test -s build/kelevra-linux-amd64.sig
 
       # Описание берём из аннотации тега: она пишется человеком в момент
       # выпуска и живёт в git, а не только на странице релиза.
@@ -173,6 +195,8 @@ jobs:
           files: |
             build/Kelevra.exe
             build/Kelevra.exe.sig
+            build/kelevra-linux-amd64
+            build/kelevra-linux-amd64.sig
           draft: true
           prerelease: ${{ steps.versiya.outputs.predvaritelnyy == 'true' }}
 

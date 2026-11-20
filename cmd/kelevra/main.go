@@ -647,7 +647,7 @@ func estArg(arg string) bool {
 // Отметки «уже спрашивали» тут нет нарочно: без прав приложение не работает
 // вовсе, и каждый новый запуск руками — та же просьба, что и первый.
 func nuzhnoStavitSluzhbuNaStarte(os string, sluzhbaEst bool, oshibka error, tiho bool, smenaPID int, estChuzhayaKopiya bool) bool {
-	if os != "windows" || sluzhbaEst || oshibka != nil {
+	if (os != "windows" && os != "linux") || sluzhbaEst || oshibka != nil {
 		return false
 	}
 	return !tiho && smenaPID == 0 && !estChuzhayaKopiya

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -13,6 +15,9 @@ import (
 func stend(t *testing.T) *Sluzhba {
 	t.Helper()
 	t.Setenv("KELEVRA_DIR", t.TempDir())
+	// Автозапуск на Linux пишет ярлык в $XDG_CONFIG_HOME/autostart: проверки
+	// не должны трогать настоящий профиль машины, на которой гоняются.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	// Номер шлюза у машины, на которой гоняются проверки, свой и к делу не
 	// относится: без подмены авторежим опознал бы его как «не домашний» и
 	// закрывал бы вопрос раньше подставных DNS-зондов, которыми и написаны
@@ -59,8 +64,8 @@ func TestSostoyanieAvtozapuskNaLinukse(t *testing.T) {
 // человеку (или тесту окна) обязана доехать причина текстом, а не потеряться
 // в журнале.
 func TestAvtozapuskRuchkaChestnoOtkazyvaetNaLinukse(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("проверяет ветку не-Windows")
+	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+		t.Skip("проверяет ветку систем без автозапуска (Linux: ярлык autostart, см. TestAvtozapuskNaLinukse)")
 	}
 	s := stend(t)
 	m := s.Obsluzhit()
@@ -110,5 +115,25 @@ func TestAvtozapuskSluzhbyWindowsOtdanOknu(t *testing.T) {
 	}
 	if o.AvtozapuskPodderzhivaetsya || o.AvtozapuskVklyuchen || o.AvtozapuskUstarela || o.AvtozapuskBeda != "" {
 		t.Fatalf("служба Windows показала автозапуск своей ветки: %+v", o)
+	}
+}
+
+// На Linux тумблер пишет ярлык в autostart и отвечает «готово».
+func TestAvtozapuskNaLinukse(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("ветка Linux")
+	}
+	s := stend(t)
+	m := s.Obsluzhit()
+	telo, _ := json.Marshal(map[string]any{"vklyuchit": true})
+	r := httptest.NewRequest("POST", "/"+s.klyuch+"/api/avtozapusk", bytes.NewReader(telo))
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("включение автозапуска на Linux: %d %s", w.Code, w.Body.String())
+	}
+	yarlyk := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "autostart", "kelevra.desktop")
+	if _, err := os.Stat(yarlyk); err != nil {
+		t.Fatalf("ярлыка автозапуска нет: %v", err)
 	}
 }

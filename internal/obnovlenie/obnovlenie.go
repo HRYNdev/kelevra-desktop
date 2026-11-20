@@ -52,8 +52,13 @@ const PrefiksPrilozheniya = "app-v"
 // более частый опрос не даёт ничего, кроме лишней нагрузки на GitHub API.
 const PeriodFonovoyProverki = 4 * time.Hour
 
-// ImyaFayla — как называется наша сборка внутри релиза.
-const ImyaFayla = "Kelevra.exe"
+// ImyaFayla — как называется наша сборка внутри релиза. На Linux программа
+// при старте ставит ImyaFaylaLinux (cmd/kelevra/imya_linux.go); проверки
+// пакета гоняются на Linux и остаются на Kelevra.exe.
+var ImyaFayla = "Kelevra.exe"
+
+// ImyaFaylaLinux — сборка для Linux в том же релизе.
+const ImyaFaylaLinux = "kelevra-linux-amd64"
 
 // Novaya — найденная свежая сборка.
 type Novaya struct {

@@ -31,6 +31,15 @@ func Papka() string {
 	if d := os.Getenv("KELEVRA_DIR"); d != "" {
 		return d
 	}
+	if runtime.GOOS == "linux" {
+		// Служба systemd работает от root, окно — от человека: как и на
+		// Windows, есть общая папка — в неё смотрят обе части.
+		if o := PapkaObshchaya(); o != "" {
+			if st, err := os.Stat(o); err == nil && st.IsDir() {
+				return o
+			}
+		}
+	}
 	if runtime.GOOS == "windows" {
 		// Служба Windows работает под системной учётной записью, и её
 		// %LOCALAPPDATA% — это профиль системы, куда человек никогда не
@@ -66,6 +75,10 @@ func Papka() string {
 // Пустая строка означает «на этой системе такого понятия нет»: вызывающий
 // обязан молча продолжить со старой папкой, а не считать это отказом.
 func PapkaObshchaya() string {
+	if runtime.GOOS == "linux" {
+		// Linux: заводится установкой службы systemd (vinsluzhba).
+		return "/var/lib/kelevra"
+	}
 	if runtime.GOOS != "windows" {
 		return ""
 	}

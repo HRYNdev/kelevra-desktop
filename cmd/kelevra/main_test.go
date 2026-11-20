@@ -117,7 +117,8 @@ func TestNuzhnoStavitSluzhbuNaStarte(t *testing.T) {
 		{"смена после обновления — своим путём", "windows", false, nil, true, 4321, false, false},
 		{"смена без --tiho — не просить второй раз", "windows", false, nil, false, 4321, false, false},
 		{"рядом живая копия — её окно покажет «Дать права»", "windows", false, nil, false, 0, true, false},
-		{"не Windows — служб нет", "linux", false, nil, false, 0, false, false},
+		{"Linux без службы systemd — просить (pkexec)", "linux", false, nil, false, 0, false, true},
+		{"прочие системы — служб нет", "darwin", false, nil, false, 0, false, false},
 	}
 	for _, s := range sluchai {
 		t.Run(s.imya, func(t *testing.T) {
