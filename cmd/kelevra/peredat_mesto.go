@@ -62,7 +62,7 @@ func peredatMestoSluzhbeWindows(ctx context.Context, s *sluzhba.Sluzhba, svoyAdr
 		if !est {
 			continue
 		}
-		log.Printf("служба Windows поставлена и работает (%s) — уступаю ей место", adres)
+		log.Printf("служба "+vinsluzhba.Sistema+" поставлена и работает (%s) — уступаю ей место", adres)
 		_ = s.OpustitZashchitu()
 		zapustitZnachok()
 		select {

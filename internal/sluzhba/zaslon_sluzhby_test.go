@@ -286,3 +286,31 @@ func TestDerzhatelNeDlyaStaroyVersii(t *testing.T) {
 		t.Fatal("намерение не передано")
 	}
 }
+
+// Свежая установка дома: «Подключиться» ставит «подключено», узнаёт «дома»
+// раньше, чем включает автомат, — запрет всё равно снят (стенд Linux
+// 20.11.2026: таблица nftables дома стояла до перезапуска службы).
+func TestPodklyuchitDomaNaSvezheyUstanovkeSnimaetZapret(t *testing.T) {
+	s, sys, _, _ := stendZaslona(t, nil)
+	s.Nastroyki.Avtorezhim = false
+	s.Nastroyki.RuchnoyVybor = false
+	s.zashchitaPodnyataDlyaStenda = func() bool { return false }
+	s.avtorezhimDlyaKnopki = func() *avtorezhim.Avtorezhim {
+		return &avtorezhim.Avtorezhim{
+			Dns:       fakeDnsKnopka{doma: true},
+			Trafik:    fakeTrafikKnopka{proshel: true},
+			Zadvizhka: avtorezhim.NovayaZadvizhka(avtorezhim.Neizvestno),
+		}
+	}
+	s.avtorezhimKnopkaTaimaut = time.Second
+	t.Cleanup(s.OstanovitAvtorezhim)
+	postPodklyuchitIProverit(t, s)
+	if !sys.pusto() {
+		t.Fatalf("«Подключиться» дома: запрет остался (%s)", s.zapretDlyaOkna())
+	}
+	// Повторное «дома» от автомата — тоже пусто, без лишних смен.
+	s.ustanovitDoma(true, "проверка")
+	if !sys.pusto() {
+		t.Fatal("дома: запрет вернулся")
+	}
+}

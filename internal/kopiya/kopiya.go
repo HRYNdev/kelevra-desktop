@@ -97,7 +97,10 @@ func Zanyat(papka, url string, teper time.Time) error {
 		return err
 	}
 	vremenny := Metka(papka) + ".tmp"
-	if err := os.WriteFile(vremenny, b, 0o600); err != nil {
+	// 0644: на Linux метку пишет служба от root, а читает окно человека
+	// (общая папка /var/lib/kelevra); на Windows права задаёт папка (icacls),
+	// и пользователи там тоже читают её. Запись в папку — только у службы.
+	if err := os.WriteFile(vremenny, b, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(vremenny, Metka(papka))

@@ -40,7 +40,7 @@ type avtozapuskOkna struct {
 }
 
 var avtozapuskOknaNastoyashchiy = avtozapuskOkna{
-	podderzhivaetsya: runtime.GOOS == "windows",
+	podderzhivaetsya: runtime.GOOS == "windows" || runtime.GOOS == "linux",
 	put: func() string {
 		sebya, err := os.Executable()
 		if err != nil {

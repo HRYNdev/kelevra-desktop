@@ -153,26 +153,27 @@ func (s *Sluzhba) obnovitZaslon(prichina string) {
 	_ = s.zaslon.Obnovit(prichina)
 }
 
-// ustanovitNamerenie — служба держит (или нет) «подключено».
+// ustanovitNamerenie — служба держит (или нет) «подключено». Правила
+// приводятся на каждом вызове, а не только при смене: вход мог смениться
+// рядом (включился автомат, и «дома» теперь считается). Obnovit при тех же
+// правилах ничего не делает.
 func (s *Sluzhba) ustanovitNamerenie(da bool, prichina string) {
 	s.avtorezhimZamok.Lock()
-	bylo := s.namerenie
 	s.namerenie = da
 	s.avtorezhimZamok.Unlock()
-	if bylo != da {
-		s.obnovitZaslon(prichina)
-	}
+	s.obnovitZaslon(prichina)
 }
 
-// ustanovitDoma — последнее решение автомата: «дома» или нет.
+// ustanovitDoma — последнее решение автомата: «дома» или нет. Тоже без
+// «только при смене»: «дома» считается, лишь пока автомат включён
+// (vhodZaslona), а «Подключиться» дома на свежей установке ставит «дома»
+// раньше, чем включает автомат, — следующий заход автомата с тем же «дома»
+// обязан снять запрет (стенд Linux 20.11.2026: дома таблица стояла).
 func (s *Sluzhba) ustanovitDoma(da bool, prichina string) {
 	s.avtorezhimZamok.Lock()
-	bylo := s.zaslonDoma
 	s.zaslonDoma = da
 	s.avtorezhimZamok.Unlock()
-	if bylo != da {
-		s.obnovitZaslon(prichina)
-	}
+	s.obnovitZaslon(prichina)
 }
 
 // zakrytMimoTunnelya — перед тем как служба сама погасит ядро ради подъёма.

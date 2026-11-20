@@ -833,8 +833,16 @@ func (s *Sluzhba) naytiObnovlenie(ctx context.Context, klient *http.Client) (*ob
 	}
 	if o := s.pult.Obnovlenie(); o != nil && shemaOk(o.URL) && o.Sha256 != "" {
 		if nomer := o.Nomer(); nomer != "" && obnovlenie.Sravnit(nomer, podpiska.Versiya) > 0 {
-			return &obnovlenie.Novaya{Versiya: nomer, Ssylka: o.URL, Razmer: o.Razmer,
-				SsylkaPodpisi: o.URL + ".sig", Sha256: o.Sha256}, nil
+			ssylka, razmer, summa := o.URL, o.Razmer, o.Sha256
+			// Пульт знает одну сборку Desktop — Kelevra.exe. Linux берёт из того
+			// же релиза свой файл: сумма и размер из пульта — от exe, их не
+			// сверяем; подлинность держит подпись (.sig под именем Linux-файла).
+			if obnovlenie.ImyaFayla != "Kelevra.exe" && strings.HasSuffix(ssylka, "/Kelevra.exe") {
+				ssylka = strings.TrimSuffix(ssylka, "Kelevra.exe") + obnovlenie.ImyaFayla
+				razmer, summa = 0, ""
+			}
+			return &obnovlenie.Novaya{Versiya: nomer, Ssylka: ssylka, Razmer: razmer,
+				SsylkaPodpisi: ssylka + ".sig", Sha256: summa}, nil
 		}
 	}
 	if kanal == "proba" {

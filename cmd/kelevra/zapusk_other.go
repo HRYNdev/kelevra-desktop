@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 // zapustitOtdelnuyuSluzhbu вне Windows нужен только затем, чтобы пакет
@@ -34,6 +35,9 @@ func zapustitSebyaZanovo(args ...string) (string, error) {
 	put := putDlyaPerezapuska(sebya)
 	cmd := exec.Command(put, args...)
 	cmd.Env = os.Environ()
+	// Своя сессия: значок и окно не уходят вместе с терминалом или окном,
+	// которое их подняло.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return put, err
 	}

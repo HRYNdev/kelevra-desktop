@@ -1467,7 +1467,7 @@
       <div class="zagolovok-bloka" id="zag-set">Сеть</div>
       <div class="karta karta-nastroyki" id="karta-set">
         <div class="perekl-ryad nastroyki-ryad" id="ryad-avtozapusk" hidden>
-          <span class="perekl-tekst">Запускать вместе с Windows
+          <span class="perekl-tekst"><span id="tekst-avtozapuska">Запускать вместе с Windows</span>
             <span class="podpis">Kelevra включается при входе в систему.</span>
             <span class="podpis-ustarela" id="podpis-ustarela" hidden></span>
           </span>
@@ -2475,6 +2475,10 @@ async function obnovit() {
   // прячем целиком — показывать переключатель, который ничего не делает,
   // хуже, чем не показывать его вовсе.
   const ryadAvt = $("ryad-avtozapusk"), bedaAvt = $("beda-avtozapusk"), podpisAvt = $("podpis-ustarela");
+  // На Linux окно — WebKitGTK: «вместе с Windows» там неправда.
+  if (/Linux/.test(navigator.userAgent) && !/Windows/.test(navigator.userAgent)) {
+    $("tekst-avtozapuska").textContent = "Запускать при входе в систему";
+  }
   ryadAvt.hidden = !s.avtozapusk_podderzhivaetsya;
   // Рубрика «Сеть» держит строку автозапуска, а та умеет исчезнуть — на
   // не-Windows сборке (стенд, будущий Linux-порт). Тогда прячем и заголовок,
