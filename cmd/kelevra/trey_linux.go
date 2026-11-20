@@ -123,19 +123,27 @@ func tychokVObnovlenieLinux() {
 }
 
 // otkrytOknoIzTreya — окно отдельной копией, в своей сессии (Setsid), чтобы
-// закрытие значка его не гасило.
+// закрытие значка его не гасило. Файл — тот, что на диске сейчас
+// (putDlyaNovoyKopii): после обновления свой путь значка — уже убранный
+// прежний файл.
 func otkrytOknoIzTreya() {
 	sebya, err := os.Executable()
 	if err != nil {
 		log.Printf("трей: «Открыть» не понял свой путь: %v", err)
 		return
 	}
-	cmd := exec.Command(sebya)
+	if err := zapustitOknoOtdelno(putDlyaNovoyKopii(sebya)); err != nil {
+		log.Printf("трей: «Открыть» не смог запустить окно: %v", err)
+	}
+}
+
+// zapustitOknoOtdelno — окно (без аргументов) отдельным процессом в своей сессии.
+func zapustitOknoOtdelno(put string) error {
+	cmd := exec.Command(put)
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		log.Printf("трей: «Открыть» не смог запустить окно: %v", err)
-		return
+		return err
 	}
-	_ = cmd.Process.Release()
+	return cmd.Process.Release()
 }

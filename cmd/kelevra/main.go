@@ -156,11 +156,11 @@ func main() {
 	// уборка нужна и здесь (после жёсткого выключения компьютера служба
 	// поднимется первой и до окна), а вот всё оконное ниже — уже нет.
 	if vinsluzhba.PodSluzhboy() {
-		log.Printf("запущены диспетчером служб Windows")
+		log.Printf("запущены " + vinsluzhba.Dispetcherom)
 		if err := vinsluzhba.Krutit(func(ctx context.Context) {
 			rabotaSluzhbyWindows(ctx, papka, putZhurnala)
 		}); err != nil {
-			log.Printf("служба Windows не встала: %v", err)
+			log.Printf("служба "+vinsluzhba.Sistema+" не встала: %v", err)
 		}
 		return
 	}
@@ -397,15 +397,15 @@ func adresKopii(papka, putZhurnala string, smenaPID int, posleUstupki bool) (str
 	// дождаться её метки (решение и разбор 17.10 — vybratPodyomYadra).
 	ustanovlena, errUst := vinsluzhba.Ustanovlena()
 	if errUst != nil {
-		log.Printf("не спросить диспетчер служб, стоит ли служба Windows: %v", errUst)
+		log.Printf("не спросить "+vinsluzhba.Dispetcher+", стоит ли служба "+vinsluzhba.Sistema+": %v", errUst)
 	}
 	if podyom := vybratPodyomYadra(ustanovlena, errUst, posleUstupki); podyom.zhdatSluzhbuWindows {
 		if posleUstupki {
-			log.Printf("служба Windows уступила место — жду, пока диспетчер поднимет её новой версией (до %s)", podyom.srok)
+			log.Printf("служба "+vinsluzhba.Sistema+" уступила место — жду, пока "+vinsluzhba.Dispetcher+" поднимет её новой версией (до %s)", podyom.srok)
 		} else if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet && podyom.zapuskat {
-			log.Printf("служба Windows установлена, но стоит — поднимаю")
+			log.Printf("служба " + vinsluzhba.Sistema + " установлена, но стоит — поднимаю")
 			if err := vinsluzhba.Zapustit(); err != nil {
-				log.Printf("не поднять службу Windows: %v", err)
+				log.Printf("не поднять службу "+vinsluzhba.Sistema+": %v", err)
 			}
 		}
 		adres, err := zhdatMetkuSluzhbyDo(papka, podyom.srok)
@@ -416,13 +416,13 @@ func adresKopii(papka, putZhurnala string, smenaPID int, posleUstupki bool) (str
 			// вернётся. Молча уходить тоже нельзя: человек нажал на значок.
 			umeret(putZhurnala, "служба Kelevra не поднялась", err)
 		}
-		log.Printf("работаю через службу Windows: %s", adres)
+		log.Printf("работаю через службу "+vinsluzhba.Sistema+": %s", adres)
 		if posleUstupki {
 			// Диспетчер поднимает службу из ЕЁ файла. Запусти человек новую
 			// версию из другой папки — служба вернётся прежней версией; молча
 			// это не оставляем, по журналу должно быть видно почему.
 			if v := versiyaSluzhby(adres); v != "" && obnovlenie.Sravnit(podpiska.Versiya, v) > 0 {
-				log.Printf("ВНИМАНИЕ: служба Windows вернулась версией %s, а мы %s — её файл лежит в другом месте и не обновлён", v, podpiska.Versiya)
+				log.Printf("ВНИМАНИЕ: служба "+vinsluzhba.Sistema+" вернулась версией %s, а мы %s — её файл лежит в другом месте и не обновлён", v, podpiska.Versiya)
 			}
 		}
 		// После уступки окно открываем СВОЁ: окно прежней копии (если было)
@@ -657,12 +657,12 @@ func nuzhnoStavitSluzhbuNaStarte(os string, sluzhbaEst bool, oshibka error, tiho
 // просит права (окно UAC) и ждёт, пока копия с правами поставит службу.
 // true — служба поставлена.
 func postavitSluzhbuNaStarte() bool {
-	log.Printf("служба Windows не установлена — прошу права администратора на её установку")
+	log.Printf("служба " + vinsluzhba.Sistema + " не установлена — прошу права администратора на её установку")
 	if err := poprositUstanovkuSluzhby(0); err != nil {
-		log.Printf("служба Windows при старте не поставлена (%v) — окно откроется с кнопкой «Дать права»", err)
+		log.Printf("служба "+vinsluzhba.Sistema+" при старте не поставлена (%v) — окно откроется с кнопкой «Дать права»", err)
 		return false
 	}
-	log.Printf("служба Windows поставлена при старте")
+	log.Printf("служба " + vinsluzhba.Sistema + " поставлена при старте")
 	return true
 }
 
@@ -735,6 +735,8 @@ func zhitZnachkom(papka, putZhurnala string) {
 	}
 	if posleSmeny {
 		go ubratHvostPosleSmeny()
+		// Linux: окна прошлой версии сторожа не имеют — заменить их окном новой.
+		go zamenitOknaProshloyVersii()
 	} else {
 		go ubratHvostProshlogoObnovleniya()
 	}
@@ -744,7 +746,7 @@ func zhitZnachkom(papka, putZhurnala string) {
 	if ustanovlena, _ := vinsluzhba.Ustanovlena(); ustanovlena {
 		if rabotaet, err := vinsluzhba.Rabotaet(); err == nil && !rabotaet {
 			if err := vinsluzhba.Zapustit(); err != nil {
-				log.Printf("не поднять службу Windows: %v", err)
+				log.Printf("не поднять службу "+vinsluzhba.Sistema+": %v", err)
 			}
 		}
 	}
@@ -832,7 +834,7 @@ func zhdatMetkuSluzhbyDo(papka string, srok time.Duration) (string, error) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return "", fmt.Errorf("служба Windows не оставила метку за %s", srok)
+	return "", fmt.Errorf("служба "+vinsluzhba.Sistema+" не оставила метку за %s", srok)
 }
 
 // postavitSluzhbuIUyti — тело режима --postavit-sluzhbu.
@@ -845,7 +847,7 @@ func postavitSluzhbuIUyti(putZhurnala string) {
 	if err != nil {
 		umeret(putZhurnala, "Не найден путь к файлу Kelevra", err)
 	}
-	log.Printf("ставлю службу Windows из %s", put)
+	log.Printf("ставлю службу "+vinsluzhba.Sistema+" из %s", put)
 	if err := vinsluzhba.UstanovitPolnostyu(put); err != nil {
 		log.Printf("служба не установилась: %v", err)
 		skazat("Служба Kelevra не установлена",
@@ -853,7 +855,7 @@ func postavitSluzhbuIUyti(putZhurnala string) {
 				"\n\n"+err.Error())
 		os.Exit(1)
 	}
-	log.Printf("служба Windows установлена и запущена")
+	log.Printf("служба " + vinsluzhba.Sistema + " установлена и запущена")
 }
 
 // zapustitSluzhbu — режим --sluzhba (и его синоним KELEVRA_BEZ_OKNA=1):
@@ -885,9 +887,9 @@ func rabotaSluzhbyWindows(ctx context.Context, papka, putZhurnala string) {
 	// поднимает её уже оттуда. Не вышло — работаем как работали, повтор на
 	// следующем старте.
 	if perenesena, err := vinsluzhba.PerenestiVProgramFiles(); err != nil {
-		log.Printf("служба Windows: не перенесла себя в Program Files (%v) — работаю с прежнего места", err)
+		log.Printf("служба "+vinsluzhba.Sistema+": не перенесла себя в Program Files (%v) — работаю с прежнего места", err)
 	} else if perenesena {
-		log.Printf("служба Windows: перерегистрирована на копию в Program Files, ухожу с отказом — диспетчер поднимет её оттуда")
+		log.Printf("служба " + vinsluzhba.Sistema + ": перерегистрирована на копию в Program Files, ухожу с отказом — " + vinsluzhba.Dispetcher + " поднимет её оттуда")
 		os.Exit(1)
 	}
 	// Тихая установка ставит обновление из службы, и новая версия поднимается
@@ -946,7 +948,7 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 		// заново только то, что упало. Нулевой выход он считает штатной
 		// остановкой и оставляет службу лежать до перезагрузки.
 		s.ZadatVyhod(func() {
-			log.Printf("служба Windows: ухожу после обновления, диспетчер поднимет новую версию")
+			log.Printf("служба " + vinsluzhba.Sistema + ": ухожу после обновления, " + vinsluzhba.Dispetcher + " поднимет новую версию")
 			os.Exit(1)
 		})
 	}
@@ -1088,7 +1090,7 @@ func rabotaSluzhby(vneshniy context.Context, papka, putZhurnala string, sTreem b
 		// Сигналы сюда не доходят вовсе, а значка в трее нет по устройству:
 		// интерактивного сеанса у службы не бывает.
 		<-vneshniy.Done()
-		log.Printf("служба Windows: диспетчер попросил остановиться")
+		log.Printf("служба " + vinsluzhba.Sistema + ": " + vinsluzhba.Dispetcher + " попросил остановиться")
 	}
 
 	// Место чтения журнала ядра — синхронно, пока процесс точно жив: горутина
