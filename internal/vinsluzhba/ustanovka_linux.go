@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/HRYNdev/kelevra-desktop/internal/hranenie"
 )
@@ -74,6 +76,11 @@ func UstanovitPolnostyu(putExe string) error {
 	if err := os.WriteFile(PutYarlyka, []byte(tekstYarlyka), 0o644); err != nil {
 		log.Printf("ярлык в меню не записан: %v", err)
 	}
+	if dom := domCheloveka(); dom != "" {
+		for _, s := range OtodvinutChuzhieYarlyki(dom, time.Now()) {
+			log.Printf("установка: %s", s)
+		}
+	}
 	// Без обновлённого кеша значков меню показывает ярлык пустым (стенд 20.11.2026).
 	if p, err := exec.LookPath("gtk-update-icon-cache"); err == nil {
 		_ = exec.Command(p, "-f", "-t", "/usr/share/icons/hicolor").Run()
@@ -90,21 +97,86 @@ func UdalitPolnostyu() error {
 // staraya — папка данных человека, запустившего установку (до службы данные
 // жили в его профиле). pkexec и sudo оставляют его uid в окружении.
 func staraya() string {
+	dom := domCheloveka()
+	if dom == "" {
+		return ""
+	}
+	put := filepath.Join(dom, ".local", "share", "kelevra")
+	if st, err := os.Stat(put); err == nil && st.IsDir() {
+		return put
+	}
+	return ""
+}
+
+// domCheloveka — домашняя папка того, кто запустил установку через pkexec или
+// sudo (их uid остаётся в окружении). Пусто — не узнать.
+func domCheloveka() string {
 	for _, k := range []string{"PKEXEC_UID", "SUDO_UID"} {
 		uid := os.Getenv(k)
-		if uid == "" {
+		if uid == "" || uid == "0" {
 			continue
 		}
 		u, err := user.LookupId(uid)
 		if err != nil || u.HomeDir == "" {
 			continue
 		}
-		put := filepath.Join(u.HomeDir, ".local", "share", "kelevra")
-		if st, err := os.Stat(put); err == nil && st.IsDir() {
-			return put
-		}
+		return u.HomeDir
 	}
 	return ""
+}
+
+// OtodvinutChuzhieYarlyki убирает с дороги то, что в профиле человека
+// перекрывает системные ярлык и значок Kelevra: меню берёт
+// ~/.local/share/applications/kelevra.desktop раньше /usr/share/applications,
+// а значок из ~/.local/share/icons раньше /usr/share/icons. Ноут Влада
+// 20.11.2026: ярлык самодельной сборки (Exec kelevra-okno.py) открывал старую
+// программу вместо установленной. Ярлык с Exec на /opt/kelevra не трогаем;
+// своих значков в профиль установка не кладёт, поэтому любой kelevra.png/svg
+// в hicolor профиля — чужой. Не удаляем, а переименовываем в .bak-<время>.
+// Возвращает строки для журнала.
+func OtodvinutChuzhieYarlyki(dom string, seychas time.Time) []string {
+	var itog []string
+	sufiks := ".bak-" + seychas.Format("20060102-150405")
+	otodvinut := func(put string) {
+		if err := os.Rename(put, put+sufiks); err != nil {
+			itog = append(itog, fmt.Sprintf("не отодвинут %s: %v", put, err))
+			return
+		}
+		itog = append(itog, fmt.Sprintf("отодвинут %s → %s", put, filepath.Base(put+sufiks)))
+	}
+	yarlyk := filepath.Join(dom, ".local", "share", "applications", "kelevra.desktop")
+	if st, err := os.Lstat(yarlyk); err == nil {
+		b, _ := os.ReadFile(yarlyk)
+		if !st.Mode().IsRegular() || !yarlykNash(string(b)) {
+			otodvinut(yarlyk)
+		}
+	}
+	for _, imya := range []string{"kelevra.png", "kelevra.svg"} {
+		najdeno, _ := filepath.Glob(filepath.Join(dom, ".local", "share", "icons", "hicolor", "*", "apps", imya))
+		for _, put := range najdeno {
+			otodvinut(put)
+		}
+	}
+	return itog
+}
+
+// yarlykNash — у ярлыка есть Exec, и каждый Exec запускает установленную
+// программу (/opt/kelevra/kelevra, с аргументами или без).
+func yarlykNash(tekst string) bool {
+	estExec := false
+	for _, stroka := range strings.Split(tekst, "\n") {
+		stroka = strings.TrimSpace(stroka)
+		if !strings.HasPrefix(stroka, "Exec=") {
+			continue
+		}
+		estExec = true
+		komanda := strings.TrimPrefix(stroka, "Exec=")
+		komanda = strings.TrimPrefix(komanda, `"`)
+		if komanda != PutUstanovki && !strings.HasPrefix(komanda, PutUstanovki+" ") && !strings.HasPrefix(komanda, PutUstanovki+`" `) && komanda != PutUstanovki+`"` {
+			return false
+		}
+	}
+	return estExec
 }
 
 // skopirovat кладёт программу на место через временный файл и переименование:

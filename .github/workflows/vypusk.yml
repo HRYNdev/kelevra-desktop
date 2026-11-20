@@ -61,7 +61,7 @@ jobs:
       - name: Инструменты сборки
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates curl gcc g++ pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev binutils >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates curl gcc g++ pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev binutils file >/dev/null
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
@@ -87,10 +87,41 @@ jobs:
           fi
           readelf -n build/kelevra-linux-amd64 | grep -i 'ISA' || true
           ls -l build/kelevra-linux-amd64
+      # Kelevra.AppImage — установщик и ярлык для человека: внутри программа и
+      # linux/install.sh. WebKitGTK в образ не кладётся: служба живёт в
+      # /opt/kelevra и обновляется файлом kelevra-linux-amd64, которому нужна
+      # системная WebKitGTK, — её ставит install.sh пакетным менеджером (одно
+      # окно пароля вместе с установкой службы). Инструменты сборки
+      # закреплены по версии и sha256.
+      - name: AppImage
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/ai"
+          curl -fsSL -o "$RUNNER_TEMP/ai/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fsSL -o "$RUNNER_TEMP/ai/runtime" \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/ai/appimagetool" | sha256sum -c
+          echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $RUNNER_TEMP/ai/runtime" | sha256sum -c
+          sh -n linux/install.sh
+          sh -n linux/AppRun
+          sh linux/sobrat-appimage.sh build/kelevra-linux-amd64 build/Kelevra-x86_64.AppImage \
+            "$RUNNER_TEMP/ai/appimagetool" "$RUNNER_TEMP/ai/runtime"
+          cp build/Kelevra-x86_64.AppImage build/Kelevra.AppImage
+          cp linux/install.sh build/install.sh
+          # Программа внутри образа — та же, что лежит рядом в релизе.
+          ./build/Kelevra-x86_64.AppImage --appimage-extract usr/bin/kelevra >/dev/null
+          cmp squashfs-root/usr/bin/kelevra build/kelevra-linux-amd64
+          rm -rf squashfs-root
+          ls -l build/
       - uses: actions/upload-artifact@v4
         with:
           name: kelevra-linux
-          path: build/kelevra-linux-amd64
+          path: |
+            build/kelevra-linux-amd64
+            build/Kelevra-x86_64.AppImage
+            build/Kelevra.AppImage
+            build/install.sh
 
   vypusk:
     needs: [windows, linux]
@@ -230,6 +261,9 @@ jobs:
             build/Kelevra.exe.sig
             build/kelevra-linux-amd64
             build/kelevra-linux-amd64.sig
+            build/Kelevra-x86_64.AppImage
+            build/Kelevra.AppImage
+            build/install.sh
           draft: true
           prerelease: ${{ steps.versiya.outputs.predvaritelnyy == 'true' }}
 

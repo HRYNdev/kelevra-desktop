@@ -14,3 +14,7 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 )
+
+// Копия webview_go с одной правкой (third_party/webview_go/KELEVRA.md):
+// библиотека WebKitGTK ищется по имени с версией, а не только по имени из -dev.
+replace github.com/webview/webview_go => ./third_party/webview_go
