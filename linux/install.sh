@@ -108,11 +108,11 @@ postavit_pakety() {
 	apt)
 		root env DEBIAN_FRONTEND=noninteractive apt-get update -q || provalit "apt-get update не выполнен"
 		# shellcheck disable=SC2086
-		root env DEBIAN_FRONTEND=noninteractive apt-get install -y -q $spisok || provalit "пакеты не установлены:$spisok"
+		root env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends $spisok || provalit "пакеты не установлены:$spisok"
 		;;
 	dnf)
 		# shellcheck disable=SC2086
-		root dnf install -y $spisok || provalit "пакеты не установлены:$spisok"
+		root dnf install -y --setopt=install_weak_deps=False $spisok || provalit "пакеты не установлены:$spisok"
 		;;
 	pacman)
 		# shellcheck disable=SC2086
@@ -120,7 +120,7 @@ postavit_pakety() {
 		;;
 	zypper)
 		# shellcheck disable=SC2086
-		root zypper --non-interactive install $spisok || provalit "пакеты не установлены:$spisok"
+		root zypper --non-interactive install --no-recommends $spisok || provalit "пакеты не установлены:$spisok"
 		;;
 	esac
 	est_biblioteka 'libwebkit2gtk-4\.1\.so\.0' || provalit "WebKitGTK 4.1 не найдена после установки — дистрибутив слишком старый"
